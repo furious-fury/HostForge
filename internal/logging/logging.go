@@ -1,0 +1,12 @@
+package logging
+
+import (
+	"log/slog"
+	"os"
+)
+
+// New returns a slog logger with text output to stderr (stdout reserved for subprocess mirrors).
+func New() *slog.Logger {
+	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
+	return slog.New(h)
+}

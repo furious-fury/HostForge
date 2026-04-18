@@ -1,0 +1,12 @@
+/bin/
+/dist/
+/.hostforge/
+*.db
+.env
+*.exe
+coverage.out
+
+
+implementation_plan.md
+task_list.md
+HostForge_PRD_Production_Full.md
