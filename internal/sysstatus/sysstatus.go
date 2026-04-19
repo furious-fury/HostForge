@@ -14,10 +14,8 @@ import (
 	"github.com/hostforge/hostforge/internal/caddy"
 	"github.com/hostforge/hostforge/internal/config"
 	"github.com/hostforge/hostforge/internal/docker"
+	"github.com/hostforge/hostforge/internal/version"
 )
-
-// BuildVersion is shown on the dashboard; bump with releases.
-const BuildVersion = "v0.6.0 · phase 6"
 
 // Row is one line in the System panel.
 type Row struct {
@@ -64,7 +62,7 @@ func Gather(ctx context.Context, cfg *config.Config) Response {
 	wg.Wait()
 
 	return Response{
-		Version: BuildVersion,
+		Version: version.Display(),
 		Checks:  checks,
 	}
 }

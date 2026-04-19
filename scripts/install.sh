@@ -111,7 +111,7 @@ Installed:
   ${BIN_DIR}/hostforge-server
 
 Next steps:
-  - Set secrets (see README "Phase 7" and scripts/hostforge-server.env.example).
+  - Set secrets (see README "Authentication" and scripts/hostforge-server.env.example).
   - Run: hostforge-server -data-dir <dir> -listen <addr>
   - Install Caddy separately for TLS; point a route at HostForge if exposing the UI.
   - For systemd + data under ${DATA_DIR}, re-run: sudo $0 --prefix ${PREFIX} --data-dir ${DATA_DIR} --with-systemd${SKIP_BUILD:+ --skip-build}

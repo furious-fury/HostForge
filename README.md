@@ -1,41 +1,74 @@
 # HostForge
 
-Self-hosted PaaS: deploy from Git to a single VPS. **Phase 0** implements the CLI spike: clone a repo and run [Nixpacks](https://github.com/railwayapp/nixpacks) with streamed logs.
+Self-hosted PaaS: Git → [Nixpacks](https://github.com/railwayapp/nixpacks) → Docker on one machine, with a management **API**, **browser UI**, **GitHub webhooks**, and **Caddy** for public TLS routing.
 
-## Current project status (where things stand)
+## Release version
 
-**Implemented in-tree today**
+Bump **`internal/version/VERSION`** (one line, semver). Go embeds it via `internal/version`; the Vite UI reads the same file at dev/build time (`web/vite.config.ts`). CLI `hostforge version` and the dashboard **Build version** field stay aligned automatically.
 
-- **CLI (`cmd/cli`):** `deploy`, `domain` add/edit/remove, `caddy sync`, `version`; deploy pipeline shared with the server.
-- **Server (`cmd/server`):** management **REST** + **static UI** (`web/dist` when built), **GitHub push webhooks**, **session cookie** login for the UI, Phase **7**-style env (**API token**, **session secret**, **webhook secret** + rate limit required at startup).
-- **Caddy:** HostForge writes a **generated snippet** and runs **`caddy validate`**; **`caddy reload`** runs when the admin API is up, and is **skipped** (no error) if Caddy is not running yet so you can bootstrap `sync` then `systemctl start caddy`. Production-style layout uses a **root Caddyfile** that **`import`s** the snippet—often under **`/etc/caddy/`** so the **`caddy` systemd user** can read it (avoid snippet-only-under-`$HOME` with mode `700`).
-- **UI (`web/`):** projects, deployments, logs (REST + WebSocket), domains with **DNS hints** (Type / Name / Value table + copy), **registrar DNS** refresh (manual + auto while not “points here”), dashboard **System** panel from **`GET /api/system/status`** (Docker ping, Caddy validate + local :80/:443, webhook route probe)—not placeholder pills. Fleet pages use **TanStack Query** (stale-while-revalidate) so navigation feels instant after the first load.
-- **API performance:** `GET /api/projects` defaults to a **fast list** (no live registrar lookups per domain; no `dns_guidance`). Use **`?dns=1`** when you need full DNS checks on every project in one response. `GET /api/projects/:id` still returns full DNS guidance. `GET /api/deployments?limit=N` uses SQL `LIMIT` and batched container rows. `GET /api/system/status` runs checks **in parallel** and serves a **5s TTL** cached snapshot for rapid repeats.
-- **Install:** `scripts/install.sh` optional **systemd** layout; `scripts/hostforge-server.env.example` documents env; **`scripts/ngrok-dev.sh`** for **public HTTPS to loopback** during dev (webhooks without opening home-router ports).
+## Production install
 
-**Operators should know**
+From a repository clone on the build host (**Go** required):
 
-- **Public hostname + TLS:** DNS **A/AAAA** must point at the machine where **Caddy listens on 80/443**; **inbound** 80/443 must reach that host (firewall, cloud SG, **or** Windows→WSL forwarding on a dev PC). Residential **WAN IPs often change** on reconnect—update DNS, lower TTL while testing, or use **static IP / DDNS / a VPS** for stability.
-- **Dev without port-forwarding:** use **ngrok** (see [Local public URL (ngrok, free tier)](#local-public-url-ngrok-free-tier)); GitHub webhook URL becomes `https://<ngrok-host>/hooks/github` (free tier URL changes when the tunnel restarts unless you use a reserved domain).
-- **PRD vs code:** treat `HostForge_PRD_Production_Full.md` / `task_list.md` as planning sources; this README reflects what is wired up **now**; not every future PRD line is shipped yet.
+```bash
+./scripts/install.sh
+```
+
+- Builds **`hostforge`** (`cmd/cli`) and **`hostforge-server`** (`cmd/server`) and installs them under **`PREFIX/bin`** (default **`/usr/local/bin`**). Re-run anytime; binaries are replaced idempotently.
+- Optional **systemd** layout (Linux, root): `sudo ./scripts/install.sh --with-systemd` — creates user **`hostforge`**, data dir **`/var/lib/hostforge`**, seeds **`/etc/hostforge/hostforge.env`** from [`scripts/hostforge-server.env.example`](./scripts/hostforge-server.env.example) **only if** it does not exist, installs **`/etc/systemd/system/hostforge-server.service`**, runs **`daemon-reload`** and **`enable`**. Edit secrets in **`/etc/hostforge/hostforge.env`**, then `sudo systemctl start hostforge-server`.
+- Flags: **`--prefix`**, **`--data-dir`**, **`--with-systemd`**, **`--skip-build`**. If the **`docker`** group exists, **`hostforge`** is added so the service can use the Docker socket.
+
+**Caddy** is not installed by the script; install it separately, open **80/443**, and reverse-proxy to HostForge (e.g. `127.0.0.1:8080`) when exposing the UI or TLS-terminated webhooks. Env reference, secrets, firewall, and a smoke checklist: [**Authentication, installer, and operations**](#authentication-installer-and-operations).
+
+## Quick start (local development)
+
+1. **Toolchain:** **Go 1.22+**, **Git**, **Nixpacks** on `PATH`, **Docker Engine** (deploy builds a container image and runs it).
+
+2. **CLI**
+
+   ```bash
+   go build -o hostforge ./cmd/cli
+   ```
+
+3. **Server env** — copy [`scripts/hostforge-server.env.example`](./scripts/hostforge-server.env.example) and set **`HOSTFORGE_API_TOKEN`**, **`HOSTFORGE_SESSION_SECRET`** (≥16 characters), **`HOSTFORGE_WEBHOOK_SECRET`**, **`HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE`** (must be greater than `0`). Set **`HOSTFORGE_DATA_DIR`** to a writable directory and export the variables (or use your shell’s env-file mechanism).
+
+4. **Web UI assets**
+
+   ```bash
+   npm --prefix web install
+   npm --prefix web run build
+   ```
+
+5. **Run the server**
+
+   ```bash
+   go run ./cmd/server -data-dir "$HOSTFORGE_DATA_DIR" -listen "${HOSTFORGE_LISTEN:-:8080}"
+   ```
+
+6. **UI hot reload** — in another terminal, `npm --prefix web run dev` (Vite proxies `/api`, `/hooks`, `/auth` to the Go server).
+
+7. **Webhooks from GitHub while on loopback** — use [`scripts/ngrok-dev.sh`](./scripts/ngrok-dev.sh); see [Local public URL (ngrok)](#local-public-url-ngrok-free-tier).
+
+## What’s included
+
+- **CLI (`cmd/cli`):** `deploy`, `domain` add/edit/remove, `caddy sync`, `validate`, `version`; same deploy pipeline as the server.
+- **Server (`cmd/server`):** REST + embedded UI (`web/dist`), GitHub **`push`** webhooks, cookie-backed UI login, SQLite persistence, bounded **observability** rows (`deploy_steps`, `http_requests`) with **`/observability`** and per-deployment **Steps**.
+- **Caddy:** generated snippet, **`caddy validate`** / **`caddy reload`** when configured; health-gated zero-downtime cutover before switching routes.
+- **UI (`web/`):** projects, deployments (REST + WebSocket logs), domains with DNS hints and registrar refresh, dashboard **System** panel (`GET /api/system/status`), TanStack Query on fleet pages. **`GET /api/projects`** defaults to a fast list (no per-domain live registrar lookups); use **`?dns=1`** for full DNS checks in one response. **`GET /api/deployments?limit=N`** uses SQL `LIMIT` and batched container rows. System status checks run **in parallel** with a **5s** cached snapshot.
+
+**Operators:** DNS **A/AAAA** must point at the host where **Caddy** serves **80/443**; firewall / cloud SG must allow inbound **80/443**. Residential WAN IPs change—use a VPS, static IP, or DDNS for stable webhooks. Planning docs: `task_list.md`, PRD — this README describes the **current** tree.
 
 ## Prerequisites
 
-- **Go** 1.22+
-- **Git** (for upstream repos; the CLI uses [go-git](https://github.com/go-git/go-git) but host tooling may still matter)
-- **Nixpacks CLI** on your `PATH` — [installation](https://github.com/railwayapp/nixpacks#installation)
-- **Docker** is *not* required for Phase 0 when using `nixpacks build ... -o <dir>` (filesystem output)
-- **Docker Engine** is required for Phase 1 `deploy`, because Nixpacks now emits a Docker image and HostForge starts a container
-- Docker CLI env vars such as **`DOCKER_HOST`**, `DOCKER_TLS_VERIFY`, and `DOCKER_CERT_PATH` are honored by the Docker client
-
-### Windows
-
-Nixpacks is most reliable under **WSL2** or a **Linux** environment. Native Windows may work if `nixpacks` is installed and on `PATH`, but if builds fail unexpectedly, try WSL2. For Phase 1 runtime, ensure Docker Desktop is running and its daemon is reachable (or set `DOCKER_HOST` explicitly).
+- **Go** 1.22+, **Git**, **Nixpacks** on `PATH`
+- **Docker Engine** for image-based deploys; **`DOCKER_HOST`**, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH` honored by the client
+- **Windows:** prefer **WSL2** or Linux for Nixpacks; ensure Docker is reachable (or set `DOCKER_HOST`)
 
 ## Build
 
 ```bash
 go build -o hostforge ./cmd/cli
+go build -o hostforge-server ./cmd/server
 ```
 
 ## Usage
@@ -50,7 +83,7 @@ go build -o hostforge ./cmd/cli
 ./hostforge version
 ```
 
-- **`<repo_url>`:** HTTPS URL only in Phase 0 (e.g. `https://github.com/org/repo`).
+- **`<repo_url>`:** HTTPS clone URL (e.g. `https://github.com/org/repo`).
 - **`--data-dir`:** Overrides the data root (default: `./.hostforge`). You can also set **`HOSTFORGE_DATA_DIR`**.
 - **`--branch`:** Optional branch name; default is the remote’s default branch.
 - **`--host-port`:** `-1` picks from range, `0` asks OS for ephemeral port, `>0` uses exact host port.
@@ -78,17 +111,17 @@ go run ./cmd/cli deploy https://github.com/heroku/node-js-getting-started
 
 **Expected:** Git clone progress on stderr, Nixpacks logs on stdout/stderr, exit code **0**, and artifacts under `.hostforge/builds/<hash>/`.
 
-**If clone fails:** Check network, URL, and private-repo access (Phase 0 does not configure Git credentials beyond your environment).
+**If clone fails:** Check network, URL, and private-repo access (configure Git credentials in your environment as needed).
 
 **If Nixpacks fails:** Run `nixpacks plan .` inside the worktree path printed in logs, or install/upgrade Nixpacks. Ensure sufficient disk and that the stack is supported by Nixpacks.
 
-Phase 1 note: Phase 0 uses `-o` filesystem output for fast validation; Phase 1 switches to `nixpacks build . --name <image>` so `hostforge deploy` can build an image and run a container. Image tags use `hostforge/<worktree-slug>:<utc-build-id>`.
+**Deploy images:** `hostforge deploy` uses `nixpacks build . --name <image>` so Nixpacks emits a Docker image and HostForge runs a container. Image tags use `hostforge/<worktree-slug>:<utc-build-id>`.
 
 ### Operator validation ([`task_list.md`](./task_list.md) — Detailed backlog §1)
 
 Use **[`docs/operator-validation-phase1.md`](./docs/operator-validation-phase1.md)** for staged proof of Docker (**1.1**), public HTTPS + restarts (**1.2**), and zero-downtime cutover (**1.3**). For **1.1** you can also run **`./scripts/operator-validation-phase1.sh`** (full automation) or **`hostforge validate docker`** / **`preflight`** for quick checks. Item **1.1** is recorded **PASS** in the runbook (2026-04-19, WSL2 + Docker Engine); **1.2** / **1.3** need a VPS with real DNS + Caddy—complete the runbook checklists and paste evidence in that file, then tick the matching exit rows in `task_list.md`.
 
-## Phase 3: Caddy (reverse proxy + TLS)
+## Caddy and public HTTPS
 
 HostForge writes a **generated Caddyfile fragment** under the data directory and runs **`caddy validate`** / **`caddy reload`** against a **root** Caddyfile you maintain that **imports** that fragment (see [implementation_plan.md](./implementation_plan.md)). **v1 does not use Caddy’s Admin API.**
 
@@ -203,9 +236,9 @@ Failure behavior:
 - Previous successful deployment keeps serving traffic.
 - Candidate container is cleaned up on health/sync failure.
 
-## Phase 4: Webhooks (GitHub push)
+## GitHub webhooks and server
 
-Phase 4 adds an HTTP server that accepts GitHub `push` webhooks and runs the same deployment pipeline as `hostforge deploy`.
+The server accepts GitHub `push` webhooks and runs the same deployment pipeline as `hostforge deploy`.
 
 ### Build and run
 
@@ -239,15 +272,15 @@ You can also set `HOSTFORGE_DATA_DIR` and `HOSTFORGE_LISTEN` instead of flags.
 - By default (`HOSTFORGE_WEBHOOK_ASYNC=false`), webhook deploys run synchronously and return after deploy completion.
 - With async mode enabled, HostForge returns `202 Accepted` after durable acceptance and runs deployment in the background.
 
-### Security (Phase 7)
+### Authentication (webhooks)
 
 - **`HOSTFORGE_WEBHOOK_SECRET` is required** at server startup. GitHub must send **`X-Hub-Signature-256`** (`sha256=<hex>`); HostForge rejects missing or mismatched signatures (**`401`**).
 - **Rate limiting:** webhook POSTs are capped per client IP using **`HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE`** (returns **`429`** when exceeded).
-- Management **REST** and **WebSocket** log streams under `/api/...` require either a valid **`Authorization: Bearer <HOSTFORGE_API_TOKEN>`** header or a valid **signed HttpOnly session cookie** (see Phase 7 below).
+- Management **REST** and **WebSocket** log streams under `/api/...` require either a valid **`Authorization: Bearer <HOSTFORGE_API_TOKEN>`** header or a valid **signed HttpOnly session cookie** (see [Authentication, installer, and operations](#authentication-installer-and-operations)).
 
-## Phase 5: Logs (REST tail + WebSocket stream)
+## Deployment logs (REST tail + WebSocket stream)
 
-Phase 5 adds deployment log retention to disk plus server APIs for historical and live streaming.
+Build/deploy logs are retained on disk with APIs for historical tail and live streaming.
 
 ### Retention model
 
@@ -265,13 +298,13 @@ Phase 5 adds deployment log retention to disk plus server APIs for historical an
   - `?source=container` streams Docker `ContainerLogs` for the deployment container.
   - Default source prefers container logs for successful deployments, otherwise build logs.
 
-### Security (Phase 7)
+### Authentication (logs)
 
 Historical and live log endpoints require the same authentication as other management APIs (bearer token or valid UI session cookie). Prefer binding the server to **loopback** and exposing the UI only through **Caddy** or an SSH tunnel (see **Production hardening** below).
 
-## Phase 6: UI (Vite + React + TypeScript + Tailwind)
+## Web control plane (UI)
 
-Phase 6 adds a browser control plane served by `cmd/server`, with observability and controls over the same backend orchestration used by CLI/webhooks.
+Browser UI served by `cmd/server` (static `web/dist` or Vite dev server), sharing the same orchestration as the CLI and webhooks.
 
 ### Stack and delivery
 
@@ -354,7 +387,7 @@ Vite proxy config (`web/vite.config.ts` and `web/vite.config.js`) forwards:
   2. Immediate deploy trigger and transition to BUILDING state
   3. Live deployment view with WebSocket logs
   4. Success/failure states with follow-up actions
-- Environment-variable configuration is intentionally deferred from Phase 6 and remains future scope.
+- Per-project environment-variable editing in the UI remains future scope; use the API/CLI patterns you have today.
 
 ### UI structure (post-redesign)
 
@@ -379,7 +412,7 @@ Routes:
 - On first load the app reads `prefers-color-scheme` and applies dark or light. The header toggle (`ThemeToggle`) flips themes and persists the choice in `localStorage` (`hf-theme`); once set, the user choice overrides system preference. Without a stored choice, system changes are followed live.
 - Both palettes preserve the same component structure: only color vars change. The `* { border-radius: 0 !important; }` rule keeps the brutalist no-radius look in either mode.
 
-### Security (Phase 7)
+### Authentication (UI)
 
 The UI signs in via **`POST /auth/session`** with header **`Authorization: Bearer <HOSTFORGE_API_TOKEN>`** (same secret as the management API token). On success the server sets an **HttpOnly** session cookie (`HOSTFORGE_SESSION_COOKIE_NAME`). Subsequent **`GET /api/...`** and WebSocket requests send that cookie automatically from the browser.
 
@@ -387,7 +420,7 @@ Automation and the CLI should send **`Authorization: Bearer <HOSTFORGE_API_TOKEN
 
 ---
 
-## Phase 7: Hardening (authentication, webhooks, install)
+## Authentication, installer, and operations
 
 ### Management API and UI sessions (v1)
 
@@ -401,37 +434,25 @@ Automation and the CLI should send **`Authorization: Bearer <HOSTFORGE_API_TOKEN
 
 **System status (`GET /api/system/status`):** each check may include **`error_code`** (`docker_unreachable`, `caddy_validate_failed`, `webhook_probe_build_failed`, `webhook_route_unreachable`, …) with a short, non-sensitive **`detail`** string for the dashboard.
 
+**Observability UI (SQLite samples):** the management UI includes **`/observability`** plus a **Steps** tab on each deployment. The server persists bounded rows in **`deploy_steps`** (clone / nixpacks / container / health / caddy / `deploy_total`, plus optional **`cert_poll`**) and **`http_requests`** (method, path, status, duration, `request_id`). Authenticated JSON:
+
+- `GET /api/observability/summary` — last **24h** aggregates (HTTP counts, error rate inputs, deploy counts, p50/p95 durations) plus embedded **system** snapshot (same shape as `GET /api/system/status`).
+- `GET /api/observability/requests?limit=` — recent HTTP rows.
+- `GET /api/observability/deploy-steps?limit=` — recent deploy step rows (joins project name when `project_id` is set).
+- `GET /api/deployments/{id}/steps?limit=` — steps for one deployment.
+
+Retention is row-cap based (~5000 per table, oldest trimmed on insert). This is **not** a full log sink — use **`journalctl`** for raw slog lines.
+
 The server refuses to start if **`HOSTFORGE_API_TOKEN`**, **`HOSTFORGE_SESSION_SECRET`** (length ≥ 16), **`HOSTFORGE_WEBHOOK_SECRET`**, or **`HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE`** (must be > 0) is missing or invalid, or if session cookie name / TTL are invalid.
 
-### GitHub webhook configuration (Phase 7)
+### GitHub webhook configuration
 
 - Webhook **Content type:** `application/json`
 - **Secret:** set to the same value as **`HOSTFORGE_WEBHOOK_SECRET`** (GitHub signs the raw body; HostForge verifies **`X-Hub-Signature-256`**).
 
-### Install from source (`scripts/install.sh`)
+### Installer details
 
-From a repository clone (requires **Go** on the build machine):
-
-```bash
-./scripts/install.sh
-```
-
-- Builds **`hostforge`** (`cmd/cli`) and **`hostforge-server`** (`cmd/server`) and installs them under **`PREFIX/bin`** (default **`/usr/local/bin`**). Re-run anytime; binaries are replaced idempotently.
-- Optional **systemd** layout (Linux, root):
-
-```bash
-sudo ./scripts/install.sh --with-systemd
-```
-
-This creates user **`hostforge`**, data dir **`/var/lib/hostforge`**, **`/etc/hostforge/hostforge.env`** from [`scripts/hostforge-server.env.example`](./scripts/hostforge-server.env.example) **only if** `hostforge.env` does not already exist, installs **`/etc/systemd/system/hostforge-server.service`**, runs **`systemctl daemon-reload`** and **`enable`**. Edit secrets in **`/etc/hostforge/hostforge.env`**, then:
-
-```bash
-sudo systemctl start hostforge-server
-```
-
-Flags: **`--prefix`**, **`--data-dir`**, **`--with-systemd`**, **`--skip-build`** (use existing `./hostforge` binaries in the repo root). If **`docker`** group exists, **`hostforge`** is added to it so the service can talk to Docker Engine.
-
-**Caddy** is not installed by this script; install it separately, open **80/443**, and `reverse_proxy` to HostForge (e.g. `127.0.0.1:8080`) when exposing the UI or TLS-terminated webhooks.
+The **`scripts/install.sh`** flow is summarized under [Production install](#production-install) at the top of this file (`--prefix`, `--data-dir`, `--with-systemd`, `--skip-build`, `docker` group membership).
 
 ### Secrets: storage, permissions, rotation
 
@@ -469,7 +490,7 @@ sudo ufw enable
 - Run **`hostforge-server`** as a dedicated non-login user (**`hostforge`** from `--with-systemd`). It needs read access to **`/etc/hostforge/hostforge.env`**, read/write to **`HOSTFORGE_DATA_DIR`**, and access to the **Docker** socket (e.g. membership in **`docker`** group — understand the security tradeoff of Docker group access).
 - Run **Caddy** under its own user per distro packages; it binds **80/443** and proxies to loopback.
 
-### Phase 7 verification checklist
+### Post-install verification checklist
 
 Run on a **fresh VPS** or clean VM after **`./scripts/install.sh --with-systemd`** and editing **`/etc/hostforge/hostforge.env`**:
 

@@ -254,7 +254,7 @@ export function NewProjectPage() {
             </div>
             <div className="flex items-center justify-between border-t border-border pt-4">
               <div className="text-xs text-muted">
-                Env vars and advanced configuration land in Phase 7.
+                Env vars and advanced configuration are set on the server (see README).
               </div>
               <Button variant="primary" type="submit" disabled={submitting}>
                 {submitting ? "Deploying…" : "Continue and Deploy"}

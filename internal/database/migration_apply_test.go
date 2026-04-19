@@ -33,3 +33,26 @@ func TestApplyMigrationsIncludesCertColumns(t *testing.T) {
 		t.Fatalf("expected cert columns on domains, got count=%d", n)
 	}
 }
+
+func TestApplyMigrationsIncludesObservabilityTables(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "obs.db")
+	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath))
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if err := ApplyMigrations(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	for _, tbl := range []string{"deploy_steps", "http_requests"} {
+		var name string
+		err := db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name=?`, tbl).Scan(&name)
+		if err != nil || name != tbl {
+			t.Fatalf("missing table %s: %v", tbl, err)
+		}
+	}
+}

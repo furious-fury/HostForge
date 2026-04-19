@@ -20,6 +20,7 @@ import (
 	"github.com/hostforge/hostforge/internal/logging"
 	"github.com/hostforge/hostforge/internal/repository"
 	"github.com/hostforge/hostforge/internal/services"
+	"github.com/hostforge/hostforge/internal/version"
 )
 
 func main() {
@@ -42,7 +43,7 @@ func main() {
 		code := runValidate(log, os.Args[2:])
 		os.Exit(code)
 	case "version":
-		fmt.Println("hostforge dev")
+		fmt.Printf("hostforge %s\n", version.Display())
 		os.Exit(0)
 	default:
 		printUsage()

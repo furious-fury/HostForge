@@ -15,6 +15,7 @@ import (
 	"github.com/hostforge/hostforge/internal/docker"
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/models"
+	"github.com/hostforge/hostforge/internal/obs"
 	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
 	"github.com/hostforge/hostforge/internal/services"
@@ -571,7 +572,8 @@ func (s *server) handleProjectDeployAction(w http.ResponseWriter, r *http.Reques
 	asyncRequested := s.cfg.WebhookAsync || strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("async")), "true") || r.URL.Query().Get("async") == "1"
 	if asyncRequested {
 		go func(job services.DeployJob) {
-			if _, execErr := services.ExecuteDeploy(context.Background(), deployLog, s.cfg, s.store, job); execErr != nil {
+			bg := obs.WithStore(context.Background(), s.store)
+			if _, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job); execErr != nil {
 				deployLog.Error("async deployment failed", "error", execErr)
 			}
 		}(job)

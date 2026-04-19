@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiDeployment, ApiProject, fetchDeploymentLogs, fetchProject, fetchProjectDeployments } from "../api";
+import { DeployStepTimeline } from "../components/DeployStepTimeline";
+import { useDeploymentStepsQuery } from "../hooks/observabilityQueries";
 import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
 import { Button, ButtonLink } from "../components/Button";
 import { Panel } from "../components/Panel";
@@ -9,6 +11,7 @@ import { Terminal } from "../components/Terminal";
 import { formatDuration, formatRelative, shortHash } from "../format";
 
 type SourceKind = "build" | "container";
+type PanelTab = "logs" | "steps";
 
 const STREAM_LABEL: Record<string, string> = {
   connecting: "CONNECTING",
@@ -29,6 +32,8 @@ export function DeploymentPage() {
   const [streamState, setStreamState] = useState("connecting");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [panelTab, setPanelTab] = useState<PanelTab>("logs");
+  const stepsQ = useDeploymentStepsQuery(deploymentID, 200);
   const wsRef = useRef<WebSocket | null>(null);
   const pausedRef = useRef(false);
 
@@ -70,6 +75,9 @@ export function DeploymentPage() {
   }, [project, projectID, registerProject]);
 
   useEffect(() => {
+    if (panelTab !== "logs") {
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -87,9 +95,14 @@ export function DeploymentPage() {
     return () => {
       cancelled = true;
     };
-  }, [deploymentID, source]);
+  }, [deploymentID, source, panelTab]);
 
   useEffect(() => {
+    if (panelTab !== "logs") {
+      wsRef.current?.close();
+      wsRef.current = null;
+      return;
+    }
     wsRef.current?.close();
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(
@@ -106,7 +119,7 @@ export function DeploymentPage() {
       }
     };
     return () => ws.close();
-  }, [deploymentID, source]);
+  }, [deploymentID, source, panelTab]);
 
   async function copyAll() {
     try {
@@ -152,50 +165,118 @@ export function DeploymentPage() {
       {error && <div className="border border-danger p-3 text-sm text-danger">{error}</div>}
 
       <Panel
-        title="Live Logs"
+        title={panelTab === "logs" ? "Live Logs" : "Deploy steps"}
         actions={
-          <span className="mono inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider">
-            <span
-              aria-hidden
-              className={
-                streamState === "live"
-                  ? "text-success"
-                  : streamState === "error"
-                  ? "text-danger"
-                  : streamState === "ended"
-                  ? "text-muted"
-                  : "text-warning"
-              }
-            >
-              ●
+          panelTab === "logs" ? (
+            <span className="mono inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider">
+              <span
+                aria-hidden
+                className={
+                  streamState === "live"
+                    ? "text-success"
+                    : streamState === "error"
+                      ? "text-danger"
+                      : streamState === "ended"
+                        ? "text-muted"
+                        : "text-warning"
+                }
+              >
+                ●
+              </span>
+              <span className="text-muted">Stream</span>
+              <span className="text-text">{streamLabel}</span>
             </span>
-            <span className="text-muted">Stream</span>
-            <span className="text-text">{streamLabel}</span>
-          </span>
+          ) : (
+            <span className="mono text-[10px] text-muted">SQLite samples · same as Observability page</span>
+          )
         }
         noBody
       >
-        <Terminal
-          scrollLocked={paused}
-          text={lines}
-          toolbar={
-            <>
-              <SourceTab active={source === "build"} onClick={() => setSource("build")}>Build</SourceTab>
-              <SourceTab active={source === "container"} onClick={() => setSource("container")}>Runtime</SourceTab>
-              <span className="mx-1 h-4 w-px bg-border" />
-              <Button variant="secondary" size="sm" onClick={() => setPaused((v) => !v)}>
-                {paused ? "Resume" : "Pause"}
-              </Button>
-              <Button variant="secondary" size="sm" onClick={copyAll}>
-                {copied ? "Copied" : "Copy"}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setLines("")}>Clear</Button>
-              <span className="ml-auto mono text-[10px] uppercase tracking-wider text-muted">
-                {paused ? "Scroll locked" : "Auto-scroll"}
-              </span>
-            </>
-          }
-        />
+        <div className="border-b border-border bg-surface-alt px-3 py-2">
+          <div className="flex flex-wrap gap-2">
+            <SourceTab active={panelTab === "logs"} onClick={() => setPanelTab("logs")}>
+              Logs
+            </SourceTab>
+            <SourceTab active={panelTab === "steps"} onClick={() => setPanelTab("steps")}>
+              Steps
+            </SourceTab>
+          </div>
+        </div>
+        {panelTab === "logs" ? (
+          <Terminal
+            scrollLocked={paused}
+            text={lines}
+            toolbar={
+              <>
+                <SourceTab active={source === "build"} onClick={() => setSource("build")}>
+                  Build
+                </SourceTab>
+                <SourceTab active={source === "container"} onClick={() => setSource("container")}>
+                  Runtime
+                </SourceTab>
+                <span className="mx-1 h-4 w-px bg-border" />
+                <Button variant="secondary" size="sm" onClick={() => setPaused((v) => !v)}>
+                  {paused ? "Resume" : "Pause"}
+                </Button>
+                <Button variant="secondary" size="sm" onClick={copyAll}>
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setLines("")}>
+                  Clear
+                </Button>
+                <span className="ml-auto mono text-[10px] uppercase tracking-wider text-muted">
+                  {paused ? "Scroll locked" : "Auto-scroll"}
+                </span>
+              </>
+            }
+          />
+        ) : (
+          <div className="p-4">
+            {stepsQ.isPending ? <p className="text-sm text-muted">Loading steps…</p> : null}
+            {stepsQ.isError ? (
+              <p className="text-sm text-danger">
+                {stepsQ.error instanceof Error ? stepsQ.error.message : "Failed to load steps"}
+              </p>
+            ) : null}
+            {stepsQ.data && stepsQ.data.length > 0 ? (
+              <>
+                <div className="mb-4">
+                  <div className="mono mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted">Timeline</div>
+                  <DeployStepTimeline steps={stepsQ.data} />
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted">
+                        <th className="py-2 pr-2">Step</th>
+                        <th className="py-2 pr-2">Status</th>
+                        <th className="py-2 pr-2">ms</th>
+                        <th className="py-2 pr-2">request_id</th>
+                        <th className="py-2">error_code</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stepsQ.data.map((s) => (
+                        <tr key={s.id} className="border-b border-border/60">
+                          <td className="py-2 pr-2 font-mono text-xs">{s.step}</td>
+                          <td className="py-2 pr-2">
+                            <StatusPill status={s.status === "ok" ? "SUCCESS" : "FAILED"} size="sm" />
+                          </td>
+                          <td className="py-2 pr-2 mono tabular-nums">{s.duration_ms}</td>
+                          <td className="max-w-[10rem] truncate py-2 pr-2 font-mono text-[10px] text-muted">{s.request_id || "—"}</td>
+                          <td className="py-2 font-mono text-[10px] text-muted">{s.error_code || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : null}
+            {!stepsQ.isPending && stepsQ.data?.length === 0 ? (
+              <p className="text-sm text-muted">No recorded steps for this deployment yet.</p>
+            ) : null}
+          </div>
+        )}
       </Panel>
 
       <div>

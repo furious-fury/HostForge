@@ -86,6 +86,42 @@ export type SystemStatus = {
   checks: SystemStatusCheck[];
 };
 
+export type ObservabilitySummary = {
+  window_hours: number;
+  http_request_count: number;
+  http_error_count: number;
+  http_duration_p50_ms: number;
+  http_duration_p95_ms: number;
+  deploy_count: number;
+  deploy_failed_count: number;
+  deploy_duration_p50_ms: number;
+  deploy_duration_p95_ms: number;
+};
+
+export type DeployStepRow = {
+  id: number;
+  deployment_id: string;
+  project_id: string;
+  request_id: string;
+  step: string;
+  status: string;
+  duration_ms: number;
+  error_code: string;
+  started_at: string;
+  ended_at: string;
+  project_name?: string;
+};
+
+export type HTTPRequestRow = {
+  id: number;
+  request_id: string;
+  method: string;
+  path: string;
+  status: number;
+  duration_ms: number;
+  started_at: string;
+};
+
 type CreateProjectRequest = {
   repo_url: string;
   branch: string;
@@ -137,6 +173,34 @@ export async function fetchProjects(): Promise<ApiProject[]> {
 export async function fetchSystemStatus(): Promise<SystemStatus> {
   const res = await apiFetch("/api/system/status");
   return await readJSON<SystemStatus>(res);
+}
+
+export async function fetchObservabilitySummary(): Promise<{
+  summary: ObservabilitySummary;
+  system: SystemStatus;
+}> {
+  const res = await apiFetch("/api/observability/summary");
+  return await readJSON<{ summary: ObservabilitySummary; system: SystemStatus }>(res);
+}
+
+export async function fetchObservabilityRequests(limit = 100): Promise<HTTPRequestRow[]> {
+  const res = await apiFetch(`/api/observability/requests?limit=${encodeURIComponent(String(limit))}`);
+  const body = await readJSON<{ requests?: HTTPRequestRow[] }>(res);
+  return body.requests || [];
+}
+
+export async function fetchObservabilityDeploySteps(limit = 200): Promise<DeployStepRow[]> {
+  const res = await apiFetch(`/api/observability/deploy-steps?limit=${encodeURIComponent(String(limit))}`);
+  const body = await readJSON<{ deploy_steps?: DeployStepRow[] }>(res);
+  return body.deploy_steps || [];
+}
+
+export async function fetchDeploymentSteps(deploymentID: string, limit = 200): Promise<DeployStepRow[]> {
+  const res = await apiFetch(
+    `/api/deployments/${encodeURIComponent(deploymentID)}/steps?limit=${encodeURIComponent(String(limit))}`,
+  );
+  const body = await readJSON<{ steps?: DeployStepRow[] }>(res);
+  return body.steps || [];
 }
 
 export async function fetchAllDeployments(limit = 100): Promise<ApiDeployment[]> {

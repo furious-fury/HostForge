@@ -27,6 +27,7 @@ import (
 	"github.com/hostforge/hostforge/internal/logging"
 	logsapi "github.com/hostforge/hostforge/internal/logs"
 	"github.com/hostforge/hostforge/internal/models"
+	"github.com/hostforge/hostforge/internal/obs"
 	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
 	"github.com/hostforge/hostforge/internal/reqctx"
@@ -127,7 +128,7 @@ func runServer(log *slog.Logger, args []string) int {
 	defer db.Close()
 
 	store := repository.New(db)
-	services.StartCaddyCertPollLoop(log, cfg, store)
+	services.StartCaddyCertPollLoop(log, cfg, store, obs.WithStore(context.Background(), store))
 	webhookLimiter := newFixedWindowLimiter(cfg.WebhookRateLimitPerMinute, time.Minute)
 	handler := &server{
 		log:            log,
@@ -145,6 +146,7 @@ func runServer(log *slog.Logger, args []string) int {
 	mux.HandleFunc("/api/projects/", handler.withRequestContext(handler.requireManagementAuth(handler.handleProjectRoutes)))
 	mux.HandleFunc("/api/deployments", handler.withRequestContext(handler.requireManagementAuth(handler.handleDeploymentsCollection)))
 	mux.HandleFunc("/api/deployments/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDeploymentRoutes)))
+	mux.HandleFunc("/api/observability/", handler.withRequestContext(handler.requireManagementAuth(handler.handleObservabilityRoutes)))
 	registerStaticUIRoutes(mux, log)
 
 	httpServer := &http.Server{
@@ -363,7 +365,8 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	deployLog := log.With("project_id", project.ID, "deployment_id", job.Deployment.ID, "repo_url", redact.RepoURLForLog(repoURL), "branch", branch)
 	if s.cfg.WebhookAsync {
 		go func(job services.DeployJob) {
-			_, execErr := services.ExecuteDeploy(context.Background(), deployLog, s.cfg, s.store, job)
+			bg := obs.WithStore(context.Background(), s.store)
+			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job)
 			if execErr != nil {
 				deployLog.Error("async deployment failed", "error", execErr)
 			}
@@ -470,11 +473,21 @@ func (s *server) withRequestContext(next http.HandlerFunc) http.HandlerFunc {
 			rid = newRequestID()
 		}
 		ctx := reqctx.WithRequestID(r.Context(), rid)
+		ctx = obs.WithStore(ctx, s.store)
 		r = r.WithContext(ctx)
 		start := time.Now()
 		rw := &responseWriterStatus{ResponseWriter: w, status: http.StatusOK}
 		next(rw, r)
-		s.log.Info("http_request", "request_id", rid, "method", r.Method, "path", r.URL.Path, "status", rw.status, "duration_ms", time.Since(start).Milliseconds())
+		dur := time.Since(start).Milliseconds()
+		s.log.Info("http_request", "request_id", rid, "method", r.Method, "path", r.URL.Path, "status", rw.status, "duration_ms", dur)
+		obs.RecordHTTPRequest(r.Context(), s.log, repository.HTTPRequestRecord{
+			RequestID:  rid,
+			Method:     r.Method,
+			Path:       r.URL.Path,
+			Status:     rw.status,
+			DurationMS: dur,
+			StartedAt:  start.UTC(),
+		})
 	}
 }
 
@@ -587,28 +600,29 @@ func (l *fixedWindowLimiter) Allow(ip string, now time.Time) bool {
 func (s *server) handleDeploymentRoutes(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/deployments/")
 	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
-	if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" || parts[1] != "logs" {
+	if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" {
 		http.NotFound(w, r)
 		return
 	}
 	deploymentID := strings.TrimSpace(parts[0])
-	if len(parts) == 2 {
+	switch {
+	case len(parts) == 2 && parts[1] == "logs":
 		if r.Method != http.MethodGet {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
 			return
 		}
 		s.handleDeploymentLogsTail(w, r, deploymentID)
-		return
-	}
-	if len(parts) == 3 && parts[2] == "live" {
+	case len(parts) == 3 && parts[1] == "logs" && parts[2] == "live":
 		if r.Method != http.MethodGet {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
 			return
 		}
 		s.handleDeploymentLogsLive(w, r, deploymentID)
-		return
+	case len(parts) == 2 && parts[1] == "steps":
+		s.handleDeploymentSteps(w, r, deploymentID)
+	default:
+		http.NotFound(w, r)
 	}
-	http.NotFound(w, r)
 }
 
 func (s *server) handleDeploymentLogsTail(w http.ResponseWriter, r *http.Request, deploymentID string) {

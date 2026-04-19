@@ -7,6 +7,7 @@ import { ToastProvider } from "./components/ToastProvider";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DeploymentsPage } from "./pages/DeploymentsPage";
 import { DeploymentPage } from "./pages/DeploymentPage";
+import { ObservabilityPage } from "./pages/ObservabilityPage";
 import { NewProjectPage } from "./pages/NewProjectPage";
 import { ProjectPage } from "./pages/ProjectPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
@@ -125,6 +126,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/deployments" element={<DeploymentsPage />} />
+          <Route path="/observability" element={<ObservabilityPage />} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/new" element={<NewProjectPage />} />
           <Route path="/projects/:projectID" element={<ProjectPage />} />

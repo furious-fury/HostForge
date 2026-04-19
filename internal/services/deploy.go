@@ -20,8 +20,10 @@ import (
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/nixpacks"
+	"github.com/hostforge/hostforge/internal/obs"
 	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/hostforge/hostforge/internal/reqctx"
 )
 
 // DeployPrepareInput defines values needed to create a queued deployment.
@@ -131,10 +133,47 @@ func PrepareDeploy(ctx context.Context, cfg *config.Config, store *repository.St
 	}, nil
 }
 
+func recordDeployObs(ctx context.Context, log *slog.Logger, job DeployJob, step, status string, started time.Time, durMs int64, errCode string) {
+	obs.RecordDeployStep(ctx, log, repository.DeployStepRecord{
+		DeploymentID: job.Deployment.ID,
+		ProjectID:      job.Project.ID,
+		RequestID:      reqctx.RequestID(ctx),
+		Step:           step,
+		Status:         status,
+		DurationMS:     durMs,
+		ErrorCode:      errCode,
+		StartedAt:      started,
+		EndedAt:        time.Now().UTC(),
+	})
+}
+
 // ExecuteDeploy runs clone/build/run/health/cutover for a prepared deployment.
-func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob) (DeployResult, error) {
+func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob) (result DeployResult, err error) {
 	deployStart := time.Now()
 	log = log.With("project_id", job.Project.ID, "deployment_id", job.Deployment.ID)
+	defer func() {
+		dur := time.Since(deployStart).Milliseconds()
+		status := "ok"
+		code := ""
+		if err != nil {
+			status = "failed"
+			code = FirstPublicCode(err)
+			if code == "" || code == "internal_error" {
+				code = "deploy_failed"
+			}
+		}
+		obs.RecordDeployStep(ctx, log, repository.DeployStepRecord{
+			DeploymentID: job.Deployment.ID,
+			ProjectID:    job.Project.ID,
+			RequestID:    reqctx.RequestID(ctx),
+			Step:         "deploy_total",
+			Status:       status,
+			DurationMS:   dur,
+			ErrorCode:    code,
+			StartedAt:    deployStart.UTC(),
+			EndedAt:      time.Now().UTC(),
+		})
+	}()
 	if err := store.UpdateDeploymentStatus(ctx, job.Deployment.ID, models.DeploymentBuilding, ""); err != nil {
 		return DeployResult{}, ErrCode("deployment_state_update_failed", fmt.Errorf("deployment state: %w", err))
 	}
@@ -179,10 +218,14 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		e := ErrCode("clone_failed", err)
 		markFailed(e)
 		_, _ = fmt.Fprintf(combinedOut, "hostforge: clone failed: %v\n", err)
-		log.Info("deploy step", "step", "clone_end", "status", "failed", "duration_ms", time.Since(t0).Milliseconds())
+		ms := time.Since(t0).Milliseconds()
+		log.Info("deploy step", "step", "clone_end", "status", "failed", "duration_ms", ms)
+		recordDeployObs(ctx, log, job, "clone", "failed", t0, ms, FirstPublicCode(e))
 		return DeployResult{}, e
 	}
-	log.Info("deploy step", "step", "clone_end", "status", "ok", "duration_ms", time.Since(t0).Milliseconds())
+	msClone := time.Since(t0).Milliseconds()
+	log.Info("deploy step", "step", "clone_end", "status", "ok", "duration_ms", msClone)
+	recordDeployObs(ctx, log, job, "clone", "ok", t0, msClone, "")
 
 	reservedPorts, err := store.ListAllocatedHostPorts(ctx, "")
 	if err != nil {
@@ -203,12 +246,17 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		e := ErrCode("nixpacks_build_failed", err)
 		markFailed(e)
 		_, _ = fmt.Fprintf(combinedOut, "hostforge: ===== NIXPACKS IMAGE BUILD FAILED =====\nhostforge: nixpacks failed: %v\n", err)
-		log.Info("deploy step", "step", "nixpacks_build_end", "status", "failed", "duration_ms", time.Since(t1).Milliseconds())
+		ms := time.Since(t1).Milliseconds()
+		log.Info("deploy step", "step", "nixpacks_build_end", "status", "failed", "duration_ms", ms)
+		recordDeployObs(ctx, log, job, "nixpacks_build", "failed", t1, ms, FirstPublicCode(e))
 		return DeployResult{}, e
 	}
 	_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== NIXPACKS IMAGE BUILD SUCCEEDED image=%s =====\n\n", job.ImageRef)
-	log.Info("deploy step", "step", "nixpacks_build_end", "status", "ok", "duration_ms", time.Since(t1).Milliseconds())
+	msNix := time.Since(t1).Milliseconds()
+	log.Info("deploy step", "step", "nixpacks_build_end", "status", "ok", "duration_ms", msNix)
+	recordDeployObs(ctx, log, job, "nixpacks_build", "ok", t1, msNix, "")
 
+	tRun := time.Now()
 	containerID, err := docker.RunContainer(ctx, dockerClient, docker.RunOptions{
 		ImageRef:      job.ImageRef,
 		ContainerName: job.ContainerName,
@@ -218,6 +266,7 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	if err != nil {
 		e := ErrCode("run_container_failed", err)
 		markFailed(e)
+		recordDeployObs(ctx, log, job, "container_start", "failed", tRun, time.Since(tRun).Milliseconds(), FirstPublicCode(e))
 		return DeployResult{}, e
 	}
 
@@ -231,8 +280,10 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	if err != nil {
 		e := ErrCode("container_attach_failed", err)
 		markFailed(e)
+		recordDeployObs(ctx, log, job, "container_start", "failed", tRun, time.Since(tRun).Milliseconds(), FirstPublicCode(e))
 		return DeployResult{}, e
 	}
+	recordDeployObs(ctx, log, job, "container_start", "ok", tRun, time.Since(tRun).Milliseconds(), "")
 
 	cleanupCandidate := func(reason string) {
 		if stopErr := docker.StopAndRemove(ctx, dockerClient, containerID); stopErr != nil {
@@ -249,10 +300,14 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		e := ErrCode("health_check_failed", err)
 		markFailed(e)
 		cleanupCandidate("health check failure")
-		log.Info("deploy step", "step", "health_check_end", "status", "failed", "host_port", hostPortValue, "duration_ms", time.Since(t2).Milliseconds())
+		ms := time.Since(t2).Milliseconds()
+		log.Info("deploy step", "step", "health_check_end", "status", "failed", "host_port", hostPortValue, "duration_ms", ms)
+		recordDeployObs(ctx, log, job, "health_check", "failed", t2, ms, FirstPublicCode(e))
 		return DeployResult{}, e
 	}
-	log.Info("deploy step", "step", "health_check_end", "status", "ok", "host_port", hostPortValue, "duration_ms", time.Since(t2).Milliseconds())
+	msHealth := time.Since(t2).Milliseconds()
+	log.Info("deploy step", "step", "health_check_end", "status", "ok", "host_port", hostPortValue, "duration_ms", msHealth)
+	recordDeployObs(ctx, log, job, "health_check", "ok", t2, msHealth, "")
 
 	shouldSyncCaddy := cfg.SyncCaddy
 	if !shouldSyncCaddy {
@@ -271,10 +326,14 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 			e := ErrCode("caddy_sync_failed", err)
 			markFailed(e)
 			cleanupCandidate("caddy sync failure")
-			log.Info("deploy step", "step", "caddy_sync_end", "status", "failed", "duration_ms", time.Since(t3).Milliseconds())
+			ms := time.Since(t3).Milliseconds()
+			log.Info("deploy step", "step", "caddy_sync_end", "status", "failed", "duration_ms", ms)
+			recordDeployObs(ctx, log, job, "caddy_sync", "failed", t3, ms, FirstPublicCode(e))
 			return DeployResult{}, e
 		}
-		log.Info("deploy step", "step", "caddy_sync_end", "status", "ok", "duration_ms", time.Since(t3).Milliseconds())
+		msCaddy := time.Since(t3).Milliseconds()
+		log.Info("deploy step", "step", "caddy_sync_end", "status", "ok", "duration_ms", msCaddy)
+		recordDeployObs(ctx, log, job, "caddy_sync", "ok", t3, msCaddy, "")
 	}
 
 	if err := store.UpdateDeploymentStatus(ctx, job.Deployment.ID, models.DeploymentSuccess, ""); err != nil {
@@ -289,7 +348,7 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		}
 	}
 
-	result := DeployResult{
+	result = DeployResult{
 		DeploymentID:  job.Deployment.ID,
 		ContainerID:   containerID,
 		ImageRef:      job.ImageRef,

@@ -9,6 +9,7 @@ import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { formatDuration, formatRelative, shortHash } from "../format";
 import { useDeploymentsListQuery, useProjectsQuery, useSystemStatusQuery } from "../hooks/fleetQueries";
+import { effectiveBuildLabel } from "../uiVersion";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -235,7 +236,9 @@ export function DashboardPage() {
             {systemLoading ? <li className="py-2 text-xs text-muted">Loading system checks…</li> : null}
             <li className="flex items-center justify-between py-2 text-sm">
               <span className="text-muted">Build version</span>
-              <span className="mono text-xs text-text">{systemStatus?.version || "—"}</span>
+              <span className="mono text-xs text-text">
+                {effectiveBuildLabel(systemStatus?.version)}
+              </span>
             </li>
           </ul>
           <div className="mt-4 border-t border-border pt-4">

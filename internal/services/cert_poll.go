@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hostforge/hostforge/internal/config"
+	"github.com/hostforge/hostforge/internal/obs"
 	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
 )
@@ -23,7 +24,8 @@ const maxCertMessageLen = 512
 
 // StartCaddyCertPollLoop runs PollCaddyCertObservations on an interval until the process exits.
 // It is a no-op when cfg.CaddyCertPollIntervalSec <= 0.
-func StartCaddyCertPollLoop(log *slog.Logger, cfg *config.Config, store *repository.Store) {
+// obsCtx should carry observability store (e.g. obs.WithStore(context.Background(), store)) for UI samples.
+func StartCaddyCertPollLoop(log *slog.Logger, cfg *config.Config, store *repository.Store, obsCtx context.Context) {
 	sec := cfg.CaddyCertPollIntervalSec
 	if sec <= 0 {
 		return
@@ -33,12 +35,17 @@ func StartCaddyCertPollLoop(log *slog.Logger, cfg *config.Config, store *reposit
 	if log != nil {
 		log.Info("caddy cert poll enabled", "interval_sec", sec, "admin_url", redact.HTTPURLForLog(cfg.CaddyAdminURL), "storage_root", cfg.CaddyStorageRoot)
 	}
-	ctx := context.Background()
+	if obsCtx == nil {
+		obsCtx = context.Background()
+	}
 	run := func() {
 		t0 := time.Now()
-		if err := PollCaddyCertObservations(ctx, log, cfg, store); err != nil {
+		if err := PollCaddyCertObservations(obsCtx, log, cfg, store); err != nil {
 			log.Warn("cert poll tick failed", "duration_ms", time.Since(t0).Milliseconds(), "error", err)
+			recordCertPollObs(obsCtx, log, t0, "failed", err)
+			return
 		}
+		recordCertPollObs(obsCtx, log, t0, "ok", nil)
 	}
 	run()
 	t := time.NewTicker(interval)
@@ -75,10 +82,29 @@ func PollCaddyCertObservations(ctx context.Context, log *slog.Logger, cfg *confi
 			log.Warn("update cert observation", "domain_id", d.ID, "error", err)
 		}
 	}
+	dur := time.Since(tickStart).Milliseconds()
 	if log != nil {
-		log.Info("cert_poll tick complete", "domain_count", len(domains), "duration_ms", time.Since(tickStart).Milliseconds())
+		log.Info("cert_poll tick complete", "domain_count", len(domains), "duration_ms", dur)
 	}
 	return nil
+}
+
+func recordCertPollObs(ctx context.Context, log *slog.Logger, started time.Time, status string, pollErr error) {
+	code := ""
+	if pollErr != nil {
+		code = "cert_poll_failed"
+	}
+	obs.RecordDeployStep(ctx, log, repository.DeployStepRecord{
+		DeploymentID: "",
+		ProjectID:    "",
+		RequestID:    "",
+		Step:         "cert_poll",
+		Status:       status,
+		DurationMS:   time.Since(started).Milliseconds(),
+		ErrorCode:    code,
+		StartedAt:    started.UTC(),
+		EndedAt:      time.Now().UTC(),
+	})
 }
 
 func buildCertObservationMessage(storageRoot, certRoot, domainName, adminNote string) string {

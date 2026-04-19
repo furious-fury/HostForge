@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { RELEASE_LABEL } from "../uiVersion";
 
 type NavItem = {
   to: string;
@@ -24,6 +25,7 @@ const groups: NavGroup[] = [
   {
     label: "Observe",
     items: [
+      { to: "/observability", label: "Observability" },
       { to: "/logs", label: "Logs", disabled: true },
       { to: "/domains", label: "Domains", disabled: true },
     ],
@@ -81,7 +83,7 @@ export function Sidebar() {
 
       <div className="border-t border-border px-4 py-3 text-[11px] text-muted">
         <div className="flex items-center justify-between">
-          <span className="mono uppercase tracking-wider">v0.6 · phase 6</span>
+          <span className="mono uppercase tracking-wider">{RELEASE_LABEL}</span>
           <span className="mono inline-flex items-center gap-1 border border-success px-1.5 py-0.5 text-success">
             <span aria-hidden>●</span>
             <span>online</span>
