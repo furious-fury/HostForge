@@ -14,11 +14,15 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/hostforge/hostforge/internal/config"
 	"github.com/hostforge/hostforge/internal/database"
+	"github.com/hostforge/hostforge/internal/docker"
 	"github.com/hostforge/hostforge/internal/logging"
+	logsapi "github.com/hostforge/hostforge/internal/logs"
 	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/repository"
 	"github.com/hostforge/hostforge/internal/services"
@@ -74,7 +78,7 @@ func runServer(log *slog.Logger, args []string) int {
 		return 2
 	}
 
-	for _, d := range []string{cfg.DataDir, cfg.WorktreesDir(), cfg.BuildsDir()} {
+	for _, d := range []string{cfg.DataDir, cfg.WorktreesDir(), cfg.BuildsDir(), cfg.LogsDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", d, err)
 			return 1
@@ -98,15 +102,18 @@ func runServer(log *slog.Logger, args []string) int {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WebhookBasePath, handler.handleGitHubWebhook)
+	mux.HandleFunc("/api/deployments/", handler.handleDeploymentRoutes)
 	if cfg.WebhookSecret == "" {
 		log.Warn("webhook shared secret is not configured; endpoint is network-reachable if exposed", "path", cfg.WebhookBasePath)
 	}
+	log.Warn("log APIs are unauthenticated in Phase 5; bind privately or protect with a proxy")
 
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
+		ReadTimeout:       0,
+		WriteTimeout:      0,
 		IdleTimeout:       60 * time.Second,
 	}
 	log.Info("hostforge server listening", "listen", cfg.ListenAddr, "webhook_path", cfg.WebhookBasePath, "webhook_async", cfg.WebhookAsync)
@@ -320,6 +327,182 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *server) handleDeploymentRoutes(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.TrimPrefix(r.URL.Path, "/api/deployments/")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" || parts[1] != "logs" {
+		http.NotFound(w, r)
+		return
+	}
+	deploymentID := strings.TrimSpace(parts[0])
+	if len(parts) == 2 {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+			return
+		}
+		s.handleDeploymentLogsTail(w, r, deploymentID)
+		return
+	}
+	if len(parts) == 3 && parts[2] == "live" {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+			return
+		}
+		s.handleDeploymentLogsLive(w, r, deploymentID)
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (s *server) handleDeploymentLogsTail(w http.ResponseWriter, r *http.Request, deploymentID string) {
+	deployment, err := s.store.GetDeploymentByID(r.Context(), deploymentID)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "deployment_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "deployment_lookup_failed"})
+		return
+	}
+	logsPath := strings.TrimSpace(deployment.LogsPath)
+	if logsPath == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "deployment_log_not_available"})
+		return
+	}
+	tailBytes := parseQueryInt(r, "tail_bytes", logsapi.DefaultTailBytes)
+	if tailBytes > logsapi.MaxTailBytes {
+		tailBytes = logsapi.MaxTailBytes
+	}
+	tailLines := parseQueryInt(r, "tail_lines", 0)
+	content, err := logsapi.TailFile(logsPath, tailBytes, tailLines)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "deployment_log_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "read_deployment_log_failed"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(content)
+}
+
+var logUpgrader = websocket.Upgrader{
+	CheckOrigin: func(_ *http.Request) bool { return true },
+}
+
+func (s *server) handleDeploymentLogsLive(w http.ResponseWriter, r *http.Request, deploymentID string) {
+	deployment, err := s.store.GetDeploymentByID(r.Context(), deploymentID)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "deployment_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "deployment_lookup_failed"})
+		return
+	}
+	conn, err := logUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	go func() {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				cancel()
+				return
+			}
+		}
+	}()
+
+	source := strings.TrimSpace(r.URL.Query().Get("source"))
+	if source == "" {
+		source = defaultLogSource(deployment)
+	}
+	switch source {
+	case "build":
+		s.streamBuildLog(ctx, conn, deployment)
+	case "container":
+		s.streamContainerLog(ctx, conn, deploymentID)
+	default:
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: unsupported source"))
+	}
+}
+
+func (s *server) streamBuildLog(ctx context.Context, conn *websocket.Conn, deployment models.Deployment) {
+	if strings.TrimSpace(deployment.LogsPath) == "" {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: deployment log path is empty"))
+		return
+	}
+	initial, err := logsapi.TailFile(deployment.LogsPath, logsapi.DefaultTailBytes, 0)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: failed to tail deployment log"))
+		return
+	}
+	if len(initial) > 0 {
+		_ = conn.WriteMessage(websocket.TextMessage, initial)
+	}
+	if err := logsapi.FollowFile(ctx, deployment.LogsPath, 500*time.Millisecond, func(chunk []byte) error {
+		if len(chunk) == 0 {
+			return nil
+		}
+		return conn.WriteMessage(websocket.TextMessage, chunk)
+	}); err != nil && !errors.Is(err, context.Canceled) {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: build log stream ended"))
+	}
+}
+
+func (s *server) streamContainerLog(ctx context.Context, conn *websocket.Conn, deploymentID string) {
+	containerRec, err := s.store.GetContainerByDeploymentID(ctx, deploymentID)
+	if err != nil {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: container record not found for deployment"))
+		return
+	}
+	cli, err := docker.NewClient(ctx)
+	if err != nil {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: docker unavailable"))
+		return
+	}
+	defer cli.Close()
+	writer := &websocketWriter{conn: conn}
+	if err := docker.StreamContainerLogs(ctx, cli, containerRec.DockerContainerID, docker.LogStreamOptions{
+		Follow:     true,
+		Tail:       "200",
+		ShowStdout: true,
+		ShowStderr: true,
+	}, writer); err != nil && !errors.Is(err, context.Canceled) {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: container log stream ended"))
+	}
+}
+
+type websocketWriter struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
+}
+
+func (w *websocketWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if err := w.conn.WriteMessage(websocket.TextMessage, p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func defaultLogSource(deployment models.Deployment) string {
+	if deployment.Status == models.DeploymentSuccess {
+		return "container"
+	}
+	return "build"
+}
+
 func findProjectByRepoAndBranch(ctx context.Context, store *repository.Store, canonicalRepoURL, rawRepoURL, branch string) (models.Project, error) {
 	candidates := []string{strings.TrimSpace(canonicalRepoURL)}
 	raw := strings.TrimSpace(rawRepoURL)
@@ -438,6 +621,18 @@ func cfgBoolDefault(envKey string, def bool) bool {
 
 func cfgIntDefault(envKey string, def int) int {
 	raw := strings.TrimSpace(os.Getenv(envKey))
+	if raw == "" {
+		return def
+	}
+	val, err := strconv.Atoi(raw)
+	if err != nil {
+		return def
+	}
+	return val
+}
+
+func parseQueryInt(r *http.Request, key string, def int) int {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
 	if raw == "" {
 		return def
 	}

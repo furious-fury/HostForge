@@ -4,10 +4,12 @@ package docker
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/netip"
 	"strconv"
 	"strings"
 
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
@@ -101,6 +103,48 @@ func RemoveImage(ctx context.Context, cli *client.Client, imageRef string) error
 	_, err := cli.ImageRemove(ctx, imageRef, client.ImageRemoveOptions{Force: true, PruneChildren: true})
 	if err != nil {
 		return fmt.Errorf("remove image %s: %w", imageRef, err)
+	}
+	return nil
+}
+
+// LogStreamOptions controls container log streaming behavior.
+type LogStreamOptions struct {
+	Follow     bool
+	Tail       string
+	Since      string
+	Timestamps bool
+	ShowStdout bool
+	ShowStderr bool
+}
+
+// StreamContainerLogs streams Docker container logs to out and demultiplexes stdout/stderr.
+func StreamContainerLogs(ctx context.Context, cli *client.Client, containerID string, opts LogStreamOptions, out io.Writer) error {
+	if strings.TrimSpace(containerID) == "" {
+		return fmt.Errorf("container id must not be empty")
+	}
+	if out == nil {
+		return fmt.Errorf("output writer must not be nil")
+	}
+	showStdout := opts.ShowStdout
+	showStderr := opts.ShowStderr
+	if !showStdout && !showStderr {
+		showStdout = true
+		showStderr = true
+	}
+	reader, err := cli.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{
+		ShowStdout: showStdout,
+		ShowStderr: showStderr,
+		Follow:     opts.Follow,
+		Timestamps: opts.Timestamps,
+		Tail:       opts.Tail,
+		Since:      opts.Since,
+	})
+	if err != nil {
+		return fmt.Errorf("container logs %s: %w", shortID(containerID), err)
+	}
+	defer reader.Close()
+	if _, err := stdcopy.StdCopy(out, out, reader); err != nil {
+		return fmt.Errorf("stream container logs %s: %w", shortID(containerID), err)
 	}
 	return nil
 }

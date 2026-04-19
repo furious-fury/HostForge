@@ -51,6 +51,8 @@ type Config struct {
 	WebhookAsync bool
 	// WebhookSecret is an optional shared secret checked on webhook requests.
 	WebhookSecret string
+	// LogsDirPath overrides where build logs are written (default: <data-dir>/logs).
+	LogsDirPath string
 }
 
 // DataDirEnv is the environment variable overriding the default data directory.
@@ -101,6 +103,8 @@ const (
 	WebhookAsyncEnv = "HOSTFORGE_WEBHOOK_ASYNC"
 	// WebhookSecretEnv sets an optional shared-secret token for webhook requests.
 	WebhookSecretEnv = "HOSTFORGE_WEBHOOK_SECRET"
+	// LogsDirEnv overrides the default logs directory under data dir.
+	LogsDirEnv = "HOSTFORGE_LOGS_DIR"
 )
 
 // DefaultDataDir returns the default data directory (./.hostforge).
@@ -201,6 +205,7 @@ func Load(dataDirFlag string) (*Config, error) {
 		return nil, err
 	}
 	webhookSecret := strings.TrimSpace(os.Getenv(WebhookSecretEnv))
+	logsDirPath := strings.TrimSpace(os.Getenv(LogsDirEnv))
 	return &Config{
 		DataDir:             abs,
 		ListenAddr:          listen,
@@ -222,6 +227,7 @@ func Load(dataDirFlag string) (*Config, error) {
 		WebhookMaxBodyBytes: webhookMaxBodyBytes,
 		WebhookAsync:        webhookAsync,
 		WebhookSecret:       webhookSecret,
+		LogsDirPath:         logsDirPath,
 	}, nil
 }
 
@@ -238,6 +244,14 @@ func (c *Config) BuildsDir() string {
 // DBPath returns the SQLite control-plane database path.
 func (c *Config) DBPath() string {
 	return filepath.Join(c.DataDir, "hostforge.db")
+}
+
+// LogsDir returns the directory for build/deployment log files.
+func (c *Config) LogsDir() string {
+	if strings.TrimSpace(c.LogsDirPath) != "" {
+		return c.LogsDirPath
+	}
+	return filepath.Join(c.DataDir, "logs")
 }
 
 func envInt(key string, def int) (int, error) {

@@ -94,6 +94,7 @@ HostForge writes a **generated Caddyfile fragment** under the data directory and
 | `HOSTFORGE_WEBHOOK_MAX_BODY_BYTES` | Max webhook body size in bytes (default: `1048576`) |
 | `HOSTFORGE_WEBHOOK_ASYNC` | If `true`, accept webhook deploys with `202` and run in background |
 | `HOSTFORGE_WEBHOOK_SECRET` | Optional shared-secret token expected in `X-HostForge-Token` |
+| `HOSTFORGE_LOGS_DIR` | Optional override for deployment build logs directory (default: `<data-dir>/logs`) |
 
 ### HTTPS / ACME
 
@@ -162,3 +163,27 @@ You can also set `HOSTFORGE_DATA_DIR` and `HOSTFORGE_LISTEN` instead of flags.
 
 - MVP supports an optional shared-secret header check (`X-HostForge-Token`) via `HOSTFORGE_WEBHOOK_SECRET`.
 - Full GitHub signature verification (`X-Hub-Signature-256`) remains future hardening work (PRD Phase 7 / future scope).
+
+## Phase 5: Logs (REST tail + WebSocket stream)
+
+Phase 5 adds deployment log retention to disk plus server APIs for historical and live streaming.
+
+### Retention model
+
+- Build/deploy logs are written to files under `<data-dir>/logs/<deployment-id>.log` and persisted in `deployments.logs_path`.
+- Runtime container logs are streamed from Docker Engine on demand and are not persisted by HostForge in v1.
+
+### API surface
+
+- Historical tail (build log file): `GET /api/deployments/{deployment_id}/logs`
+  - Optional query params:
+    - `tail_bytes` (default `65536`, capped to prevent unbounded reads)
+    - `tail_lines` (optional, trims to ending N lines)
+- Live WebSocket stream: `GET /api/deployments/{deployment_id}/logs/live`
+  - `?source=build` streams appended file output.
+  - `?source=container` streams Docker `ContainerLogs` for the deployment container.
+  - Default source prefers container logs for successful deployments, otherwise build logs.
+
+### Security note (pre-Phase 7)
+
+Log APIs/WebSockets are unauthenticated in Phase 5. Do not expose them publicly. Bind HostForge to localhost or protect with a trusted reverse proxy / firewall / SSH tunnel until Phase 7 hardening.

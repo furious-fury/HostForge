@@ -152,7 +152,7 @@ func runDeploy(log *slog.Logger, args []string) int {
 		fmt.Fprintf(os.Stderr, "error: runtime config: %v\n", err)
 		return 2
 	}
-	for _, d := range []string{cfg.DataDir, cfg.WorktreesDir(), cfg.BuildsDir()} {
+	for _, d := range []string{cfg.DataDir, cfg.WorktreesDir(), cfg.BuildsDir(), cfg.LogsDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", d, err)
 			return 1

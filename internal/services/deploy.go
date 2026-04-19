@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ type DeployJob struct {
 	Worktree          string
 	ImageRef          string
 	ContainerName     string
+	LogsPath          string
 }
 
 // DeployResult captures output values from a successful deployment.
@@ -89,6 +91,11 @@ func PrepareDeploy(ctx context.Context, cfg *config.Config, store *repository.St
 	if err != nil {
 		return DeployJob{}, fmt.Errorf("deployment state: %w", err)
 	}
+	logsPath := filepath.Join(cfg.LogsDir(), deployment.ID+".log")
+	if err := store.UpdateDeploymentLogsPath(ctx, deployment.ID, logsPath); err != nil {
+		return DeployJob{}, fmt.Errorf("deployment log path state: %w", err)
+	}
+	deployment.LogsPath = logsPath
 
 	return DeployJob{
 		Project:           in.Project,
@@ -99,6 +106,7 @@ func PrepareDeploy(ctx context.Context, cfg *config.Config, store *repository.St
 		Worktree:          worktree,
 		ImageRef:          imageRef,
 		ContainerName:     containerName,
+		LogsPath:          logsPath,
 	}, nil
 }
 
@@ -121,9 +129,23 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	}
 	defer dockerClient.Close()
 
+	if err := os.MkdirAll(filepath.Dir(job.LogsPath), 0o755); err != nil {
+		markFailed(err)
+		return DeployResult{}, fmt.Errorf("mkdir logs dir: %w", err)
+	}
+	logFile, err := os.OpenFile(job.LogsPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		markFailed(err)
+		return DeployResult{}, fmt.Errorf("open deployment log: %w", err)
+	}
+	defer logFile.Close()
+	combinedOut := io.MultiWriter(os.Stdout, logFile)
+
 	log.Info("cloning", "url", job.RepoURL, "worktree", job.Worktree)
+	_, _ = fmt.Fprintf(combinedOut, "hostforge: cloning url=%s worktree=%s\n", job.RepoURL, job.Worktree)
 	if err := git.CloneOrUpdate(ctx, job.RepoURL, job.Branch, job.Worktree); err != nil {
 		markFailed(err)
+		_, _ = fmt.Fprintf(combinedOut, "hostforge: clone failed: %v\n", err)
 		return DeployResult{}, fmt.Errorf("clone: %w", err)
 	}
 
@@ -134,8 +156,9 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	}
 
 	log.Info("running nixpacks image build", "dir", job.Worktree, "image", job.ImageRef)
-	if err := nixpacks.BuildImage(ctx, job.Worktree, job.ImageRef); err != nil {
+	if err := nixpacks.BuildImageWithWriters(ctx, job.Worktree, job.ImageRef, combinedOut, combinedOut); err != nil {
 		markFailed(err)
+		_, _ = fmt.Fprintf(combinedOut, "hostforge: nixpacks failed: %v\n", err)
 		return DeployResult{}, fmt.Errorf("nixpacks: %w", err)
 	}
 

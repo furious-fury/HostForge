@@ -188,6 +188,21 @@ func (s *Store) UpdateDeploymentStatus(ctx context.Context, deploymentID, status
 	return nil
 }
 
+// UpdateDeploymentLogsPath sets logs_path for a deployment.
+func (s *Store) UpdateDeploymentLogsPath(ctx context.Context, deploymentID, logsPath string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE deployments SET logs_path = ?, updated_at = ? WHERE id = ?`,
+		strings.TrimSpace(logsPath),
+		time.Now().UTC().Format(time.RFC3339),
+		strings.TrimSpace(deploymentID),
+	)
+	if err != nil {
+		return fmt.Errorf("update deployment logs_path: %w", err)
+	}
+	return nil
+}
+
 // GetLatestSuccessfulDeploymentByProjectID returns the newest SUCCESS deployment for a project.
 func (s *Store) GetLatestSuccessfulDeploymentByProjectID(ctx context.Context, projectID string) (models.Deployment, error) {
 	var d models.Deployment
@@ -215,6 +230,36 @@ func (s *Store) GetLatestSuccessfulDeploymentByProjectID(ctx context.Context, pr
 	)
 	if err != nil {
 		return models.Deployment{}, fmt.Errorf("lookup latest successful deployment: %w", err)
+	}
+	d.CreatedAt = parseTime(createdAt)
+	d.UpdatedAt = parseTime(updatedAt)
+	return d, nil
+}
+
+// GetDeploymentByID returns a deployment row by id.
+func (s *Store) GetDeploymentByID(ctx context.Context, deploymentID string) (models.Deployment, error) {
+	var d models.Deployment
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at
+		 FROM deployments
+		 WHERE id = ?`,
+		strings.TrimSpace(deploymentID),
+	).Scan(
+		&d.ID,
+		&d.ProjectID,
+		&d.Status,
+		&d.CommitHash,
+		&d.LogsPath,
+		&d.ImageRef,
+		&d.Worktree,
+		&d.ErrorMessage,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		return models.Deployment{}, fmt.Errorf("lookup deployment by id: %w", err)
 	}
 	d.CreatedAt = parseTime(createdAt)
 	d.UpdatedAt = parseTime(updatedAt)
