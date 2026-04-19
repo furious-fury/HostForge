@@ -187,3 +187,94 @@ Phase 5 adds deployment log retention to disk plus server APIs for historical an
 ### Security note (pre-Phase 7)
 
 Log APIs/WebSockets are unauthenticated in Phase 5. Do not expose them publicly. Bind HostForge to localhost or protect with a trusted reverse proxy / firewall / SSH tunnel until Phase 7 hardening.
+
+## Phase 6: UI (Vite + React + TypeScript + Tailwind)
+
+Phase 6 adds a browser control plane served by `cmd/server`, with observability and controls over the same backend orchestration used by CLI/webhooks.
+
+### Stack and delivery
+
+- UI source lives in `web/`.
+- Stack: **Vite**, **React**, **TypeScript**, **TailwindCSS**.
+- Production delivery: build to `web/dist` and run `hostforge-server`; the server serves static assets plus API routes on one origin.
+- Development: run Vite dev server and proxy `/api` + WebSocket paths to HostForge server.
+
+### Build and run UI
+
+```bash
+# from repo root
+npm --prefix web install
+npm --prefix web run build
+go build -o hostforge-server ./cmd/server
+./hostforge-server -data-dir ./.hostforge -listen :8080
+```
+
+For local UI iteration:
+
+```bash
+# terminal 1
+go run ./cmd/server -data-dir ./.hostforge -listen :8080
+
+# terminal 2
+npm --prefix web run dev
+```
+
+Vite proxy config (`web/vite.config.ts`) forwards:
+
+- `/api/*` → `http://127.0.0.1:8080`
+- `/hooks/*` → `http://127.0.0.1:8080`
+- WebSocket upgrades on `/api/deployments/{id}/logs/live`
+
+### New API surface for UI
+
+- `GET /api/projects`
+- `POST /api/projects` (create project from repo URL/branch/name)
+- `GET /api/projects/{id}`
+- `DELETE /api/projects/{id}` (removes project, deployments, domains, and stops/removes linked Docker containers; syncs Caddy when domains existed or `HOSTFORGE_SYNC_CADDY` is set)
+- `GET /api/projects/{id}/domains`
+- `GET /api/projects/{id}/deployments`
+- `GET /api/deployments` (global deployment list)
+- Existing logs APIs:
+  - `GET /api/deployments/{id}/logs`
+  - `GET /api/deployments/{id}/logs/live` (WebSocket)
+- Control endpoints:
+  - `POST /api/projects/{id}/deploy`
+  - `POST /api/projects/{id}/restart`
+  - `POST /api/projects/{id}/rollback`
+  - `POST /api/projects/{id}/stop`
+
+### Wizard and UI behavior
+
+- New project flow supports:
+  1. Source step (repo URL, branch default `main`, name suggestion)
+  2. Immediate deploy trigger and transition to BUILDING state
+  3. Live deployment view with WebSocket logs
+  4. Success/failure states with follow-up actions
+- Environment-variable configuration is intentionally deferred from Phase 6 and remains future scope.
+
+### UI structure (post-redesign)
+
+The UI follows the brutalist guidelines from `Design1.md` (no rounded corners, borders over shadows, lightness-shift hovers). Code is split as:
+
+- `web/src/components/` — `Shell`, `Sidebar`, `Topbar`, `ThemeToggle`, plus primitives `Panel`, `KpiTile`, `StatusPill`, `Button`, `EmptyState`, `Stepper`, `Terminal`.
+- `web/src/pages/` — `DashboardPage`, `ProjectsPage`, `ProjectPage`, `DeploymentPage`, `NewProjectPage`.
+- `web/src/theme.ts` — theme bootstrap and persistence.
+- `web/src/format.ts` — date/duration/short-hash helpers.
+
+Routes:
+
+- `/` — Overview dashboard (KPI tiles + recent deployments + system panel)
+- `/projects` — Project fleet (with All / Running / Failed filters)
+- `/projects/new` — New project wizard
+- `/projects/:id` — Project header + Controls + Deployment history + Danger zone
+- `/projects/:id/deployments/:id` — Deployment metadata + live terminal
+
+### Theming
+
+- Colors are exposed as CSS variables (`--hf-bg`, `--hf-surface`, `--hf-border`, `--hf-primary`, …) defined in `web/src/index.css`, and consumed via Tailwind semantic tokens (`bg-bg`, `bg-surface`, `border-border`, `text-primary`, …) declared in `web/tailwind.config.js`.
+- On first load the app reads `prefers-color-scheme` and applies dark or light. The header toggle (`ThemeToggle`) flips themes and persists the choice in `localStorage` (`hf-theme`); once set, the user choice overrides system preference. Without a stored choice, system changes are followed live.
+- Both palettes preserve the same component structure: only color vars change. The `* { border-radius: 0 !important; }` rule keeps the brutalist no-radius look in either mode.
+
+### Security note (pre-Phase 7)
+
+Phase 6 management APIs and WebSocket streams remain unauthenticated until Phase 7 hardening. Keep the server private (localhost bind, SSH tunnel, firewall, or trusted reverse proxy).

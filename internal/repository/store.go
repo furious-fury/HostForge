@@ -42,6 +42,13 @@ type AttachContainerInput struct {
 	Status            string
 }
 
+// CreateProjectInput defines explicit project fields supplied by the UI/API.
+type CreateProjectInput struct {
+	Name    string
+	RepoURL string
+	Branch  string
+}
+
 // GetProjectByRepoAndBranch returns an existing project by repo URL and branch.
 func (s *Store) GetProjectByRepoAndBranch(ctx context.Context, repoURL, branch string) (models.Project, error) {
 	trimmedRepo := strings.TrimSpace(repoURL)
@@ -121,6 +128,39 @@ func (s *Store) EnsureProject(ctx context.Context, repoURL, branch string) (mode
 		UpdatedAt: now,
 	}
 	_, err = s.db.ExecContext(
+		ctx,
+		`INSERT INTO projects(id, name, repo_url, branch, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		p.ID,
+		p.Name,
+		p.RepoURL,
+		p.Branch,
+		p.CreatedAt.Format(time.RFC3339),
+		p.UpdatedAt.Format(time.RFC3339),
+	)
+	if err != nil {
+		return models.Project{}, fmt.Errorf("insert project: %w", err)
+	}
+	return p, nil
+}
+
+// CreateProject inserts a new project row with explicit fields.
+func (s *Store) CreateProject(ctx context.Context, in CreateProjectInput) (models.Project, error) {
+	now := time.Now().UTC()
+	repoURL := strings.TrimSpace(in.RepoURL)
+	branch := strings.TrimSpace(in.Branch)
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		name = projectNameFromURL(repoURL)
+	}
+	p := models.Project{
+		ID:        newID(),
+		Name:      name,
+		RepoURL:   repoURL,
+		Branch:    branch,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	_, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO projects(id, name, repo_url, branch, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		p.ID,
@@ -236,6 +276,39 @@ func (s *Store) GetLatestSuccessfulDeploymentByProjectID(ctx context.Context, pr
 	return d, nil
 }
 
+// GetPreviousSuccessfulDeploymentByProjectID returns the second newest SUCCESS deployment for a project.
+func (s *Store) GetPreviousSuccessfulDeploymentByProjectID(ctx context.Context, projectID string) (models.Deployment, error) {
+	var d models.Deployment
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at
+		 FROM deployments
+		 WHERE project_id = ? AND status = ?
+		 ORDER BY created_at DESC
+		 LIMIT 1 OFFSET 1`,
+		strings.TrimSpace(projectID),
+		models.DeploymentSuccess,
+	).Scan(
+		&d.ID,
+		&d.ProjectID,
+		&d.Status,
+		&d.CommitHash,
+		&d.LogsPath,
+		&d.ImageRef,
+		&d.Worktree,
+		&d.ErrorMessage,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		return models.Deployment{}, fmt.Errorf("lookup previous successful deployment: %w", err)
+	}
+	d.CreatedAt = parseTime(createdAt)
+	d.UpdatedAt = parseTime(updatedAt)
+	return d, nil
+}
+
 // GetDeploymentByID returns a deployment row by id.
 func (s *Store) GetDeploymentByID(ctx context.Context, deploymentID string) (models.Deployment, error) {
 	var d models.Deployment
@@ -264,6 +337,58 @@ func (s *Store) GetDeploymentByID(ctx context.Context, deploymentID string) (mod
 	d.CreatedAt = parseTime(createdAt)
 	d.UpdatedAt = parseTime(updatedAt)
 	return d, nil
+}
+
+// DeleteProjectCascade removes all rows for projectID: containers (via deployments),
+// deployments, domains, then the project. It runs in a single transaction.
+func (s *Store) DeleteProjectCascade(ctx context.Context, projectID string) error {
+	pid := strings.TrimSpace(projectID)
+	if pid == "" {
+		return fmt.Errorf("project id must not be empty")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM containers WHERE deployment_id IN (SELECT id FROM deployments WHERE project_id = ?)`,
+		pid,
+	); err != nil {
+		return fmt.Errorf("delete containers: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM deployments WHERE project_id = ?`, pid); err != nil {
+		return fmt.Errorf("delete deployments: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM domains WHERE project_id = ?`, pid); err != nil {
+		return fmt.Errorf("delete domains: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, pid); err != nil {
+		return fmt.Errorf("delete project: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// GetProjectByID returns a project row by id.
+func (s *Store) GetProjectByID(ctx context.Context, projectID string) (models.Project, error) {
+	var p models.Project
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, name, repo_url, branch, created_at, updated_at FROM projects WHERE id = ?`,
+		strings.TrimSpace(projectID),
+	).Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &createdAt, &updatedAt)
+	if err != nil {
+		return models.Project{}, fmt.Errorf("lookup project by id: %w", err)
+	}
+	p.CreatedAt = parseTime(createdAt)
+	p.UpdatedAt = parseTime(updatedAt)
+	return p, nil
 }
 
 // AttachContainer inserts a container row for a successful run (ports and Docker ID).
@@ -332,6 +457,54 @@ func (s *Store) GetContainerByDeploymentID(ctx context.Context, deploymentID str
 	return c, nil
 }
 
+// ListAllocatedHostPorts returns host ports currently claimed by any non-REMOVED container.
+// excludeContainerID is optional; pass "" to include every active container. The returned
+// map is keyed by host_port (>0 only), suitable for fast membership checks during port
+// allocation so concurrent projects don't reuse the same published port.
+func (s *Store) ListAllocatedHostPorts(ctx context.Context, excludeContainerID string) (map[int]struct{}, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, host_port FROM containers WHERE status != 'REMOVED' AND host_port > 0`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list allocated host ports: %w", err)
+	}
+	defer rows.Close()
+	exclude := strings.TrimSpace(excludeContainerID)
+	out := make(map[int]struct{})
+	for rows.Next() {
+		var id string
+		var port int
+		if err := rows.Scan(&id, &port); err != nil {
+			return nil, fmt.Errorf("scan allocated host port: %w", err)
+		}
+		if exclude != "" && id == exclude {
+			continue
+		}
+		out[port] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// UpdateContainerHostBinding updates docker_container_id and host_port for a container row.
+// Used when a container is recreated (e.g. on restart after its port was stolen).
+func (s *Store) UpdateContainerHostBinding(ctx context.Context, containerID, dockerContainerID string, hostPort int, status string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE containers SET docker_container_id = ?, host_port = ?, status = ?, updated_at = ? WHERE id = ?`,
+		strings.TrimSpace(dockerContainerID),
+		hostPort,
+		strings.TrimSpace(status),
+		now,
+		strings.TrimSpace(containerID),
+	)
+	if err != nil {
+		return fmt.Errorf("update container host binding: %w", err)
+	}
+	return nil
+}
+
 // UpdateContainerStatus updates a container row status and updated_at timestamp.
 func (s *Store) UpdateContainerStatus(ctx context.Context, containerID, status string) error {
 	_, err := s.db.ExecContext(
@@ -378,6 +551,52 @@ func (s *Store) ListDeployments(ctx context.Context) ([]models.Deployment, error
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list deployments: %w", err)
+	}
+	defer rows.Close()
+
+	var items []models.Deployment
+	for rows.Next() {
+		var d models.Deployment
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&d.ID,
+			&d.ProjectID,
+			&d.Status,
+			&d.CommitHash,
+			&d.LogsPath,
+			&d.ImageRef,
+			&d.Worktree,
+			&d.ErrorMessage,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan deployment: %w", err)
+		}
+		d.CreatedAt = parseTime(createdAt)
+		d.UpdatedAt = parseTime(updatedAt)
+		items = append(items, d)
+	}
+	return items, rows.Err()
+}
+
+// ListDeploymentsByProjectID returns deployments for one project, newest first.
+func (s *Store) ListDeploymentsByProjectID(ctx context.Context, projectID string, limit int) ([]models.Deployment, error) {
+	lim := limit
+	if lim <= 0 || lim > 500 {
+		lim = 100
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at
+		 FROM deployments
+		 WHERE project_id = ?
+		 ORDER BY created_at DESC
+		 LIMIT ?`,
+		strings.TrimSpace(projectID),
+		lim,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list deployments by project: %w", err)
 	}
 	defer rows.Close()
 

@@ -56,13 +56,27 @@ func TailFile(path string, maxBytes, tailLines int) ([]byte, error) {
 }
 
 // FollowFile polls for appended data and invokes onChunk for new bytes.
+// If the file does not exist yet, it waits for it to appear (cancellable via ctx)
+// instead of failing, so log subscribers can attach before the writer creates the file.
 func FollowFile(ctx context.Context, path string, pollInterval time.Duration, onChunk func([]byte) error) error {
 	if pollInterval <= 0 {
 		pollInterval = 500 * time.Millisecond
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return err
+	var f *os.File
+	for {
+		var openErr error
+		f, openErr = os.Open(path)
+		if openErr == nil {
+			break
+		}
+		if !os.IsNotExist(openErr) {
+			return openErr
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
 	}
 	defer f.Close()
 

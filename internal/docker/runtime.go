@@ -98,6 +98,28 @@ func StopAndRemove(ctx context.Context, cli *client.Client, containerID string) 
 	return nil
 }
 
+// StopContainer stops a running container without removing it.
+func StopContainer(ctx context.Context, cli *client.Client, containerID string) error {
+	timeout := 10
+	if _, err := cli.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "is not running") {
+		return fmt.Errorf("stop container %s: %w", shortID(containerID), err)
+	}
+	return nil
+}
+
+// RestartContainer restarts a container and waits up to timeout seconds.
+func RestartContainer(ctx context.Context, cli *client.Client, containerID string, timeoutSeconds int) error {
+	timeout := timeoutSeconds
+	if timeout <= 0 {
+		timeout = 10
+	}
+	if _, err := cli.ContainerRestart(ctx, containerID, client.ContainerRestartOptions{Timeout: &timeout}); err != nil {
+		return fmt.Errorf("restart container %s: %w", shortID(containerID), err)
+	}
+	return nil
+}
+
 // RemoveImage deletes an image reference (unused now, retained for future cleanup flows).
 func RemoveImage(ctx context.Context, cli *client.Client, imageRef string) error {
 	_, err := cli.ImageRemove(ctx, imageRef, client.ImageRemoveOptions{Force: true, PruneChildren: true})

@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --hf-bg: #0b0f14;
+  --hf-surface: #111827;
+  --hf-surface-alt: #0f172a;
+  --hf-border: #1f2937;
+  --hf-border-strong: #374151;
+  --hf-text: #e5e7eb;
+  --hf-muted: #9ca3af;
+  --hf-primary: #f59e0b;
+  --hf-primary-ink: #0b0f14;
+  --hf-success: #22c55e;
+  --hf-danger: #ef4444;
+  /* Space-separated RGB for Tailwind `bg-danger/30` etc. (opacity modifiers do not work on hex `var()`). */
+  --hf-danger-rgb: 239 68 68;
+  --hf-warning: #eab308;
+  --hf-info: #38bdf8;
+  --hf-terminal: #d1f7c4;
+  --hf-terminal-bg: #07090c;
+  --hf-terminal-fg: #d1f7c4;
+  --hf-terminal-border: #1f2937;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --hf-bg: #f5f5f5;
+  --hf-surface: #ffffff;
+  --hf-surface-alt: #fafafa;
+  --hf-border: #d4d4d4;
+  --hf-border-strong: #111827;
+  --hf-text: #0b0f14;
+  --hf-muted: #525252;
+  --hf-primary: #d97706;
+  --hf-primary-ink: #ffffff;
+  --hf-success: #15803d;
+  --hf-danger: #b91c1c;
+  --hf-danger-rgb: 185 28 28;
+  --hf-warning: #a16207;
+  --hf-info: #0369a1;
+  --hf-terminal: #1f2937;
+  --hf-terminal-bg: #d4d4d4;
+  --hf-terminal-fg: #0b0f14;
+  --hf-terminal-border: #111827;
+  color-scheme: light;
+}
+
+* {
+  border-radius: 0 !important;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, sans-serif;
+  background: var(--hf-bg);
+  color: var(--hf-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono {
+  font-family: "JetBrains Mono", SFMono-Regular, Menlo, monospace;
+}
+
+::selection {
+  background: var(--hf-primary);
+  color: var(--hf-primary-ink);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--hf-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--hf-border-strong);
+  border: 2px solid var(--hf-bg);
+}
+
+/* Sonner: default stylesheet pins the dismiss control top-left with translate(-35%,-35%). */
+[data-sonner-toast] [data-close-button] {
+  left: auto !important;
+  right: 0.5rem !important;
+  top: 0.5rem !important;
+  bottom: auto !important;
+  transform: none !important;
+}

@@ -102,11 +102,15 @@ func runServer(log *slog.Logger, args []string) int {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WebhookBasePath, handler.handleGitHubWebhook)
+	mux.HandleFunc("/api/projects", handler.handleProjectsCollection)
+	mux.HandleFunc("/api/projects/", handler.handleProjectRoutes)
+	mux.HandleFunc("/api/deployments", handler.handleDeploymentsCollection)
 	mux.HandleFunc("/api/deployments/", handler.handleDeploymentRoutes)
+	registerStaticUIRoutes(mux, log)
 	if cfg.WebhookSecret == "" {
 		log.Warn("webhook shared secret is not configured; endpoint is network-reachable if exposed", "path", cfg.WebhookBasePath)
 	}
-	log.Warn("log APIs are unauthenticated in Phase 5; bind privately or protect with a proxy")
+	log.Warn("management APIs and log streams are unauthenticated pre-Phase-7; bind privately or protect with a proxy")
 
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -586,7 +590,7 @@ func normalizeRoutePath(raw string) string {
 	return path
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload map[string]string) {
+func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
