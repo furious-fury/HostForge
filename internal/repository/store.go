@@ -42,6 +42,26 @@ type AttachContainerInput struct {
 	Status            string
 }
 
+// GetProjectByRepoAndBranch returns an existing project by repo URL and branch.
+func (s *Store) GetProjectByRepoAndBranch(ctx context.Context, repoURL, branch string) (models.Project, error) {
+	trimmedRepo := strings.TrimSpace(repoURL)
+	trimmedBranch := strings.TrimSpace(branch)
+	var p models.Project
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, name, repo_url, branch, created_at, updated_at FROM projects WHERE repo_url = ? AND branch = ?`,
+		trimmedRepo,
+		trimmedBranch,
+	).Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &createdAt, &updatedAt)
+	if err != nil {
+		return models.Project{}, fmt.Errorf("lookup project by repo+branch: %w", err)
+	}
+	p.CreatedAt = parseTime(createdAt)
+	p.UpdatedAt = parseTime(updatedAt)
+	return p, nil
+}
+
 // EnsureProject returns the project for repoURL and branch, inserting a row if missing.
 // Branch is part of the unique key with repo_url (default branch stored as "").
 func (s *Store) EnsureProject(ctx context.Context, repoURL, branch string) (models.Project, error) {
@@ -235,6 +255,125 @@ func (s *Store) ListDeployments(ctx context.Context) ([]models.Deployment, error
 		items = append(items, d)
 	}
 	return items, rows.Err()
+}
+
+// CreateDomain inserts a domain record for a project.
+func (s *Store) CreateDomain(ctx context.Context, projectID, domainName string) (models.Domain, error) {
+	now := time.Now().UTC()
+	d := models.Domain{
+		ID:         newID(),
+		ProjectID:  strings.TrimSpace(projectID),
+		DomainName: strings.TrimSpace(domainName),
+		SSLStatus:  models.SSLStatusPending,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO domains(id, project_id, domain_name, ssl_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		d.ID,
+		d.ProjectID,
+		d.DomainName,
+		d.SSLStatus,
+		d.CreatedAt.Format(time.RFC3339),
+		d.UpdatedAt.Format(time.RFC3339),
+	)
+	if err != nil {
+		return models.Domain{}, fmt.Errorf("insert domain: %w", err)
+	}
+	return d, nil
+}
+
+// ListDomainsByProject returns all domains for projectID.
+func (s *Store) ListDomainsByProject(ctx context.Context, projectID string) ([]models.Domain, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, project_id, domain_name, ssl_status, created_at, updated_at FROM domains WHERE project_id = ? ORDER BY domain_name ASC`,
+		strings.TrimSpace(projectID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list domains by project: %w", err)
+	}
+	defer rows.Close()
+	var out []models.Domain
+	for rows.Next() {
+		var d models.Domain
+		var createdAt, updatedAt string
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.DomainName, &d.SSLStatus, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan domain: %w", err)
+		}
+		d.CreatedAt = parseTime(createdAt)
+		d.UpdatedAt = parseTime(updatedAt)
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// UpdateDomainSSLStatus updates ssl_status for a domain.
+func (s *Store) UpdateDomainSSLStatus(ctx context.Context, domainID, status string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE domains SET ssl_status = ?, updated_at = ? WHERE id = ?`,
+		strings.TrimSpace(status),
+		time.Now().UTC().Format(time.RFC3339),
+		strings.TrimSpace(domainID),
+	)
+	if err != nil {
+		return fmt.Errorf("update domain ssl_status: %w", err)
+	}
+	return nil
+}
+
+// ListDomainRoutes resolves domains to latest successful deployment host port per project.
+func (s *Store) ListDomainRoutes(ctx context.Context) ([]models.DomainRoute, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+	d.id,
+	d.project_id,
+	d.domain_name,
+	d.ssl_status,
+	d.created_at,
+	d.updated_at,
+	c.host_port
+FROM domains d
+LEFT JOIN deployments dep ON dep.id = (
+	SELECT dep2.id
+	FROM deployments dep2
+	WHERE dep2.project_id = d.project_id AND dep2.status = 'SUCCESS'
+	ORDER BY dep2.created_at DESC
+	LIMIT 1
+)
+LEFT JOIN containers c ON c.deployment_id = dep.id
+ORDER BY d.domain_name ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list domain routes: %w", err)
+	}
+	defer rows.Close()
+
+	var routes []models.DomainRoute
+	for rows.Next() {
+		var route models.DomainRoute
+		var createdAt, updatedAt string
+		var hostPort sql.NullInt64
+		if err := rows.Scan(
+			&route.ID,
+			&route.ProjectID,
+			&route.DomainName,
+			&route.SSLStatus,
+			&createdAt,
+			&updatedAt,
+			&hostPort,
+		); err != nil {
+			return nil, fmt.Errorf("scan domain route: %w", err)
+		}
+		route.CreatedAt = parseTime(createdAt)
+		route.UpdatedAt = parseTime(updatedAt)
+		if hostPort.Valid {
+			route.HostPort = int(hostPort.Int64)
+		}
+		routes = append(routes, route)
+	}
+	return routes, rows.Err()
 }
 
 // projectNameFromURL derives a display name from the repo path (e.g. "myapp" from github.com/org/myapp).

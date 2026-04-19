@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // Config holds HostForge paths and runtime options for the CLI and server.
@@ -22,6 +23,14 @@ type Config struct {
 	PortEnd   int
 	// ContainerPort is the container port the app listens on.
 	ContainerPort int
+	// CaddyBin is the executable used for validate/reload operations.
+	CaddyBin string
+	// CaddyGeneratedPath is the HostForge-managed generated Caddy config/snippet path.
+	CaddyGeneratedPath string
+	// CaddyRootConfig is the root Caddy config path for validate/reload.
+	CaddyRootConfig string
+	// SyncCaddy enables automatic caddy sync after successful deploy.
+	SyncCaddy bool
 }
 
 // DataDirEnv is the environment variable overriding the default data directory.
@@ -42,6 +51,17 @@ const (
 
 // ContainerPortEnv sets the app port inside the container.
 const ContainerPortEnv = "HOSTFORGE_CONTAINER_PORT"
+
+const (
+	// CaddyBinEnv overrides the caddy executable path.
+	CaddyBinEnv = "HOSTFORGE_CADDY_BIN"
+	// CaddyGeneratedPathEnv sets where HostForge writes generated Caddy config.
+	CaddyGeneratedPathEnv = "HOSTFORGE_CADDY_GENERATED_PATH"
+	// CaddyRootConfigEnv sets the root Caddy config used for validate/reload.
+	CaddyRootConfigEnv = "HOSTFORGE_CADDY_ROOT_CONFIG"
+	// SyncCaddyEnv enables post-deploy Caddy sync when set to true.
+	SyncCaddyEnv = "HOSTFORGE_SYNC_CADDY"
+)
 
 // DefaultDataDir returns the default data directory (./.hostforge).
 func DefaultDataDir() (string, error) {
@@ -91,13 +111,30 @@ func Load(dataDirFlag string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	caddyBin := strings.TrimSpace(os.Getenv(CaddyBinEnv))
+	if caddyBin == "" {
+		caddyBin = "caddy"
+	}
+	caddyGeneratedPath := strings.TrimSpace(os.Getenv(CaddyGeneratedPathEnv))
+	if caddyGeneratedPath == "" {
+		caddyGeneratedPath = filepath.Join(abs, "caddy", "hostforge.caddy")
+	}
+	caddyRootConfig := strings.TrimSpace(os.Getenv(CaddyRootConfigEnv))
+	syncCaddy, err := envBool(SyncCaddyEnv, false)
+	if err != nil {
+		return nil, err
+	}
 	return &Config{
-		DataDir:       abs,
-		ListenAddr:    listen,
-		HostPort:      hostPort,
-		PortStart:     portStart,
-		PortEnd:       portEnd,
-		ContainerPort: containerPort,
+		DataDir:            abs,
+		ListenAddr:         listen,
+		HostPort:           hostPort,
+		PortStart:          portStart,
+		PortEnd:            portEnd,
+		ContainerPort:      containerPort,
+		CaddyBin:           caddyBin,
+		CaddyGeneratedPath: caddyGeneratedPath,
+		CaddyRootConfig:    caddyRootConfig,
+		SyncCaddy:          syncCaddy,
 	}, nil
 }
 
@@ -124,6 +161,18 @@ func envInt(key string, def int) (int, error) {
 	val, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	return val, nil
+}
+
+func envBool(key string, def bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def, nil
+	}
+	val, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean: %w", key, err)
 	}
 	return val, nil
 }

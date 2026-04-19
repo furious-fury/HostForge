@@ -26,6 +26,8 @@ go build -o hostforge ./cmd/cli
 
 ```bash
 ./hostforge deploy [flags] <repo_url>
+./hostforge domain add [flags] --domain <hostname> <repo_url>
+./hostforge caddy sync [flags]
 ./hostforge version
 ```
 
@@ -62,6 +64,37 @@ go run ./cmd/cli deploy https://github.com/heroku/node-js-getting-started
 **If Nixpacks fails:** Run `nixpacks plan .` inside the worktree path printed in logs, or install/upgrade Nixpacks. Ensure sufficient disk and that the stack is supported by Nixpacks.
 
 Phase 1 note: Phase 0 uses `-o` filesystem output for fast validation; Phase 1 switches to `nixpacks build . --name <image>` so `hostforge deploy` can build an image and run a container. Image tags use `hostforge/<worktree-slug>:<utc-build-id>`.
+
+## Phase 3: Caddy (reverse proxy + TLS)
+
+HostForge writes a **generated Caddyfile fragment** under the data directory and runs **`caddy validate`** / **`caddy reload`** against a **root** Caddyfile you maintain that **imports** that fragment (see [implementation_plan.md](./implementation_plan.md)). **v1 does not use Caddy’s Admin API.**
+
+### Install and host networking
+
+- Install [Caddy](https://caddyserver.com/docs/install) by package or static binary; use a **recent 2.x** release.
+- Caddy must be able to bind **80** and **443** on the VPS for automatic HTTPS (Let’s Encrypt). If you bind elsewhere, adjust your root Caddyfile accordingly.
+- **DNS:** point each public hostname (`domain add`) at this host with **`A`/`AAAA`** to the server’s public IP before TLS issuance will succeed.
+
+### Environment (HostForge)
+
+| Variable | Purpose |
+|----------|---------|
+| `HOSTFORGE_CADDY_BIN` | Caddy executable (default: `caddy`) |
+| `HOSTFORGE_CADDY_GENERATED_PATH` | Where HostForge writes the snippet (default: `<data-dir>/caddy/hostforge.caddy`) |
+| `HOSTFORGE_CADDY_ROOT_CONFIG` | Root Caddyfile path passed to `caddy validate` / `caddy reload` (required for sync) |
+| `HOSTFORGE_SYNC_CADDY` | If `true`, run `caddy sync` after a successful deploy (same as `-sync-caddy`) |
+
+### HTTPS / ACME
+
+TLS is handled by **Caddy automatic HTTPS** (typically Let’s Encrypt). Certificate storage and renewal are **Caddy’s responsibility** on disk (see upstream Caddy docs for data dirs and [staging CA](https://caddyserver.com/docs/caddyfile/options#acme-ca) for testing). HostForge records domain `ssl_status` in SQLite from **validate/reload** success or failure, not by parsing ACME events.
+
+### Routing model
+
+- Register a hostname with **`hostforge domain add --domain app.example.com <repo_url>`** (same repo URL/branch semantics as deploy).
+- **`hostforge caddy sync`** regenerates the snippet from SQLite and reloads Caddy. Each domain maps to the **latest successful deployment’s** container **`host_port`** for that project.
+- **`hostforge deploy ... -sync-caddy`** runs that sync after a good deploy so routes point at the new container without hand-editing config.
+
+**Not in v1:** attaching domains automatically during deploy, or zero-downtime cutover (see **Orchestration** in [task_list.md](./task_list.md)).
 
 ## Server binary
 

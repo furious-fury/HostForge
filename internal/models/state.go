@@ -12,6 +12,12 @@ const (
 	DeploymentFailed   = "FAILED"
 )
 
+const (
+	SSLStatusPending = "PENDING"
+	SSLStatusActive  = "ACTIVE"
+	SSLStatusError   = "ERROR"
+)
+
 // Project is a Git source (repo + branch) that deployments belong to.
 type Project struct {
 	ID        string
@@ -46,4 +52,20 @@ type Container struct {
 	Status            string // e.g. RUNNING
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+// Domain links a public hostname to a project.
+type Domain struct {
+	ID         string
+	ProjectID  string
+	DomainName string
+	SSLStatus  string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// DomainRoute is a resolved Caddy route candidate from domain to local upstream port.
+type DomainRoute struct {
+	Domain
+	HostPort int
 }
