@@ -20,7 +20,13 @@ const STREAM_LABEL: Record<string, string> = {
   ended: "ENDED",
   error: "ERROR",
   "loading tail": "LOADING",
+  reconnecting: "RECONNECTING",
 };
+
+function deploymentStatusInFlight(status: string | undefined): boolean {
+  const u = status?.toUpperCase();
+  return u === "QUEUED" || u === "BUILDING";
+}
 
 export function DeploymentPage() {
   const { projectID = "", deploymentID = "" } = useParams();
@@ -39,6 +45,7 @@ export function DeploymentPage() {
   const stepsQ = useDeploymentStepsQuery(deploymentID, 200);
   const wsRef = useRef<WebSocket | null>(null);
   const pausedRef = useRef(false);
+  const deploymentRef = useRef<ApiDeployment | null>(null);
 
   const deployment = useMemo(
     () => deployments.find((d) => d.id === deploymentID) || null,
@@ -48,6 +55,10 @@ export function DeploymentPage() {
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
+
+  useEffect(() => {
+    deploymentRef.current = deployment;
+  }, [deployment]);
 
   useEffect(() => {
     setProject(null);
@@ -106,23 +117,62 @@ export function DeploymentPage() {
       wsRef.current = null;
       return;
     }
-    wsRef.current?.close();
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(
-      `${protocol}://${window.location.host}/api/deployments/${deploymentID}/logs/live?source=${source}`,
-    );
-    wsRef.current = ws;
-    setStreamState("connecting");
-    ws.onopen = () => setStreamState("live");
-    ws.onerror = () => setStreamState("error");
-    ws.onclose = () => setStreamState("ended");
-    ws.onmessage = (event) => {
-      if (!pausedRef.current) {
-        setLines((prev) => `${prev}${event.data}`);
+    let cancelled = false;
+    let reconnectTimer: number | undefined;
+
+    function connect() {
+      if (cancelled) return;
+      wsRef.current?.close();
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(
+        `${protocol}://${window.location.host}/api/deployments/${deploymentID}/logs/live?source=${source}`,
+      );
+      wsRef.current = ws;
+      setStreamState("connecting");
+      ws.onopen = () => {
+        if (!cancelled) setStreamState("live");
+      };
+      ws.onerror = () => {
+        if (!cancelled) setStreamState("error");
+      };
+      ws.onclose = () => {
+        if (cancelled) return;
+        if (deploymentStatusInFlight(deploymentRef.current?.status)) {
+          setStreamState("reconnecting");
+          reconnectTimer = window.setTimeout(async () => {
+            if (cancelled) return;
+            try {
+              const deps = await fetchProjectDeployments(projectID);
+              if (!cancelled) {
+                setDeployments(deps);
+              }
+            } catch {
+              // ignore; connect() still runs so logs resume when server is back
+            }
+            connect();
+          }, 1500);
+          return;
+        }
+        setStreamState("ended");
+      };
+      ws.onmessage = (event) => {
+        if (!pausedRef.current) {
+          setLines((prev) => `${prev}${event.data}`);
+        }
+      };
+    }
+
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer);
       }
+      wsRef.current?.close();
+      wsRef.current = null;
     };
-    return () => ws.close();
-  }, [deploymentID, source, panelTab]);
+  }, [deploymentID, source, panelTab, projectID]);
 
   async function copyAll() {
     try {

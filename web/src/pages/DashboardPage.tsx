@@ -2,13 +2,17 @@ import type { ReactNode } from "react";
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { ApiDeployment, ApiProject } from "../api";
+import { hostDiskMounts, hostMem, hostNetIfaces, type HostDiskUsage, type HostSample } from "../api/host";
 import { ButtonLink } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { KpiTile } from "../components/KpiTile";
 import { Panel } from "../components/Panel";
+import { Sparkline } from "../components/Sparkline";
 import { StatusPill } from "../components/StatusPill";
+import { formatBitsPerSec, formatBytes, formatPct } from "../format/bytes";
 import { formatDuration, formatRelative, shortHash } from "../format";
 import { useDeploymentsListQuery, useProjectsQuery, useSystemStatusQuery } from "../hooks/fleetQueries";
+import { useHostHistory, useHostSnapshot } from "../hooks/hostQueries";
 import { useFormatLocale } from "../hooks/useUIPrefs";
 import { effectiveBuildLabel } from "../uiVersion";
 
@@ -18,11 +22,38 @@ function dashOr(n: number | null): ReactNode {
   return n === null ? "—" : n;
 }
 
+function pctTone(pct: number): "default" | "success" | "warning" | "danger" {
+  if (pct < 60) return "success";
+  if (pct <= 85) return "warning";
+  return "danger";
+}
+
+function pickRootDisk(disks: HostDiskUsage[]): HostDiskUsage | null {
+  for (const d of disks) {
+    if (d.mount === "/") return d;
+  }
+  return disks[0] ?? null;
+}
+
+function totalNetBytesPerSec(sample: HostSample): number {
+  let t = 0;
+  for (const n of hostNetIfaces(sample)) {
+    t += n.rx_bps + n.tx_bps;
+  }
+  return t;
+}
+
+function seriesFromHistory(samples: HostSample[], pick: (s: HostSample) => number): number[] {
+  return samples.map(pick);
+}
+
 export function DashboardPage() {
   const fmtLocale = useFormatLocale();
   const projectsQ = useProjectsQuery();
   const deploysQ = useDeploymentsListQuery(30);
   const systemQ = useSystemStatusQuery();
+  const hostSnapQ = useHostSnapshot();
+  const hostHistQ = useHostHistory(120);
 
   const projects: ApiProject[] = projectsQ.data ?? [];
   const deployments: ApiDeployment[] = deploysQ.data ?? [];
@@ -82,6 +113,23 @@ export function DashboardPage() {
   const recentLoading = deploysQ.isPending && deploysQ.data === undefined;
   const systemLoading = systemQ.isPending && systemQ.data === undefined;
 
+  const hostSnap = hostSnapQ.data;
+  const hostHist = hostHistQ.data?.samples ?? [];
+  const histSlice = hostHist.length > 60 ? hostHist.slice(-60) : hostHist;
+  const snap =
+    hostSnap &&
+    hostSnap.supported !== false &&
+    !hostSnap.error_code &&
+    hostSnap.warming !== true &&
+    hostSnap.sample
+      ? hostSnap.sample
+      : null;
+  const rootDisk = snap ? pickRootDisk(hostDiskMounts(snap)) : null;
+  const cpuSeries = seriesFromHistory(histSlice, (s) => s.cpu_pct);
+  const memSeries = seriesFromHistory(histSlice, (s) => hostMem(s).used_pct);
+  const diskSeries = seriesFromHistory(histSlice, (s) => pickRootDisk(hostDiskMounts(s))?.used_pct ?? 0);
+  const netSeries = seriesFromHistory(histSlice, (s) => totalNetBytesPerSec(s));
+
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
@@ -132,6 +180,59 @@ export function DashboardPage() {
           tone={(stats.runningContainers ?? 0) > 0 ? "success" : "default"}
         />
       </div>
+
+      {hostSnap?.supported === false ? null : (
+        <Panel
+          title="Host"
+          actions={
+            <Link
+              to="/settings?tab=system"
+              className="mono text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-text"
+            >
+              System →
+            </Link>
+          }
+        >
+          {!hostSnap && !hostSnapQ.isPending ? (
+            <p className="px-4 py-3 text-sm text-muted">Host metrics unavailable.</p>
+          ) : hostSnap?.warming ? (
+            <p className="px-4 py-3 text-sm text-muted">Host metrics warming up (need two samples for rates)…</p>
+          ) : snap ? (
+            <div className="grid grid-cols-1 gap-4 px-4 py-3 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiTile
+                label="CPU"
+                value={formatPct(snap.cpu_pct, fmtLocale, 1)}
+                hint={snap.rates_ready ? "Busy % since last tick" : "Rates warming up"}
+                tone={pctTone(snap.cpu_pct)}
+                footer={<Sparkline values={cpuSeries} className="opacity-90" strokeClassName="stroke-primary" />}
+              />
+              <KpiTile
+                label="Memory"
+                value={formatPct(hostMem(snap).used_pct, fmtLocale, 1)}
+                hint={`${formatBytes(hostMem(snap).used_bytes, fmtLocale)} / ${formatBytes(hostMem(snap).total_bytes, fmtLocale)}`}
+                tone={pctTone(hostMem(snap).used_pct)}
+                footer={<Sparkline values={memSeries} strokeClassName="stroke-info" />}
+              />
+              <KpiTile
+                label="Disk (root)"
+                value={rootDisk ? formatPct(rootDisk.used_pct, fmtLocale, 1) : "—"}
+                hint={rootDisk ? rootDisk.mount : "No mount data"}
+                tone={rootDisk ? pctTone(rootDisk.used_pct) : "default"}
+                footer={<Sparkline values={diskSeries} strokeClassName="stroke-warning" />}
+              />
+              <KpiTile
+                label="Network"
+                value={formatBitsPerSec(totalNetBytesPerSec(snap), fmtLocale)}
+                hint="Σ interfaces (excl. lo / docker bridges)"
+                tone="info"
+                footer={<Sparkline values={netSeries} strokeClassName="stroke-success" />}
+              />
+            </div>
+          ) : (
+            <p className="px-4 py-3 text-sm text-muted">Loading host metrics…</p>
+          )}
+        </Panel>
+      )}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Panel

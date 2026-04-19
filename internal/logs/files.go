@@ -55,6 +55,29 @@ func TailFile(path string, maxBytes, tailLines int) ([]byte, error) {
 	return buf, nil
 }
 
+// openLogAtEnd waits until path exists, opens it, and returns the file positioned at EOF for follow reads.
+func openLogAtEnd(ctx context.Context, path string, pollInterval time.Duration) (*os.File, int64, error) {
+	for {
+		f, err := os.Open(path)
+		if err == nil {
+			st, err := f.Stat()
+			if err != nil {
+				_ = f.Close()
+				return nil, 0, err
+			}
+			return f, st.Size(), nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, 0, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, 0, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
 // FollowFile polls for appended data and invokes onChunk for new bytes.
 // If the file does not exist yet, it waits for it to appear (cancellable via ctx)
 // instead of failing, so log subscribers can attach before the writer creates the file.
@@ -62,29 +85,16 @@ func FollowFile(ctx context.Context, path string, pollInterval time.Duration, on
 	if pollInterval <= 0 {
 		pollInterval = 500 * time.Millisecond
 	}
-	var f *os.File
-	for {
-		var openErr error
-		f, openErr = os.Open(path)
-		if openErr == nil {
-			break
-		}
-		if !os.IsNotExist(openErr) {
-			return openErr
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(pollInterval):
-		}
-	}
-	defer f.Close()
-
-	st, err := f.Stat()
+	f, offset, err := openLogAtEnd(ctx, path, pollInterval)
 	if err != nil {
 		return err
 	}
-	offset := st.Size()
+	defer func() {
+		if f != nil {
+			_ = f.Close()
+		}
+	}()
+
 	buf := make([]byte, 8192)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -94,10 +104,34 @@ func FollowFile(ctx context.Context, path string, pollInterval time.Duration, on
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			nextStat, statErr := os.Stat(path)
+			if f == nil {
+				nf, off, reopenErr := openLogAtEnd(ctx, path, pollInterval)
+				if reopenErr != nil {
+					return reopenErr
+				}
+				f = nf
+				offset = off
+				continue
+			}
+			pathInfo, statErr := os.Stat(path)
 			if statErr != nil {
+				if os.IsNotExist(statErr) {
+					_ = f.Close()
+					f = nil
+					continue
+				}
 				return statErr
 			}
+			fi, ferr := f.Stat()
+			if ferr != nil {
+				return ferr
+			}
+			if !os.SameFile(fi, pathInfo) {
+				_ = f.Close()
+				f = nil
+				continue
+			}
+			nextStat := pathInfo
 			if nextStat.Size() < offset {
 				offset = 0
 			}

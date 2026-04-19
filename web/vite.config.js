@@ -22,6 +22,9 @@ export default defineConfig({
                 target: "http://127.0.0.1:8080",
                 changeOrigin: true,
                 ws: true,
+                // Long builds can go quiet for minutes; avoid dev proxy closing the log WebSocket as "idle".
+                timeout: 0,
+                proxyTimeout: 0,
             },
             "/hooks": {
                 target: "http://127.0.0.1:8080",

@@ -76,7 +76,9 @@ export function SettingsPage() {
           <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">System</div>
           <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
           <p className="mt-1 text-sm text-muted">
-            Runtime snapshot, safe actions, and UI-only preferences. Server secrets are never returned in JSON.
+            Runtime snapshot, safe actions, and UI-only preferences. Server secrets are never returned in JSON. The{" "}
+            <span className="font-medium text-text">System</span> tab includes live host CPU/memory/disk/network charts
+            (Linux in-process metrics).
           </p>
         </header>
 

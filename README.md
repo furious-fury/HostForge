@@ -54,7 +54,7 @@ From a repository clone on the build host (**Go** required):
 - **CLI (`cmd/cli`):** `deploy`, `domain` add/edit/remove, `caddy sync`, `validate`, `version`; same deploy pipeline as the server.
 - **Server (`cmd/server`):** REST + embedded UI (`web/dist`), GitHub **`push`** webhooks, cookie-backed UI login, SQLite persistence, bounded **observability** rows (`deploy_steps`, `http_requests`) with **`/observability`** and per-deployment **Steps**.
 - **Caddy:** generated snippet, **`caddy validate`** / **`caddy reload`** when configured; health-gated zero-downtime cutover before switching routes.
-- **UI (`web/`):** projects, deployments (REST + WebSocket logs), domains with DNS hints and registrar refresh, dashboard **System** panel (`GET /api/system/status`), **Settings** page (`GET /api/settings` + POST actions under `/api/settings/actions/…`), TanStack Query on fleet pages. **`GET /api/projects`** defaults to a fast list (no per-domain live registrar lookups); use **`?dns=1`** for full DNS checks in one response. **`GET /api/deployments?limit=N`** uses SQL `LIMIT` and batched container rows. System status checks run **in parallel** with a **5s** cached snapshot.
+- **UI (`web/`):** projects, deployments (REST + WebSocket logs), domains with DNS hints and registrar refresh, dashboard **System** panel (`GET /api/system/status`) plus **Host** KPIs (`GET /api/system/host/snapshot` / `history`), **Settings** page (`GET /api/settings` + POST actions under `/api/settings/actions/…`), TanStack Query on fleet pages. **`GET /api/projects`** defaults to a fast list (no per-domain live registrar lookups); use **`?dns=1`** for full DNS checks in one response. **`GET /api/deployments?limit=N`** uses SQL `LIMIT` and batched container rows. System status checks run **in parallel** with a **5s** cached snapshot. Host metrics are **Linux-only** (in-memory ~30 min ring by default).
 
 **Operators:** DNS **A/AAAA** must point at the host where **Caddy** serves **80/443**; firewall / cloud SG must allow inbound **80/443**. Residential WAN IPs change—use a VPS, static IP, or DDNS for stable webhooks. Planning docs: `task_list.md`, PRD — this README describes the **current** tree.
 
@@ -297,6 +297,7 @@ Build/deploy logs are retained on disk with APIs for historical tail and live st
   - `?source=build` streams appended file output.
   - `?source=container` streams Docker `ContainerLogs` for the deployment container.
   - Default source prefers container logs for successful deployments, otherwise build logs.
+  - The server sends **periodic WebSocket pings** so quiet build phases (no new log lines) do not look “idle” to reverse proxies; the UI **reconnects** the log socket while a deployment is still `QUEUED` / `BUILDING` if the connection drops.
 
 ### Authentication (logs)
 
@@ -433,6 +434,8 @@ Automation and the CLI should send **`Authorization: Bearer <HOSTFORGE_API_TOKEN
 **Stable API `error` codes (JSON):** failure responses use a **snake_case** string in the `error` field (not raw exception text). Deploy / restart / rollback / domain-mutate paths use `internal/services` **coded errors** so the innermost code wins (e.g. `clone_failed`, `health_check_failed`, `caddy_sync_failed`, `docker_unavailable`). Domain validation returns `domain_name_empty`, `domain_name_too_long`, `domain_name_invalid`. Webhook synchronous failures return the same deploy codes as the UI. For full behavior, see tests in `internal/services`, `internal/dnsops`, and `internal/redact`.
 
 **System status (`GET /api/system/status`):** each check may include **`error_code`** (`docker_unreachable`, `caddy_validate_failed`, `webhook_probe_build_failed`, `webhook_route_unreachable`, …) with a short, non-sensitive **`detail`** string for the dashboard.
+
+**Host metrics (Linux only, management auth):** the server samples **`/proc`** / **`/sys`** on a fixed interval (default **5s**) into an in-memory ring (default **360** samples ≈ **30 min**). **`GET /api/system/host/snapshot`** returns the latest sample JSON (`supported: false`, `error_code: unsupported_os` on non-Linux builds); responses are cached for **1s**. **`GET /api/system/host/history?points=N`** returns oldest-first samples ( **`points` capped at 720**). Optional env: **`HOSTFORGE_HOSTMETRICS_INTERVAL_MS`**, **`HOSTFORGE_HOSTMETRICS_CAPACITY`**, **`HOSTFORGE_HOSTMETRICS_NET_INCLUDE`**, **`HOSTFORGE_HOSTMETRICS_NET_EXCLUDE`**, **`HOSTFORGE_HOSTMETRICS_DISK_INCLUDE`** (regex on mount paths).
 
 **Observability UI (SQLite samples):** the management UI includes **`/observability`** plus a **Steps** tab on each deployment. The server persists bounded rows in **`deploy_steps`** (clone / nixpacks / container / health / caddy / `deploy_total`, plus optional **`cert_poll`**) and **`http_requests`** (method, path, status, duration, `request_id`). Authenticated JSON:
 

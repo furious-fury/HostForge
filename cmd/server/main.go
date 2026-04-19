@@ -24,6 +24,7 @@ import (
 	"github.com/hostforge/hostforge/internal/config"
 	"github.com/hostforge/hostforge/internal/database"
 	"github.com/hostforge/hostforge/internal/docker"
+	"github.com/hostforge/hostforge/internal/hostmetrics"
 	"github.com/hostforge/hostforge/internal/logging"
 	logsapi "github.com/hostforge/hostforge/internal/logs"
 	"github.com/hostforge/hostforge/internal/models"
@@ -133,17 +134,25 @@ func runServer(log *slog.Logger, args []string) int {
 	store := repository.New(db)
 	services.StartCaddyCertPollLoop(log, cfg, store, obs.WithStore(context.Background(), store))
 	webhookLimiter := newFixedWindowLimiter(cfg.WebhookRateLimitPerMinute, time.Minute)
+
+	hostReader := hostmetrics.DefaultReader(hostmetrics.ParseReaderOptionsFromEnv())
+	hostSampler := hostmetrics.NewSampler(hostmetrics.IntervalFromEnv(5000), hostmetrics.CapacityFromEnv(360), hostReader)
+	hostSampler.Start(context.Background())
+
 	handler := &server{
 		log:            log,
 		cfg:            cfg,
 		store:          store,
 		webhookLimiter: webhookLimiter,
+		hostSampler:    hostSampler,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WebhookBasePath, handler.withRequestContext(handler.handleGitHubWebhook))
 	mux.HandleFunc("/auth/session", handler.withRequestContext(handler.handleSessionRoutes))
 	mux.HandleFunc("/api/system/status", handler.withRequestContext(handler.requireManagementAuth(handler.handleSystemStatus)))
+	mux.HandleFunc("/api/system/host/snapshot", handler.withRequestContext(handler.requireManagementAuth(handler.handleHostSnapshot)))
+	mux.HandleFunc("/api/system/host/history", handler.withRequestContext(handler.requireManagementAuth(handler.handleHostHistory)))
 	mux.HandleFunc("/api/settings", handler.withRequestContext(handler.requireManagementAuth(handler.handleSettingsRoutes)))
 	mux.HandleFunc("/api/settings/", handler.withRequestContext(handler.requireManagementAuth(handler.handleSettingsRoutes)))
 	mux.HandleFunc("/api/repositories/branches", handler.withRequestContext(handler.requireManagementAuth(handler.handleRepositoryBranches)))
@@ -175,6 +184,8 @@ type server struct {
 	cfg            *config.Config
 	store          *repository.Store
 	webhookLimiter *fixedWindowLimiter
+	hostSampler    *hostmetrics.Sampler
+	hostSnapCache  hostSnapshotCache
 }
 
 type githubPushPayload struct {
@@ -695,81 +706,115 @@ func (s *server) handleDeploymentLogsLive(w http.ResponseWriter, r *http.Request
 		}
 	}()
 
+	sink := &wsLogSink{conn: conn}
+	startDeploymentLogKeepalive(ctx, sink, cancel)
+
 	source := strings.TrimSpace(r.URL.Query().Get("source"))
 	if source == "" {
 		source = defaultLogSource(deployment)
 	}
 	switch source {
 	case "build":
-		s.streamBuildLog(ctx, conn, deployment)
+		s.streamBuildLog(ctx, sink, deployment)
 	case "container":
-		s.streamContainerLog(ctx, conn, deploymentID)
+		s.streamContainerLog(ctx, sink, deploymentID)
 	default:
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: unsupported source"))
+		_ = sink.writeText([]byte("error: unsupported source"))
 	}
 }
 
-func (s *server) streamBuildLog(ctx context.Context, conn *websocket.Conn, deployment models.Deployment) {
+// wsLogSink serializes WebSocket text writes and control pings (gorilla/websocket is not safe for concurrent writers).
+type wsLogSink struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
+}
+
+func (w *wsLogSink) writeText(b []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.conn.WriteMessage(websocket.TextMessage, b)
+}
+
+func (w *wsLogSink) ping() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	deadline := time.Now().Add(8 * time.Second)
+	return w.conn.WriteControl(websocket.PingMessage, nil, deadline)
+}
+
+func (w *wsLogSink) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if err := w.writeText(p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// startDeploymentLogKeepalive sends periodic WebSocket pings so reverse proxies and dev proxies
+// do not treat idle log periods (no new build output) as dead connections.
+func startDeploymentLogKeepalive(ctx context.Context, sink *wsLogSink, cancel context.CancelFunc) {
+	t := time.NewTicker(25 * time.Second)
+	go func() {
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := sink.ping(); err != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+}
+
+func (s *server) streamBuildLog(ctx context.Context, sink *wsLogSink, deployment models.Deployment) {
 	if strings.TrimSpace(deployment.LogsPath) == "" {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: deployment log path is empty"))
+		_ = sink.writeText([]byte("error: deployment log path is empty"))
 		return
 	}
 	initial, err := logsapi.TailFile(deployment.LogsPath, logsapi.DefaultTailBytes, 0)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: failed to tail deployment log"))
+		_ = sink.writeText([]byte("error: failed to tail deployment log"))
 		return
 	}
 	if len(initial) > 0 {
-		_ = conn.WriteMessage(websocket.TextMessage, initial)
+		_ = sink.writeText(initial)
 	}
 	if err := logsapi.FollowFile(ctx, deployment.LogsPath, 500*time.Millisecond, func(chunk []byte) error {
 		if len(chunk) == 0 {
 			return nil
 		}
-		return conn.WriteMessage(websocket.TextMessage, chunk)
+		return sink.writeText(chunk)
 	}); err != nil && !errors.Is(err, context.Canceled) {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: build log stream ended"))
+		_ = sink.writeText([]byte("error: build log stream ended"))
 	}
 }
 
-func (s *server) streamContainerLog(ctx context.Context, conn *websocket.Conn, deploymentID string) {
+func (s *server) streamContainerLog(ctx context.Context, sink *wsLogSink, deploymentID string) {
 	containerRec, err := s.store.GetContainerByDeploymentID(ctx, deploymentID)
 	if err != nil {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: container record not found for deployment"))
+		_ = sink.writeText([]byte("error: container record not found for deployment"))
 		return
 	}
 	cli, err := docker.NewClient(ctx)
 	if err != nil {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: docker unavailable"))
+		_ = sink.writeText([]byte("error: docker unavailable"))
 		return
 	}
 	defer cli.Close()
-	writer := &websocketWriter{conn: conn}
 	if err := docker.StreamContainerLogs(ctx, cli, containerRec.DockerContainerID, docker.LogStreamOptions{
 		Follow:     true,
 		Tail:       "200",
 		ShowStdout: true,
 		ShowStderr: true,
-	}, writer); err != nil && !errors.Is(err, context.Canceled) {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("error: container log stream ended"))
+	}, sink); err != nil && !errors.Is(err, context.Canceled) {
+		_ = sink.writeText([]byte("error: container log stream ended"))
 	}
-}
-
-type websocketWriter struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
-}
-
-func (w *websocketWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if len(p) == 0 {
-		return 0, nil
-	}
-	if err := w.conn.WriteMessage(websocket.TextMessage, p); err != nil {
-		return 0, err
-	}
-	return len(p), nil
 }
 
 func defaultLogSource(deployment models.Deployment) string {

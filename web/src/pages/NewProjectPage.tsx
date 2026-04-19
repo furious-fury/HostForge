@@ -314,6 +314,7 @@ export function NewProjectPage() {
           {deploymentID ? (
             <InlineDeploymentLogs
               deploymentID={deploymentID}
+              streamActive={phase === "deploying"}
               collapsed={!buildLogsExpanded}
               onExpand={() => setBuildLogsExpanded(true)}
             />
@@ -336,14 +337,18 @@ const STREAM_LABEL: Record<string, string> = {
   ended: "ENDED",
   error: "ERROR",
   "loading tail": "LOADING",
+  reconnecting: "RECONNECTING",
 };
 
 function InlineDeploymentLogs({
   deploymentID,
+  streamActive,
   collapsed,
   onExpand,
 }: {
   deploymentID: string;
+  /** While true, the WebSocket will reconnect if the proxy or network drops the connection. */
+  streamActive: boolean;
   collapsed?: boolean;
   onExpand?: () => void;
 }) {
@@ -354,10 +359,15 @@ function InlineDeploymentLogs({
   const [copied, setCopied] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const pausedRef = useRef(false);
+  const streamActiveRef = useRef(streamActive);
 
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
+
+  useEffect(() => {
+    streamActiveRef.current = streamActive;
+  }, [streamActive]);
 
   useEffect(() => {
     let cancelled = false;
@@ -378,23 +388,56 @@ function InlineDeploymentLogs({
   }, [deploymentID]);
 
   useEffect(() => {
-    wsRef.current?.close();
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(
-      `${protocol}://${window.location.host}/api/deployments/${deploymentID}/logs/live?source=build`,
-    );
-    wsRef.current = ws;
-    setStreamState("connecting");
-    ws.onopen = () => setStreamState("live");
-    ws.onerror = () => setStreamState("error");
-    ws.onclose = () => setStreamState("ended");
-    ws.onmessage = (event) => {
-      if (!pausedRef.current) {
-        setLines((prev) => `${prev}${event.data}`);
+    if (!streamActive) {
+      wsRef.current?.close();
+      wsRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    let reconnectTimer: number | undefined;
+
+    function connect() {
+      if (cancelled) return;
+      wsRef.current?.close();
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(
+        `${protocol}://${window.location.host}/api/deployments/${deploymentID}/logs/live?source=build`,
+      );
+      wsRef.current = ws;
+      setStreamState("connecting");
+      ws.onopen = () => {
+        if (!cancelled) setStreamState("live");
+      };
+      ws.onerror = () => {
+        if (!cancelled) setStreamState("error");
+      };
+      ws.onclose = () => {
+        if (cancelled) return;
+        if (streamActiveRef.current) {
+          setStreamState("reconnecting");
+          reconnectTimer = window.setTimeout(connect, 1500);
+          return;
+        }
+        setStreamState("ended");
+      };
+      ws.onmessage = (event) => {
+        if (!pausedRef.current) {
+          setLines((prev) => `${prev}${event.data}`);
+        }
+      };
+    }
+
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer);
       }
+      wsRef.current?.close();
+      wsRef.current = null;
     };
-    return () => ws.close();
-  }, [deploymentID]);
+  }, [deploymentID, streamActive]);
 
   async function copyAll() {
     try {
@@ -434,10 +477,10 @@ function InlineDeploymentLogs({
               streamState === "live"
                 ? "text-success"
                 : streamState === "error"
-                ? "text-danger"
-                : streamState === "ended"
-                ? "text-muted"
-                : "text-warning"
+                  ? "text-danger"
+                  : streamState === "ended"
+                    ? "text-muted"
+                    : "text-warning"
             }
           >
             ●
