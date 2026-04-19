@@ -89,11 +89,17 @@ HostForge writes a **generated Caddyfile fragment** under the data directory and
 | `HOSTFORGE_HEALTH_INTERVAL_MS` | Delay between health attempts in milliseconds (default: `1000`) |
 | `HOSTFORGE_HEALTH_EXPECTED_MIN` | Minimum accepted health status code (default: `200`) |
 | `HOSTFORGE_HEALTH_EXPECTED_MAX` | Maximum accepted health status code (default: `399`) |
-| `HOSTFORGE_LISTEN` | Server listen address for API/webhooks (default: `:8080`) |
+| `HOSTFORGE_LISTEN` | Server listen address for API, UI, auth, and webhooks (default: `:8080`) |
 | `HOSTFORGE_WEBHOOK_BASE_PATH` | Webhook route path (default: `/hooks/github`) |
 | `HOSTFORGE_WEBHOOK_MAX_BODY_BYTES` | Max webhook body size in bytes (default: `1048576`) |
 | `HOSTFORGE_WEBHOOK_ASYNC` | If `true`, accept webhook deploys with `202` and run in background |
-| `HOSTFORGE_WEBHOOK_SECRET` | Optional shared-secret token expected in `X-HostForge-Token` |
+| `HOSTFORGE_WEBHOOK_SECRET` | **Required** for production: GitHub webhook signing secret; server verifies `X-Hub-Signature-256` (HMAC SHA-256 of raw body) |
+| `HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE` | Per-IP ceiling on webhook POSTs (default: `60`, must be `> 0`) |
+| `HOSTFORGE_API_TOKEN` | **Required:** static `Authorization: Bearer` token for management APIs and for `POST /auth/session` (UI login uses this as the password) |
+| `HOSTFORGE_SESSION_SECRET` | **Required:** HMAC key for signed UI session cookies (minimum **16** characters) |
+| `HOSTFORGE_SESSION_COOKIE_NAME` | Session cookie name (default: `hostforge_session`) |
+| `HOSTFORGE_SESSION_TTL_MINUTES` | Session lifetime (default: `720`) |
+| `HOSTFORGE_SESSION_COOKIE_SECURE` | If `true`, set `Secure` on session cookies (use behind HTTPS) |
 | `HOSTFORGE_LOGS_DIR` | Optional override for deployment build logs directory (default: `<data-dir>/logs`) |
 
 ### HTTPS / ACME
@@ -159,10 +165,11 @@ You can also set `HOSTFORGE_DATA_DIR` and `HOSTFORGE_LISTEN` instead of flags.
 - By default (`HOSTFORGE_WEBHOOK_ASYNC=false`), webhook deploys run synchronously and return after deploy completion.
 - With async mode enabled, HostForge returns `202 Accepted` after durable acceptance and runs deployment in the background.
 
-### Security scope (MVP)
+### Security (Phase 7)
 
-- MVP supports an optional shared-secret header check (`X-HostForge-Token`) via `HOSTFORGE_WEBHOOK_SECRET`.
-- Full GitHub signature verification (`X-Hub-Signature-256`) remains future hardening work (PRD Phase 7 / future scope).
+- **`HOSTFORGE_WEBHOOK_SECRET` is required** at server startup. GitHub must send **`X-Hub-Signature-256`** (`sha256=<hex>`); HostForge rejects missing or mismatched signatures (**`401`**).
+- **Rate limiting:** webhook POSTs are capped per client IP using **`HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE`** (returns **`429`** when exceeded).
+- Management **REST** and **WebSocket** log streams under `/api/...` require either a valid **`Authorization: Bearer <HOSTFORGE_API_TOKEN>`** header or a valid **signed HttpOnly session cookie** (see Phase 7 below).
 
 ## Phase 5: Logs (REST tail + WebSocket stream)
 
@@ -184,9 +191,9 @@ Phase 5 adds deployment log retention to disk plus server APIs for historical an
   - `?source=container` streams Docker `ContainerLogs` for the deployment container.
   - Default source prefers container logs for successful deployments, otherwise build logs.
 
-### Security note (pre-Phase 7)
+### Security (Phase 7)
 
-Log APIs/WebSockets are unauthenticated in Phase 5. Do not expose them publicly. Bind HostForge to localhost or protect with a trusted reverse proxy / firewall / SSH tunnel until Phase 7 hardening.
+Historical and live log endpoints require the same authentication as other management APIs (bearer token or valid UI session cookie). Prefer binding the server to **loopback** and exposing the UI only through **Caddy** or an SSH tunnel (see **Production hardening** below).
 
 ## Phase 6: UI (Vite + React + TypeScript + Tailwind)
 
@@ -219,11 +226,11 @@ go run ./cmd/server -data-dir ./.hostforge -listen :8080
 npm --prefix web run dev
 ```
 
-Vite proxy config (`web/vite.config.ts`) forwards:
+Vite proxy config (`web/vite.config.ts` and `web/vite.config.js`) forwards:
 
-- `/api/*` → `http://127.0.0.1:8080`
+- `/api/*` → `http://127.0.0.1:8080` (including WebSocket upgrades for `/api/deployments/{id}/logs/live`)
 - `/hooks/*` → `http://127.0.0.1:8080`
-- WebSocket upgrades on `/api/deployments/{id}/logs/live`
+- `/auth/*` → `http://127.0.0.1:8080` (session cookie login for the UI)
 
 ### New API surface for UI
 
@@ -275,6 +282,99 @@ Routes:
 - On first load the app reads `prefers-color-scheme` and applies dark or light. The header toggle (`ThemeToggle`) flips themes and persists the choice in `localStorage` (`hf-theme`); once set, the user choice overrides system preference. Without a stored choice, system changes are followed live.
 - Both palettes preserve the same component structure: only color vars change. The `* { border-radius: 0 !important; }` rule keeps the brutalist no-radius look in either mode.
 
-### Security note (pre-Phase 7)
+### Security (Phase 7)
 
-Phase 6 management APIs and WebSocket streams remain unauthenticated until Phase 7 hardening. Keep the server private (localhost bind, SSH tunnel, firewall, or trusted reverse proxy).
+The UI signs in via **`POST /auth/session`** with header **`Authorization: Bearer <HOSTFORGE_API_TOKEN>`** (same secret as the management API token). On success the server sets an **HttpOnly** session cookie (`HOSTFORGE_SESSION_COOKIE_NAME`). Subsequent **`GET /api/...`** and WebSocket requests send that cookie automatically from the browser.
+
+Automation and the CLI should send **`Authorization: Bearer <HOSTFORGE_API_TOKEN>`** on management routes.
+
+---
+
+## Phase 7: Hardening (authentication, webhooks, install)
+
+### Management API and UI sessions (v1)
+
+- **Bearer token (CLI / scripts):** `Authorization: Bearer <HOSTFORGE_API_TOKEN>` on all `/api/*` routes (including log tail and WebSocket upgrade).
+- **Browser UI:** `POST /auth/session` with **`Authorization: Bearer`** (same token) → **signed** session cookie; `GET /auth/session` reports auth state; `DELETE /auth/session` clears the cookie.
+- Either credential type satisfies `requireManagementAuth` for REST and WebSockets.
+
+The server refuses to start if **`HOSTFORGE_API_TOKEN`**, **`HOSTFORGE_SESSION_SECRET`** (length ≥ 16), **`HOSTFORGE_WEBHOOK_SECRET`**, or **`HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE`** (must be > 0) is missing or invalid, or if session cookie name / TTL are invalid.
+
+### GitHub webhook configuration (Phase 7)
+
+- Webhook **Content type:** `application/json`
+- **Secret:** set to the same value as **`HOSTFORGE_WEBHOOK_SECRET`** (GitHub signs the raw body; HostForge verifies **`X-Hub-Signature-256`**).
+
+### Install from source (`scripts/install.sh`)
+
+From a repository clone (requires **Go** on the build machine):
+
+```bash
+./scripts/install.sh
+```
+
+- Builds **`hostforge`** (`cmd/cli`) and **`hostforge-server`** (`cmd/server`) and installs them under **`PREFIX/bin`** (default **`/usr/local/bin`**). Re-run anytime; binaries are replaced idempotently.
+- Optional **systemd** layout (Linux, root):
+
+```bash
+sudo ./scripts/install.sh --with-systemd
+```
+
+This creates user **`hostforge`**, data dir **`/var/lib/hostforge`**, **`/etc/hostforge/hostforge.env`** from [`scripts/hostforge-server.env.example`](./scripts/hostforge-server.env.example) **only if** `hostforge.env` does not already exist, installs **`/etc/systemd/system/hostforge-server.service`**, runs **`systemctl daemon-reload`** and **`enable`**. Edit secrets in **`/etc/hostforge/hostforge.env`**, then:
+
+```bash
+sudo systemctl start hostforge-server
+```
+
+Flags: **`--prefix`**, **`--data-dir`**, **`--with-systemd`**, **`--skip-build`** (use existing `./hostforge` binaries in the repo root). If **`docker`** group exists, **`hostforge`** is added to it so the service can talk to Docker Engine.
+
+**Caddy** is not installed by this script; install it separately, open **80/443**, and `reverse_proxy` to HostForge (e.g. `127.0.0.1:8080`) when exposing the UI or TLS-terminated webhooks.
+
+### Secrets: storage, permissions, rotation
+
+| Item | Recommendation |
+|------|------------------|
+| **`/etc/hostforge/hostforge.env`** | Mode **`0640`**, owner **`root`**, group **`hostforge`** so the service user can read but not write secrets. |
+| **Rotation — API token** | Generate a new random token, update **`HOSTFORGE_API_TOKEN`** in the env file, restart **`hostforge-server`**, update any clients/GitHub does not use this for webhooks. |
+| **Rotation — session secret** | Changing **`HOSTFORGE_SESSION_SECRET`** invalidates all existing UI sessions; users sign in again. Schedule with API token rotation if compromised. |
+| **Rotation — webhook secret** | Update secret in GitHub repo webhook settings and **`HOSTFORGE_WEBHOOK_SECRET`** together, then reload the service. |
+| **Backups** | Treat **`hostforge.env`** and **`hostforge.db`** as sensitive; restrict filesystem permissions and backup encryption. |
+
+Never commit real values; keep an **`*.example`** file in version control only.
+
+### Production hardening: firewall and process ownership
+
+**Firewall (typical VPS):**
+
+- Allow **inbound TCP 80** and **443** for **Caddy** (public HTTP/S).
+- Bind HostForge to **`127.0.0.1:8080`** (default in the generated env file) so the management API and UI are **not** reachable from the Internet unless you forward them through Caddy or an SSH tunnel.
+- If you must bind `:8080` on all interfaces, restrict it with **`ufw`** / **`nftables`** to admin IPs only.
+
+**UFW-style example (adjust interfaces / subnets):**
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+# Optional: only if API must be WAN-reachable on 8080 (not recommended)
+# sudo ufw allow from <ADMIN_IP> to any port 8080 proto tcp
+sudo ufw enable
+```
+
+**Process ownership:**
+
+- Run **`hostforge-server`** as a dedicated non-login user (**`hostforge`** from `--with-systemd`). It needs read access to **`/etc/hostforge/hostforge.env`**, read/write to **`HOSTFORGE_DATA_DIR`**, and access to the **Docker** socket (e.g. membership in **`docker`** group — understand the security tradeoff of Docker group access).
+- Run **Caddy** under its own user per distro packages; it binds **80/443** and proxies to loopback.
+
+### Phase 7 verification checklist
+
+Run on a **fresh VPS** or clean VM after **`./scripts/install.sh --with-systemd`** and editing **`/etc/hostforge/hostforge.env`**:
+
+1. **Start:** `sudo systemctl start hostforge-server` — expect **active** (`systemctl status`).
+2. **Negative — API without auth:** `curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/api/projects` → expect **`401`**.
+3. **Positive — API with bearer:** `curl -sS -H "Authorization: Bearer $HOSTFORGE_API_TOKEN" http://127.0.0.1:8080/api/projects` → **`200`** and JSON list.
+4. **Negative — webhook without signature:** `curl -sS -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8080/hooks/github -H "Content-Type: application/json" -d '{}'` → **`401`** (missing **`X-Hub-Signature-256`**).
+5. **Positive — UI path:** open the server URL via Caddy or `http://127.0.0.1:8080` (dev-style), sign in with the configured API token as password; confirm projects load and logs stream.
+6. **Logout:** use UI logout or `curl -X DELETE -c /tmp/hf.txt -b /tmp/hf.txt ...` as appropriate to confirm session clears.
+
+Unauthorized callers must not trigger deploys (no valid GitHub signature) or read management data/logs (no bearer / session).
