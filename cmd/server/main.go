@@ -9,7 +9,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/hostforge/hostforge/internal/auth"
 	"github.com/hostforge/hostforge/internal/config"
 	"github.com/hostforge/hostforge/internal/database"
 	"github.com/hostforge/hostforge/internal/docker"
@@ -69,6 +72,34 @@ func runServer(log *slog.Logger, args []string) int {
 		fmt.Fprintln(os.Stderr, "error: listen address must not be empty")
 		return 2
 	}
+	if strings.TrimSpace(cfg.APIToken) == "" {
+		fmt.Fprintf(os.Stderr, "error: %s must be set\n", config.APITokenEnv)
+		return 2
+	}
+	if strings.TrimSpace(cfg.SessionSecret) == "" {
+		fmt.Fprintf(os.Stderr, "error: %s must be set\n", config.SessionSecretEnv)
+		return 2
+	}
+	if len(strings.TrimSpace(cfg.SessionSecret)) < 16 {
+		fmt.Fprintf(os.Stderr, "error: %s must be at least 16 characters\n", config.SessionSecretEnv)
+		return 2
+	}
+	if strings.TrimSpace(cfg.SessionCookieName) == "" {
+		fmt.Fprintln(os.Stderr, "error: session cookie name must not be empty")
+		return 2
+	}
+	if cfg.SessionTTLMinutes <= 0 {
+		fmt.Fprintln(os.Stderr, "error: session ttl minutes must be > 0")
+		return 2
+	}
+	if strings.TrimSpace(cfg.WebhookSecret) == "" {
+		fmt.Fprintf(os.Stderr, "error: %s must be set\n", config.WebhookSecretEnv)
+		return 2
+	}
+	if cfg.WebhookRateLimitPerMinute <= 0 {
+		fmt.Fprintln(os.Stderr, "error: webhook rate limit per minute must be > 0")
+		return 2
+	}
 	if cfg.WebhookMaxBodyBytes <= 0 {
 		fmt.Fprintln(os.Stderr, "error: webhook max body bytes must be > 0")
 		return 2
@@ -94,24 +125,23 @@ func runServer(log *slog.Logger, args []string) int {
 	defer db.Close()
 
 	store := repository.New(db)
+	webhookLimiter := newFixedWindowLimiter(cfg.WebhookRateLimitPerMinute, time.Minute)
 	handler := &server{
-		log:   log,
-		cfg:   cfg,
-		store: store,
+		log:            log,
+		cfg:            cfg,
+		store:          store,
+		webhookLimiter: webhookLimiter,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WebhookBasePath, handler.handleGitHubWebhook)
-	mux.HandleFunc("/api/repositories/branches", handler.handleRepositoryBranches)
-	mux.HandleFunc("/api/projects", handler.handleProjectsCollection)
-	mux.HandleFunc("/api/projects/", handler.handleProjectRoutes)
-	mux.HandleFunc("/api/deployments", handler.handleDeploymentsCollection)
-	mux.HandleFunc("/api/deployments/", handler.handleDeploymentRoutes)
+	mux.HandleFunc("/auth/session", handler.handleSessionRoutes)
+	mux.HandleFunc("/api/repositories/branches", handler.requireManagementAuth(handler.handleRepositoryBranches))
+	mux.HandleFunc("/api/projects", handler.requireManagementAuth(handler.handleProjectsCollection))
+	mux.HandleFunc("/api/projects/", handler.requireManagementAuth(handler.handleProjectRoutes))
+	mux.HandleFunc("/api/deployments", handler.requireManagementAuth(handler.handleDeploymentsCollection))
+	mux.HandleFunc("/api/deployments/", handler.requireManagementAuth(handler.handleDeploymentRoutes))
 	registerStaticUIRoutes(mux, log)
-	if cfg.WebhookSecret == "" {
-		log.Warn("webhook shared secret is not configured; endpoint is network-reachable if exposed", "path", cfg.WebhookBasePath)
-	}
-	log.Warn("management APIs and log streams are unauthenticated pre-Phase-7; bind privately or protect with a proxy")
 
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -130,9 +160,10 @@ func runServer(log *slog.Logger, args []string) int {
 }
 
 type server struct {
-	log   *slog.Logger
-	cfg   *config.Config
-	store *repository.Store
+	log            *slog.Logger
+	cfg            *config.Config
+	store          *repository.Store
+	webhookLimiter *fixedWindowLimiter
 }
 
 type githubPushPayload struct {
@@ -149,6 +180,7 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		requestID = newRequestID()
 	}
 	log := s.log.With("request_id", requestID)
+	remoteIP := requestIP(r)
 
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
@@ -166,16 +198,14 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if s.cfg.WebhookSecret != "" {
-		token := strings.TrimSpace(r.Header.Get("X-HostForge-Token"))
-		if token != s.cfg.WebhookSecret {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{
-				"status":     "error",
-				"request_id": requestID,
-				"error":      "unauthorized",
-			})
-			return
-		}
+	if !s.webhookLimiter.Allow(remoteIP, time.Now().UTC()) {
+		log.Warn("webhook rejected", "reason", "rate_limited", "remote_ip", remoteIP)
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{
+			"status":     "error",
+			"request_id": requestID,
+			"error":      "rate_limited",
+		})
+		return
 	}
 
 	eventType := strings.TrimSpace(r.Header.Get("X-GitHub-Event"))
@@ -191,10 +221,37 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.WebhookMaxBodyBytes))
 	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"status":     "error",
+			"request_id": requestID,
+			"error":      "invalid_request_body",
+		})
+		return
+	}
+	signature := strings.TrimSpace(r.Header.Get("X-Hub-Signature-256"))
+	if signature == "" {
+		log.Warn("webhook rejected", "reason", "missing_signature", "remote_ip", remoteIP)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"status":     "error",
+			"request_id": requestID,
+			"error":      "missing_signature",
+		})
+		return
+	}
+	if !auth.VerifyGitHubSignature(s.cfg.WebhookSecret, signature, body) {
+		log.Warn("webhook rejected", "reason", "signature_mismatch", "remote_ip", remoteIP)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"status":     "error",
+			"request_id": requestID,
+			"error":      "invalid_signature",
+		})
+		return
+	}
 
 	var payload githubPushPayload
-	dec := json.NewDecoder(r.Body)
-	if err := dec.Decode(&payload); err != nil {
+	if err := json.Unmarshal(body, &payload); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"status":     "error",
 			"request_id": requestID,
@@ -330,6 +387,144 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		"url":           result.URL,
 		"mode":          "sync",
 	})
+}
+
+func (s *server) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		s.handleSessionCreate(w, r)
+	case http.MethodGet:
+		s.handleSessionStatus(w, r)
+	case http.MethodDelete:
+		s.handleSessionDelete(w, r)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+	}
+}
+
+func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
+	if !auth.BearerMatches(r.Header.Get("Authorization"), s.cfg.APIToken) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"status": "error", "error": "invalid_api_token"})
+		return
+	}
+	ttl := time.Duration(s.cfg.SessionTTLMinutes) * time.Minute
+	sessionValue, _, err := auth.NewSignedSession(s.cfg.SessionSecret, ttl)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "session_create_failed"})
+		return
+	}
+	s.setSessionCookie(w, sessionValue, ttl)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "authenticated": true})
+}
+
+func (s *server) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
+	_, ok := s.authenticateRequest(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"status": "error", "authenticated": false, "error": "unauthorized"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "authenticated": true})
+}
+
+func (s *server) handleSessionDelete(w http.ResponseWriter, _ *http.Request) {
+	s.clearSessionCookie(w)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "authenticated": false})
+}
+
+func (s *server) requireManagementAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_, ok := s.authenticateRequest(r)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"status": "error", "error": "unauthorized"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *server) authenticateRequest(r *http.Request) (string, bool) {
+	if auth.BearerMatches(r.Header.Get("Authorization"), s.cfg.APIToken) {
+		return "bearer", true
+	}
+	cookie, err := r.Cookie(s.cfg.SessionCookieName)
+	if err == nil {
+		if _, verifyErr := auth.VerifySignedSession(s.cfg.SessionSecret, cookie.Value, time.Now().UTC()); verifyErr == nil {
+			return "session", true
+		}
+	}
+	return "", false
+}
+
+func (s *server) setSessionCookie(w http.ResponseWriter, value string, ttl time.Duration) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     s.cfg.SessionCookieName,
+		Value:    value,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   s.cfg.SessionCookieSecure,
+		MaxAge:   int(ttl.Seconds()),
+		Expires:  time.Now().UTC().Add(ttl),
+	})
+}
+
+func (s *server) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     s.cfg.SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   s.cfg.SessionCookieSecure,
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0).UTC(),
+	})
+}
+
+type fixedWindowLimiter struct {
+	mu     sync.Mutex
+	limit  int
+	window time.Duration
+	byIP   map[string]fixedWindowEntry
+}
+
+type fixedWindowEntry struct {
+	start time.Time
+	count int
+}
+
+func newFixedWindowLimiter(limit int, window time.Duration) *fixedWindowLimiter {
+	if limit <= 0 {
+		limit = 1
+	}
+	if window <= 0 {
+		window = time.Minute
+	}
+	return &fixedWindowLimiter{
+		limit:  limit,
+		window: window,
+		byIP:   make(map[string]fixedWindowEntry),
+	}
+}
+
+func (l *fixedWindowLimiter) Allow(ip string, now time.Time) bool {
+	key := strings.TrimSpace(ip)
+	if key == "" {
+		key = "unknown"
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry := l.byIP[key]
+	if entry.start.IsZero() || now.Sub(entry.start) >= l.window {
+		entry = fixedWindowEntry{start: now, count: 0}
+	}
+	if entry.count >= l.limit {
+		l.byIP[key] = entry
+		return false
+	}
+	entry.count++
+	l.byIP[key] = entry
+	return true
 }
 
 func (s *server) handleDeploymentRoutes(w http.ResponseWriter, r *http.Request) {
@@ -646,4 +841,21 @@ func parseQueryInt(r *http.Request, key string, def int) int {
 		return def
 	}
 	return val
+}
+
+func requestIP(r *http.Request) string {
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+		parts := strings.Split(forwarded, ",")
+		for _, candidate := range parts {
+			trimmed := strings.TrimSpace(candidate)
+			if trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil && strings.TrimSpace(host) != "" {
+		return strings.TrimSpace(host)
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }

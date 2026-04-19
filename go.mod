@@ -3,7 +3,9 @@ module github.com/hostforge/hostforge
 go 1.25.0
 
 require (
+	github.com/docker/docker v28.5.2+incompatible
 	github.com/go-git/go-git/v5 v5.13.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/moby/moby/api v1.54.1
 	github.com/moby/moby/client v0.4.0
 	modernc.org/sqlite v1.38.2
@@ -18,7 +20,6 @@ require (
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.3.6 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
-	github.com/docker/docker v28.5.2+incompatible // indirect
 	github.com/docker/go-connections v0.6.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -30,7 +31,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

@@ -51,6 +51,18 @@ type Config struct {
 	WebhookAsync bool
 	// WebhookSecret is an optional shared secret checked on webhook requests.
 	WebhookSecret string
+	// APIToken is the static bearer token used for management API authentication.
+	APIToken string
+	// SessionSecret is the HMAC key used to sign UI session cookies.
+	SessionSecret string
+	// SessionCookieName is the cookie name used for UI sessions.
+	SessionCookieName string
+	// SessionTTLMinutes controls signed session validity duration in minutes.
+	SessionTTLMinutes int
+	// SessionCookieSecure toggles the Secure flag on session cookies.
+	SessionCookieSecure bool
+	// WebhookRateLimitPerMinute is a basic per-IP webhook request ceiling.
+	WebhookRateLimitPerMinute int
 	// LogsDirPath overrides where build logs are written (default: <data-dir>/logs).
 	LogsDirPath string
 }
@@ -103,6 +115,18 @@ const (
 	WebhookAsyncEnv = "HOSTFORGE_WEBHOOK_ASYNC"
 	// WebhookSecretEnv sets an optional shared-secret token for webhook requests.
 	WebhookSecretEnv = "HOSTFORGE_WEBHOOK_SECRET"
+	// APITokenEnv is the static management API bearer token.
+	APITokenEnv = "HOSTFORGE_API_TOKEN"
+	// SessionSecretEnv is the HMAC key for signing UI session cookies.
+	SessionSecretEnv = "HOSTFORGE_SESSION_SECRET"
+	// SessionCookieNameEnv overrides the session cookie name used by the server.
+	SessionCookieNameEnv = "HOSTFORGE_SESSION_COOKIE_NAME"
+	// SessionTTLMinutesEnv sets UI session lifetime in minutes.
+	SessionTTLMinutesEnv = "HOSTFORGE_SESSION_TTL_MINUTES"
+	// SessionCookieSecureEnv toggles the Secure flag on UI session cookies.
+	SessionCookieSecureEnv = "HOSTFORGE_SESSION_COOKIE_SECURE"
+	// WebhookRateLimitPerMinuteEnv sets a simple per-IP webhook rate cap.
+	WebhookRateLimitPerMinuteEnv = "HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE"
 	// LogsDirEnv overrides the default logs directory under data dir.
 	LogsDirEnv = "HOSTFORGE_LOGS_DIR"
 )
@@ -205,29 +229,53 @@ func Load(dataDirFlag string) (*Config, error) {
 		return nil, err
 	}
 	webhookSecret := strings.TrimSpace(os.Getenv(WebhookSecretEnv))
+	apiToken := strings.TrimSpace(os.Getenv(APITokenEnv))
+	sessionSecret := strings.TrimSpace(os.Getenv(SessionSecretEnv))
+	sessionCookieName := strings.TrimSpace(os.Getenv(SessionCookieNameEnv))
+	if sessionCookieName == "" {
+		sessionCookieName = "hostforge_session"
+	}
+	sessionTTLMinutes, err := envInt(SessionTTLMinutesEnv, 720)
+	if err != nil {
+		return nil, err
+	}
+	sessionCookieSecure, err := envBool(SessionCookieSecureEnv, false)
+	if err != nil {
+		return nil, err
+	}
+	webhookRateLimitPerMinute, err := envInt(WebhookRateLimitPerMinuteEnv, 60)
+	if err != nil {
+		return nil, err
+	}
 	logsDirPath := strings.TrimSpace(os.Getenv(LogsDirEnv))
 	return &Config{
-		DataDir:             abs,
-		ListenAddr:          listen,
-		HostPort:            hostPort,
-		PortStart:           portStart,
-		PortEnd:             portEnd,
-		ContainerPort:       containerPort,
-		CaddyBin:            caddyBin,
-		CaddyGeneratedPath:  caddyGeneratedPath,
-		CaddyRootConfig:     caddyRootConfig,
-		SyncCaddy:           syncCaddy,
-		HealthPath:          healthPath,
-		HealthTimeoutMS:     healthTimeoutMS,
-		HealthRetries:       healthRetries,
-		HealthIntervalMS:    healthIntervalMS,
-		HealthExpectedMin:   healthExpectedMin,
-		HealthExpectedMax:   healthExpectedMax,
-		WebhookBasePath:     webhookBasePath,
-		WebhookMaxBodyBytes: webhookMaxBodyBytes,
-		WebhookAsync:        webhookAsync,
-		WebhookSecret:       webhookSecret,
-		LogsDirPath:         logsDirPath,
+		DataDir:                   abs,
+		ListenAddr:                listen,
+		HostPort:                  hostPort,
+		PortStart:                 portStart,
+		PortEnd:                   portEnd,
+		ContainerPort:             containerPort,
+		CaddyBin:                  caddyBin,
+		CaddyGeneratedPath:        caddyGeneratedPath,
+		CaddyRootConfig:           caddyRootConfig,
+		SyncCaddy:                 syncCaddy,
+		HealthPath:                healthPath,
+		HealthTimeoutMS:           healthTimeoutMS,
+		HealthRetries:             healthRetries,
+		HealthIntervalMS:          healthIntervalMS,
+		HealthExpectedMin:         healthExpectedMin,
+		HealthExpectedMax:         healthExpectedMax,
+		WebhookBasePath:           webhookBasePath,
+		WebhookMaxBodyBytes:       webhookMaxBodyBytes,
+		WebhookAsync:              webhookAsync,
+		WebhookSecret:             webhookSecret,
+		APIToken:                  apiToken,
+		SessionSecret:             sessionSecret,
+		SessionCookieName:         sessionCookieName,
+		SessionTTLMinutes:         sessionTTLMinutes,
+		SessionCookieSecure:       sessionCookieSecure,
+		WebhookRateLimitPerMinute: webhookRateLimitPerMinute,
+		LogsDirPath:               logsDirPath,
 	}, nil
 }
 

@@ -56,51 +56,73 @@ export type RepositoryBranches = {
   default_branch: string;
 };
 
+function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
+  return fetch(input, { credentials: "same-origin", ...init });
+}
+
 async function readJSON<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `request failed: ${res.status}`);
+  const text = await res.text();
+  let parsed: unknown = null;
+  if (text.trim() !== "") {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
   }
-  return (await res.json()) as T;
+  if (!res.ok) {
+    if (parsed && typeof parsed === "object" && "error" in parsed) {
+      const msg = String((parsed as Record<string, unknown>).error || "").trim();
+      if (msg) throw new Error(msg);
+    }
+    if (text.trim()) {
+      throw new Error(text.trim());
+    }
+    throw new Error(`request failed: ${res.status}`);
+  }
+  if (parsed === null) {
+    return {} as T;
+  }
+  return parsed as T;
 }
 
 export async function fetchProjects(): Promise<ApiProject[]> {
-  const res = await fetch("/api/projects");
+  const res = await apiFetch("/api/projects");
   const body = await readJSON<{ projects: ApiProject[] }>(res);
   return body.projects || [];
 }
 
 export async function fetchAllDeployments(limit = 100): Promise<ApiDeployment[]> {
-  const res = await fetch(`/api/deployments?limit=${limit}`);
+  const res = await apiFetch(`/api/deployments?limit=${limit}`);
   const body = await readJSON<{ deployments: ApiDeployment[] }>(res);
   return body.deployments || [];
 }
 
 export async function fetchProject(projectID: string): Promise<ApiProject> {
-  const res = await fetch(`/api/projects/${projectID}`);
+  const res = await apiFetch(`/api/projects/${projectID}`);
   const body = await readJSON<{ project: ApiProject }>(res);
   return body.project;
 }
 
 export async function deleteProject(projectID: string): Promise<void> {
-  const res = await fetch(`/api/projects/${projectID}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/projects/${projectID}`, { method: "DELETE" });
   await readJSON<Record<string, unknown>>(res);
 }
 
 export async function fetchProjectDeployments(projectID: string): Promise<ApiDeployment[]> {
-  const res = await fetch(`/api/projects/${projectID}/deployments?limit=100`);
+  const res = await apiFetch(`/api/projects/${projectID}/deployments?limit=100`);
   const body = await readJSON<{ deployments: ApiDeployment[] }>(res);
   return body.deployments || [];
 }
 
 export async function fetchProjectDomains(projectID: string): Promise<ApiDomain[]> {
-  const res = await fetch(`/api/projects/${projectID}/domains`);
+  const res = await apiFetch(`/api/projects/${projectID}/domains`);
   const body = await readJSON<{ domains: ApiDomain[] }>(res);
   return body.domains || [];
 }
 
 export async function createProject(input: CreateProjectRequest): Promise<ApiProject> {
-  const res = await fetch("/api/projects", {
+  const res = await apiFetch("/api/projects", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -111,7 +133,7 @@ export async function createProject(input: CreateProjectRequest): Promise<ApiPro
 
 export async function fetchRepositoryBranches(repoURL: string): Promise<RepositoryBranches> {
   const qs = new URLSearchParams({ repo_url: repoURL }).toString();
-  const res = await fetch(`/api/repositories/branches?${qs}`);
+  const res = await apiFetch(`/api/repositories/branches?${qs}`);
   const body = await readJSON<{
     repo_url: string;
     branches?: string[];
@@ -129,31 +151,56 @@ export async function deployProject(
   options: { async?: boolean } = {},
 ): Promise<{ deployment_id?: string; status?: string; mode?: string; url?: string; error?: string }> {
   const qs = options.async ? "?async=true" : "";
-  const res = await fetch(`/api/projects/${projectID}/deploy${qs}`, { method: "POST" });
+  const res = await apiFetch(`/api/projects/${projectID}/deploy${qs}`, { method: "POST" });
   return await readJSON<{ deployment_id?: string; status?: string; mode?: string; url?: string; error?: string }>(res);
 }
 
 export async function restartProject(projectID: string): Promise<void> {
-  const res = await fetch(`/api/projects/${projectID}/restart`, { method: "POST" });
+  const res = await apiFetch(`/api/projects/${projectID}/restart`, { method: "POST" });
   await readJSON<Record<string, unknown>>(res);
 }
 
 export async function rollbackProject(projectID: string): Promise<void> {
-  const res = await fetch(`/api/projects/${projectID}/rollback`, { method: "POST" });
+  const res = await apiFetch(`/api/projects/${projectID}/rollback`, { method: "POST" });
   await readJSON<Record<string, unknown>>(res);
 }
 
 export async function stopProject(projectID: string): Promise<void> {
-  const res = await fetch(`/api/projects/${projectID}/stop`, { method: "POST" });
+  const res = await apiFetch(`/api/projects/${projectID}/stop`, { method: "POST" });
   await readJSON<Record<string, unknown>>(res);
 }
 
 export async function fetchDeploymentLogs(deploymentID: string, source: "build" | "container"): Promise<string> {
   const params = source === "build" ? "" : "?tail_lines=200";
-  const res = await fetch(`/api/deployments/${deploymentID}/logs${params}`);
+  const res = await apiFetch(`/api/deployments/${deploymentID}/logs${params}`);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `logs request failed: ${res.status}`);
   }
   return await res.text();
+}
+
+export async function createSession(token: string): Promise<void> {
+  const res = await apiFetch("/auth/session", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token.trim()}` },
+  });
+  await readJSON<Record<string, unknown>>(res);
+}
+
+export async function getSessionStatus(): Promise<boolean> {
+  const res = await apiFetch("/auth/session");
+  if (res.status === 401) {
+    return false;
+  }
+  const body = await readJSON<{ authenticated?: boolean }>(res);
+  return Boolean(body.authenticated);
+}
+
+export async function deleteSession(): Promise<void> {
+  const res = await apiFetch("/auth/session", { method: "DELETE" });
+  if (res.status === 401) {
+    return;
+  }
+  await readJSON<Record<string, unknown>>(res);
 }

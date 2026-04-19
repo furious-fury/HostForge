@@ -1,12 +1,13 @@
 import { Link, useLocation, useParams } from "react-router-dom";
 import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
 import { Theme } from "../theme";
-import { ButtonLink } from "./Button";
+import { Button, ButtonLink } from "./Button";
 import { ThemeToggle } from "./ThemeToggle";
 
 type TopbarProps = {
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
+  onLogout: () => void;
 };
 
 type Crumb = { label: string; to?: string };
@@ -58,7 +59,7 @@ function titleize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-export function Topbar({ theme, onThemeChange }: TopbarProps) {
+export function Topbar({ theme, onThemeChange, onLogout }: TopbarProps) {
   const crumbs = useBreadcrumbs();
 
   return (
@@ -109,6 +110,9 @@ export function Topbar({ theme, onThemeChange }: TopbarProps) {
 
       <div className="flex items-center gap-2">
         <ThemeToggle theme={theme} onChange={onThemeChange} />
+        <Button variant="ghost" size="sm" onClick={onLogout}>
+          Logout
+        </Button>
         <ButtonLink to="/projects/new" variant="primary" size="sm">
           + New Project
         </ButtonLink>
