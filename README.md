@@ -170,10 +170,15 @@ The **UI** (project page) and **`hostforge domain add` / `edit`** output print *
 | `HOSTFORGE_DNS_DETECT_IPV6_URL` | URL returning plain-text public IPv6 (default: `https://api64.ipify.org`; may return v4-only on some networks) |
 | `HOSTFORGE_DNS_DETECT_TIMEOUT_MS` | Timeout for outbound IP discovery (default: `2500`) |
 | `HOSTFORGE_DOMAIN_SYNC_AFTER_MUTATE` | If `true` (default), run Caddy sync after domain add/edit/delete API or CLI when `HOSTFORGE_CADDY_ROOT_CONFIG` is set |
+| `HOSTFORGE_CADDY_CERT_POLL_INTERVAL_SEC` | **Optional:** if `>0`, `hostforge-server` periodically refreshes per-domain **`last_cert_message`** / **`cert_checked_at`** from a read-only Caddy admin probe plus an optional on-disk leaf cert scan (default: `0` = off) |
+| `HOSTFORGE_CADDY_ADMIN` | Caddy admin API base URL for read-only `GET /config/` probes (default: `http://127.0.0.1:2019`) |
+| `HOSTFORGE_CADDY_STORAGE_ROOT` | **Optional:** Caddy on-disk storage root (e.g. `~/.local/share/caddy` or `/var/lib/caddy`) so the poll can read managed `*.crt` leaf metadata under `certificates/` — improves summaries when set |
 
 ### HTTPS / ACME
 
 TLS is handled by **Caddy automatic HTTPS** (typically Let’s Encrypt). Certificate storage and renewal are **Caddy’s responsibility** on disk (see upstream Caddy docs for data dirs and [staging CA](https://caddyserver.com/docs/caddyfile/options#acme-ca) for testing). HostForge records domain `ssl_status` in SQLite from **validate/reload** success or failure, not by parsing ACME events.
+
+**Optional cert hints (detailed backlog §2.1):** when `HOSTFORGE_CADDY_CERT_POLL_INTERVAL_SEC` is set, the server also stores operator-facing **`last_cert_message`** (e.g. leaf expiry from Caddy’s cert files) and **`cert_checked_at`**. This does **not** replace Caddy’s ACME engine or `ssl_status` (route/snippet sync); it is a best-effort mirror for the dashboard. See [docs/caddy-cert-poll.md](./docs/caddy-cert-poll.md).
 
 ### Routing model
 

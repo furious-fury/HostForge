@@ -409,7 +409,11 @@ export function ProjectPage() {
                       )}
                     </td>
                     <td className="py-3 pr-4 align-top">
-                      <DomainCaddyCell sslStatus={d.ssl_status} />
+                      <DomainCaddyCell
+                        sslStatus={d.ssl_status}
+                        lastCertMessage={d.last_cert_message}
+                        certCheckedAt={d.cert_checked_at}
+                      />
                     </td>
                     <td className="py-3 pr-4 align-top">
                       <DomainRegistrarDnsCell
@@ -590,8 +594,27 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DomainCaddyCell({ sslStatus }: { sslStatus: string }) {
+function DomainCaddyCell({
+  sslStatus,
+  lastCertMessage,
+  certCheckedAt,
+}: {
+  sslStatus: string;
+  lastCertMessage?: string;
+  certCheckedAt?: string;
+}) {
   const u = (sslStatus || "").toUpperCase();
+  const certLine =
+    (lastCertMessage && lastCertMessage.trim()) || (certCheckedAt && certCheckedAt.trim())
+      ? (
+          <p className="mt-1 font-mono text-[10px] leading-snug text-muted">
+            {lastCertMessage && lastCertMessage.trim() ? <span className="block break-all">{lastCertMessage.trim()}</span> : null}
+            {certCheckedAt && certCheckedAt.trim() ? (
+              <span className="mt-0.5 block text-[9px] opacity-80">Cert poll: {certCheckedAt.trim()}</span>
+            ) : null}
+          </p>
+        )
+      : null;
   if (u === "ACTIVE") {
     return (
       <div className="text-xs">
@@ -600,6 +623,7 @@ function DomainCaddyCell({ sslStatus }: { sslStatus: string }) {
           Caddy on this server has the route. Browsers still need your registrar DNS pointed at this machine before HTTPS works
           from the internet.
         </p>
+        {certLine}
       </div>
     );
   }
@@ -608,10 +632,16 @@ function DomainCaddyCell({ sslStatus }: { sslStatus: string }) {
       <div className="text-xs">
         <span className="font-medium text-warning">Route pending</span>
         <p className="mt-0.5 text-[10px] leading-snug text-muted">Deploy or Caddy sync has not marked this host active yet.</p>
+        {certLine}
       </div>
     );
   }
-  return <StatusPill status={sslStatus} size="sm" />;
+  return (
+    <div className="text-xs">
+      <StatusPill status={sslStatus} size="sm" />
+      {certLine}
+    </div>
+  );
 }
 
 function DomainRegistrarDnsCell({ status, resolved }: { status?: string; resolved?: string[] }) {

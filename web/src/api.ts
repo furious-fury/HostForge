@@ -65,6 +65,8 @@ export type ApiDomain = {
   project_id: string;
   domain_name: string;
   ssl_status: string;
+  last_cert_message?: string;
+  cert_checked_at?: string;
   registrar_dns_status?: string;
   resolved_ipv4?: string[];
   created_at: string;

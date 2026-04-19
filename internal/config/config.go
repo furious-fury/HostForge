@@ -77,6 +77,12 @@ type Config struct {
 	DNSDetectTimeoutMS int
 	// DomainSyncAfterMutate runs Caddy sync after domain add/edit/delete when root config is set.
 	DomainSyncAfterMutate bool
+	// CaddyCertPollIntervalSec controls optional background cert observation (0 = disabled).
+	CaddyCertPollIntervalSec int
+	// CaddyAdminURL is the Caddy admin API base (read-only GETs), e.g. http://127.0.0.1:2019.
+	CaddyAdminURL string
+	// CaddyStorageRoot is optional on-disk Caddy data dir (e.g. ~/.local/share/caddy) for leaf cert scans.
+	CaddyStorageRoot string
 }
 
 // DataDirEnv is the environment variable overriding the default data directory.
@@ -153,6 +159,12 @@ const (
 	DNSDetectTimeoutMSEnv = "HOSTFORGE_DNS_DETECT_TIMEOUT_MS"
 	// DomainSyncAfterMutateEnv toggles Caddy sync after domain CRUD API calls when root config exists.
 	DomainSyncAfterMutateEnv = "HOSTFORGE_DOMAIN_SYNC_AFTER_MUTATE"
+	// CaddyCertPollIntervalSecEnv sets seconds between optional cert polls (0 disables).
+	CaddyCertPollIntervalSecEnv = "HOSTFORGE_CADDY_CERT_POLL_INTERVAL_SEC"
+	// CaddyAdminURLEnv overrides the Caddy admin API base URL for read-only probes.
+	CaddyAdminURLEnv = "HOSTFORGE_CADDY_ADMIN"
+	// CaddyStorageRootEnv points at Caddy's on-disk storage root for certificate file scans.
+	CaddyStorageRootEnv = "HOSTFORGE_CADDY_STORAGE_ROOT"
 )
 
 // DefaultDataDir returns the default data directory (./.hostforge).
@@ -290,6 +302,15 @@ func Load(dataDirFlag string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	caddyCertPollIntervalSec, err := envInt(CaddyCertPollIntervalSecEnv, 0)
+	if err != nil {
+		return nil, err
+	}
+	caddyAdminURL := strings.TrimSpace(os.Getenv(CaddyAdminURLEnv))
+	if caddyAdminURL == "" {
+		caddyAdminURL = "http://127.0.0.1:2019"
+	}
+	caddyStorageRoot := expandUserPath(strings.TrimSpace(os.Getenv(CaddyStorageRootEnv)))
 	return &Config{
 		DataDir:                   abs,
 		ListenAddr:                listen,
@@ -324,7 +345,29 @@ func Load(dataDirFlag string) (*Config, error) {
 		DNSDetectIPv6URL:          dnsDetectIPv6URL,
 		DNSDetectTimeoutMS:        dnsDetectTimeoutMS,
 		DomainSyncAfterMutate:     domainSyncAfterMutate,
+		CaddyCertPollIntervalSec: caddyCertPollIntervalSec,
+		CaddyAdminURL:            caddyAdminURL,
+		CaddyStorageRoot:         caddyStorageRoot,
 	}, nil
+}
+
+// expandUserPath replaces a leading "~" or "~/" with the current user's home directory.
+func expandUserPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if p == "~" {
+		if h, err := os.UserHomeDir(); err == nil {
+			return h
+		}
+		return p
+	}
+	if strings.HasPrefix(p, "~/") {
+		if h, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(h, strings.TrimPrefix(p, "~/"))
+		}
+	}
+	return filepath.Clean(p)
 }
 
 // WorktreesDir returns the directory for git worktrees.

@@ -742,11 +742,13 @@ func (s *Store) CreateDomain(ctx context.Context, projectID, domainName string) 
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO domains(id, project_id, domain_name, ssl_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO domains(id, project_id, domain_name, ssl_status, last_cert_message, cert_checked_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID,
 		d.ProjectID,
 		d.DomainName,
 		d.SSLStatus,
+		"",
+		"",
 		d.CreatedAt.Format(time.RFC3339),
 		d.UpdatedAt.Format(time.RFC3339),
 	)
@@ -776,13 +778,13 @@ func (s *Store) GetDomainByProjectAndName(ctx context.Context, projectID, domain
 	}
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, project_id, domain_name, ssl_status, created_at, updated_at FROM domains WHERE project_id = ? AND domain_name = ?`,
+		`SELECT id, project_id, domain_name, ssl_status, last_cert_message, cert_checked_at, created_at, updated_at FROM domains WHERE project_id = ? AND domain_name = ?`,
 		pid,
 		name,
 	)
 	var d models.Domain
 	var createdAt, updatedAt string
-	if err := row.Scan(&d.ID, &d.ProjectID, &d.DomainName, &d.SSLStatus, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&d.ID, &d.ProjectID, &d.DomainName, &d.SSLStatus, &d.LastCertMessage, &d.CertCheckedAtRaw, &createdAt, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.Domain{}, ErrDomainNotFound
 		}
@@ -801,12 +803,12 @@ func (s *Store) GetDomainByID(ctx context.Context, domainID string) (models.Doma
 	}
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, project_id, domain_name, ssl_status, created_at, updated_at FROM domains WHERE id = ?`,
+		`SELECT id, project_id, domain_name, ssl_status, last_cert_message, cert_checked_at, created_at, updated_at FROM domains WHERE id = ?`,
 		id,
 	)
 	var d models.Domain
 	var createdAt, updatedAt string
-	if err := row.Scan(&d.ID, &d.ProjectID, &d.DomainName, &d.SSLStatus, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&d.ID, &d.ProjectID, &d.DomainName, &d.SSLStatus, &d.LastCertMessage, &d.CertCheckedAtRaw, &createdAt, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.Domain{}, ErrDomainNotFound
 		}
@@ -867,7 +869,7 @@ func (s *Store) UpdateDomainName(ctx context.Context, projectID, domainID, newNa
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := s.db.ExecContext(
 		ctx,
-		`UPDATE domains SET domain_name = ?, ssl_status = ?, updated_at = ? WHERE id = ? AND project_id = ?`,
+		`UPDATE domains SET domain_name = ?, ssl_status = ?, last_cert_message = '', cert_checked_at = '', updated_at = ? WHERE id = ? AND project_id = ?`,
 		name,
 		models.SSLStatusPending,
 		now,
@@ -894,7 +896,7 @@ func (s *Store) UpdateDomainName(ctx context.Context, projectID, domainID, newNa
 func (s *Store) ListDomainsByProject(ctx context.Context, projectID string) ([]models.Domain, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, project_id, domain_name, ssl_status, created_at, updated_at FROM domains WHERE project_id = ? ORDER BY domain_name ASC`,
+		`SELECT id, project_id, domain_name, ssl_status, last_cert_message, cert_checked_at, created_at, updated_at FROM domains WHERE project_id = ? ORDER BY domain_name ASC`,
 		strings.TrimSpace(projectID),
 	)
 	if err != nil {
@@ -905,7 +907,7 @@ func (s *Store) ListDomainsByProject(ctx context.Context, projectID string) ([]m
 	for rows.Next() {
 		var d models.Domain
 		var createdAt, updatedAt string
-		if err := rows.Scan(&d.ID, &d.ProjectID, &d.DomainName, &d.SSLStatus, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.DomainName, &d.SSLStatus, &d.LastCertMessage, &d.CertCheckedAtRaw, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan domain: %w", err)
 		}
 		d.CreatedAt = parseTime(createdAt)
@@ -913,6 +915,54 @@ func (s *Store) ListDomainsByProject(ctx context.Context, projectID string) ([]m
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// ListAllDomains returns every registered domain row (for background jobs).
+func (s *Store) ListAllDomains(ctx context.Context) ([]models.Domain, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, project_id, domain_name, ssl_status, last_cert_message, cert_checked_at, created_at, updated_at FROM domains ORDER BY domain_name ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list all domains: %w", err)
+	}
+	defer rows.Close()
+	var out []models.Domain
+	for rows.Next() {
+		var d models.Domain
+		var createdAt, updatedAt string
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.DomainName, &d.SSLStatus, &d.LastCertMessage, &d.CertCheckedAtRaw, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan domain: %w", err)
+		}
+		d.CreatedAt = parseTime(createdAt)
+		d.UpdatedAt = parseTime(updatedAt)
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// UpdateDomainCertObservation sets optional cert poll fields (does not change ssl_status).
+func (s *Store) UpdateDomainCertObservation(ctx context.Context, domainID, message string, checkedAt time.Time) error {
+	id := strings.TrimSpace(domainID)
+	if id == "" {
+		return fmt.Errorf("empty domain id")
+	}
+	msg := strings.TrimSpace(message)
+	checked := ""
+	if !checkedAt.IsZero() {
+		checked = checkedAt.UTC().Format(time.RFC3339)
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE domains SET last_cert_message = ?, cert_checked_at = ? WHERE id = ?`,
+		msg,
+		checked,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("update domain cert observation: %w", err)
+	}
+	return nil
 }
 
 // UpdateDomainSSLStatus updates ssl_status for a domain.
@@ -938,6 +988,8 @@ SELECT
 	d.project_id,
 	d.domain_name,
 	d.ssl_status,
+	d.last_cert_message,
+	d.cert_checked_at,
 	d.created_at,
 	d.updated_at,
 	c.host_port
@@ -966,6 +1018,8 @@ ORDER BY d.domain_name ASC`)
 			&route.ProjectID,
 			&route.DomainName,
 			&route.SSLStatus,
+			&route.LastCertMessage,
+			&route.CertCheckedAtRaw,
 			&createdAt,
 			&updatedAt,
 			&hostPort,

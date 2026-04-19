@@ -77,7 +77,9 @@ type apiDomain struct {
 	ProjectID          string   `json:"project_id"`
 	DomainName         string   `json:"domain_name"`
 	SSLStatus          string   `json:"ssl_status"` // Caddy route state: ACTIVE = snippet applied, not "HTTPS works publicly"
-	RegistrarDNSStatus string   `json:"registrar_dns_status"` // ok | pending | unknown | lookup_error — public DNS vs expected server IPv4
+	LastCertMessage    string   `json:"last_cert_message,omitempty"` // optional cert poll summary (see README)
+	CertCheckedAt      string   `json:"cert_checked_at,omitempty"`   // RFC3339 when last cert poll ran for this row
+	RegistrarDNSStatus string   `json:"registrar_dns_status"`        // ok | pending | unknown | lookup_error — public DNS vs expected server IPv4
 	ResolvedIPv4       []string `json:"resolved_ipv4,omitempty"`
 	CreatedAt          string   `json:"created_at"`
 	UpdatedAt          string   `json:"updated_at"`
@@ -806,6 +808,8 @@ func (s *server) domainToAPILite(d models.Domain) apiDomain {
 		ProjectID:          d.ProjectID,
 		DomainName:         d.DomainName,
 		SSLStatus:          d.SSLStatus,
+		LastCertMessage:    d.LastCertMessage,
+		CertCheckedAt:      strings.TrimSpace(d.CertCheckedAtRaw),
 		RegistrarDNSStatus: "unknown",
 		ResolvedIPv4:       nil,
 		CreatedAt:          formatTime(d.CreatedAt),
@@ -824,6 +828,8 @@ func (s *server) domainToAPIExpected(ctx context.Context, d models.Domain, expec
 		ProjectID:          d.ProjectID,
 		DomainName:         d.DomainName,
 		SSLStatus:          d.SSLStatus,
+		LastCertMessage:    d.LastCertMessage,
+		CertCheckedAt:      strings.TrimSpace(d.CertCheckedAtRaw),
 		RegistrarDNSStatus: st,
 		ResolvedIPv4:       resolved,
 		CreatedAt:          formatTime(d.CreatedAt),

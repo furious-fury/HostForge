@@ -125,6 +125,7 @@ func runServer(log *slog.Logger, args []string) int {
 	defer db.Close()
 
 	store := repository.New(db)
+	services.StartCaddyCertPollLoop(log, cfg, store)
 	webhookLimiter := newFixedWindowLimiter(cfg.WebhookRateLimitPerMinute, time.Minute)
 	handler := &server{
 		log:            log,
