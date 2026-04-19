@@ -1,2 +1,2 @@
-// Package repository implements data access (Phase 2+).
+// Package repository implements SQLite data access.
 package repository

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -13,10 +12,13 @@ import (
 	"time"
 
 	"github.com/hostforge/hostforge/internal/config"
+	"github.com/hostforge/hostforge/internal/database"
 	"github.com/hostforge/hostforge/internal/docker"
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/logging"
+	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/nixpacks"
+	"github.com/hostforge/hostforge/internal/repository"
 )
 
 func main() {
@@ -115,13 +117,20 @@ func runDeploy(log *slog.Logger, args []string) int {
 		}
 	}
 
+	ctx := context.Background()
+	db, err := database.OpenSQLite(ctx, cfg.DBPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+	store := repository.New(db)
+
 	slug := git.WorktreeDir(repoURL, *branch)
 	worktree := filepath.Join(cfg.WorktreesDir(), slug)
 	buildID := time.Now().UTC().Format("20060102t150405")
 	imageRef := fmt.Sprintf("hostforge/%s:%s", slug, buildID)
 	containerName := fmt.Sprintf("hostforge-%s-%s", slug[:12], buildID)
-
-	ctx := context.Background()
 	dockerClient, err := docker.NewClient(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: docker: %v\n", err)
@@ -129,20 +138,47 @@ func runDeploy(log *slog.Logger, args []string) int {
 	}
 	defer dockerClient.Close()
 
+	project, err := store.EnsureProject(ctx, repoURL, strings.TrimSpace(*branch))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: project state: %v\n", err)
+		return 1
+	}
+	deployment, err := store.CreateDeployment(ctx, repository.CreateDeploymentInput{
+		ProjectID: project.ID,
+		ImageRef:  imageRef,
+		Worktree:  worktree,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: deployment state: %v\n", err)
+		return 1
+	}
+	markFailed := func(stepErr error) {
+		if err := store.UpdateDeploymentStatus(ctx, deployment.ID, models.DeploymentFailed, stepErr.Error()); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to mark deployment FAILED: %v\n", err)
+		}
+	}
+	if err := store.UpdateDeploymentStatus(ctx, deployment.ID, models.DeploymentBuilding, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "error: deployment state: %v\n", err)
+		return 1
+	}
+
 	log.Info("cloning", "url", repoURL, "worktree", worktree)
 	if err := git.CloneOrUpdate(ctx, repoURL, *branch, worktree); err != nil {
+		markFailed(err)
 		fmt.Fprintf(os.Stderr, "error: clone: %v\n", err)
 		return 1
 	}
 
 	hostPortValue, err := docker.PickHostPort(cfg.HostPort, cfg.PortStart, cfg.PortEnd)
 	if err != nil {
+		markFailed(err)
 		fmt.Fprintf(os.Stderr, "error: host port selection: %v\n", err)
 		return 1
 	}
 
 	log.Info("running nixpacks image build", "dir", worktree, "image", imageRef)
 	if err := nixpacks.BuildImage(ctx, worktree, imageRef); err != nil {
+		markFailed(err)
 		fmt.Fprintf(os.Stderr, "error: nixpacks: %v\n", err)
 		return 1
 	}
@@ -153,25 +189,29 @@ func runDeploy(log *slog.Logger, args []string) int {
 		HostPort:      hostPortValue,
 	})
 	if err != nil {
+		markFailed(err)
 		fmt.Fprintf(os.Stderr, "error: run container: %v\n", err)
 		return 1
 	}
+	if _, err := store.AttachContainer(ctx, repository.AttachContainerInput{
+		DeploymentID:      deployment.ID,
+		DockerContainerID: containerID,
+		InternalPort:      cfg.ContainerPort,
+		HostPort:          hostPortValue,
+		Status:            "RUNNING",
+	}); err != nil {
+		markFailed(err)
+		fmt.Fprintf(os.Stderr, "error: container state: %v\n", err)
+		return 1
+	}
+	if err := store.UpdateDeploymentStatus(ctx, deployment.ID, models.DeploymentSuccess, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to mark deployment SUCCESS: %v\n", err)
+	}
+
 	url := fmt.Sprintf("http://127.0.0.1:%d", hostPortValue)
 	log.Info("deploy finished", "image", imageRef, "container_id", shortID(containerID), "url", url)
 	fmt.Printf("container_id=%s\nimage=%s\ncontainer_port=%d\nhost_port=%d\nurl=%s\n",
 		containerID, imageRef, cfg.ContainerPort, hostPortValue, url)
-	if err := writeLastDeploy(filepath.Join(cfg.DataDir, "last-deploy.json"), deployState{
-		ContainerID:   containerID,
-		ImageRef:      imageRef,
-		RepoURL:       repoURL,
-		Branch:        strings.TrimSpace(*branch),
-		HostPort:      hostPortValue,
-		ContainerPort: cfg.ContainerPort,
-		Worktree:      worktree,
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to write last-deploy.json: %v\n", err)
-	}
 	return 0
 }
 
@@ -200,28 +240,6 @@ func validateRuntimeConfig(cfg *config.Config) error {
 		if cfg.PortStart <= 0 || cfg.PortEnd <= 0 || cfg.PortStart > cfg.PortEnd {
 			return fmt.Errorf("invalid host port range %d..%d", cfg.PortStart, cfg.PortEnd)
 		}
-	}
-	return nil
-}
-
-type deployState struct {
-	ContainerID   string `json:"container_id"`
-	ImageRef      string `json:"image_ref"`
-	RepoURL       string `json:"repo_url"`
-	Branch        string `json:"branch,omitempty"`
-	HostPort      int    `json:"host_port"`
-	ContainerPort int    `json:"container_port"`
-	Worktree      string `json:"worktree"`
-	CreatedAt     string `json:"created_at"`
-}
-
-func writeLastDeploy(path string, state deployState) error {
-	body, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode state: %w", err)
-	}
-	if err := os.WriteFile(path, append(body, '\n'), 0o644); err != nil {
-		return fmt.Errorf("write file: %w", err)
 	}
 	return nil
 }

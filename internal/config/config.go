@@ -110,6 +110,11 @@ func (c *Config) BuildsDir() string {
 	return filepath.Join(c.DataDir, "builds")
 }
 
+// DBPath returns the SQLite control-plane database path.
+func (c *Config) DBPath() string {
+	return filepath.Join(c.DataDir, "hostforge.db")
+}
+
 func envInt(key string, def int) (int, error) {
 	raw := os.Getenv(key)
 	if raw == "" {

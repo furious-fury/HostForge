@@ -61,6 +61,7 @@ func RunContainer(ctx context.Context, cli *client.Client, opts RunOptions) (str
 		Config: &container.Config{
 			Image:        opts.ImageRef,
 			ExposedPorts: exposed,
+			Env:          []string{fmt.Sprintf("PORT=%d", opts.ContainerPort)},
 		},
 		HostConfig: &container.HostConfig{
 			PortBindings: bindings,
