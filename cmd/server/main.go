@@ -27,7 +27,9 @@ import (
 	"github.com/hostforge/hostforge/internal/logging"
 	logsapi "github.com/hostforge/hostforge/internal/logs"
 	"github.com/hostforge/hostforge/internal/models"
+	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/hostforge/hostforge/internal/reqctx"
 	"github.com/hostforge/hostforge/internal/services"
 )
 
@@ -135,14 +137,14 @@ func runServer(log *slog.Logger, args []string) int {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(cfg.WebhookBasePath, handler.handleGitHubWebhook)
-	mux.HandleFunc("/auth/session", handler.handleSessionRoutes)
-	mux.HandleFunc("/api/system/status", handler.requireManagementAuth(handler.handleSystemStatus))
-	mux.HandleFunc("/api/repositories/branches", handler.requireManagementAuth(handler.handleRepositoryBranches))
-	mux.HandleFunc("/api/projects", handler.requireManagementAuth(handler.handleProjectsCollection))
-	mux.HandleFunc("/api/projects/", handler.requireManagementAuth(handler.handleProjectRoutes))
-	mux.HandleFunc("/api/deployments", handler.requireManagementAuth(handler.handleDeploymentsCollection))
-	mux.HandleFunc("/api/deployments/", handler.requireManagementAuth(handler.handleDeploymentRoutes))
+	mux.HandleFunc(cfg.WebhookBasePath, handler.withRequestContext(handler.handleGitHubWebhook))
+	mux.HandleFunc("/auth/session", handler.withRequestContext(handler.handleSessionRoutes))
+	mux.HandleFunc("/api/system/status", handler.withRequestContext(handler.requireManagementAuth(handler.handleSystemStatus)))
+	mux.HandleFunc("/api/repositories/branches", handler.withRequestContext(handler.requireManagementAuth(handler.handleRepositoryBranches)))
+	mux.HandleFunc("/api/projects", handler.withRequestContext(handler.requireManagementAuth(handler.handleProjectsCollection)))
+	mux.HandleFunc("/api/projects/", handler.withRequestContext(handler.requireManagementAuth(handler.handleProjectRoutes)))
+	mux.HandleFunc("/api/deployments", handler.withRequestContext(handler.requireManagementAuth(handler.handleDeploymentsCollection)))
+	mux.HandleFunc("/api/deployments/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDeploymentRoutes)))
 	registerStaticUIRoutes(mux, log)
 
 	httpServer := &http.Server{
@@ -179,9 +181,14 @@ type githubPushPayload struct {
 func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	requestID := strings.TrimSpace(r.Header.Get("X-GitHub-Delivery"))
 	if requestID == "" {
+		requestID = reqctx.RequestID(r.Context())
+	}
+	if requestID == "" {
 		requestID = newRequestID()
 	}
-	log := s.log.With("request_id", requestID)
+	ctx := reqctx.WithRequestID(r.Context(), requestID)
+	r = r.WithContext(ctx)
+	log := s.requestLog(r)
 	remoteIP := requestIP(r)
 
 	if r.Method != http.MethodPost {
@@ -296,7 +303,7 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		if errorsIsNoRows(err) {
 			repoExists, lookupErr := repoExistsForAnyBranch(r.Context(), s.store, repoURL, payload.Repository.CloneURL)
 			if lookupErr != nil {
-				log.Error("repo existence lookup failed", "repo_url", repoURL, "error", lookupErr)
+				log.Error("repo existence lookup failed", "repo_url", redact.RepoURLForLog(repoURL), "error", lookupErr)
 				writeJSON(w, http.StatusInternalServerError, map[string]string{
 					"status":     "error",
 					"request_id": requestID,
@@ -305,7 +312,7 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if repoExists {
-				log.Info("ignoring push for non-matching branch", "repo_url", repoURL, "branch", branch)
+				log.Info("ignoring push for non-matching branch", "repo_url", redact.RepoURLForLog(repoURL), "branch", branch)
 				writeJSON(w, http.StatusOK, map[string]string{
 					"status":     "ignored",
 					"request_id": requestID,
@@ -320,7 +327,7 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		log.Error("project lookup failed", "repo_url", repoURL, "branch", branch, "error", err)
+		log.Error("project lookup failed", "repo_url", redact.RepoURLForLog(repoURL), "branch", branch, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"status":     "error",
 			"request_id": requestID,
@@ -344,16 +351,16 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		CommitHash: strings.TrimSpace(payload.After),
 	})
 	if err != nil {
-		log.Error("failed to accept deployment", "project_id", project.ID, "error", err)
+		log.Error("failed to accept deployment", "project_id", project.ID, "error", err, "public_code", publicAPIError(err, "failed_to_accept_deployment"))
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"status":     "error",
 			"request_id": requestID,
-			"error":      "failed_to_accept_deployment",
+			"error":      publicAPIError(err, "failed_to_accept_deployment"),
 		})
 		return
 	}
 
-	deployLog := log.With("project_id", project.ID, "deployment_id", job.Deployment.ID, "repo_url", repoURL, "branch", branch)
+	deployLog := log.With("project_id", project.ID, "deployment_id", job.Deployment.ID, "repo_url", redact.RepoURLForLog(repoURL), "branch", branch)
 	if s.cfg.WebhookAsync {
 		go func(job services.DeployJob) {
 			_, execErr := services.ExecuteDeploy(context.Background(), deployLog, s.cfg, s.store, job)
@@ -370,17 +377,19 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	deployWall := time.Now()
 	result, err := services.ExecuteDeploy(r.Context(), deployLog, s.cfg, s.store, job)
 	if err != nil {
-		deployLog.Error("synchronous deployment failed", "error", err)
+		deployLog.Error("synchronous deployment failed", "error", err, "public_code", publicAPIError(err, "deployment_failed"), "duration_ms", time.Since(deployWall).Milliseconds())
 		writeJSON(w, http.StatusOK, map[string]string{
 			"status":        "failed",
 			"request_id":    requestID,
 			"deployment_id": job.Deployment.ID,
-			"error":         err.Error(),
+			"error":         publicAPIError(err, "deployment_failed"),
 		})
 		return
 	}
+	deployLog.Info("webhook synchronous deployment finished", "deployment_id", result.DeploymentID, "duration_ms", time.Since(deployWall).Milliseconds())
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":        "success",
 		"request_id":    requestID,
@@ -442,6 +451,52 @@ func (s *server) requireManagementAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+type responseWriterStatus struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriterStatus) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (s *server) withRequestContext(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rid := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+		if rid == "" {
+			rid = newRequestID()
+		}
+		ctx := reqctx.WithRequestID(r.Context(), rid)
+		r = r.WithContext(ctx)
+		start := time.Now()
+		rw := &responseWriterStatus{ResponseWriter: w, status: http.StatusOK}
+		next(rw, r)
+		s.log.Info("http_request", "request_id", rid, "method", r.Method, "path", r.URL.Path, "status", rw.status, "duration_ms", time.Since(start).Milliseconds())
+	}
+}
+
+func (s *server) requestLog(r *http.Request) *slog.Logger {
+	if r == nil {
+		return s.log
+	}
+	if id := reqctx.RequestID(r.Context()); id != "" {
+		return s.log.With("request_id", id)
+	}
+	return s.log
+}
+
+func publicAPIError(err error, fallback string) string {
+	if err == nil {
+		return ""
+	}
+	code := services.FirstPublicCode(err)
+	if code == "" || code == "internal_error" {
+		return fallback
+	}
+	return code
 }
 
 func (s *server) authenticateRequest(r *http.Request) (string, bool) {

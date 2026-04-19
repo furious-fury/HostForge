@@ -3,6 +3,7 @@ package dnsops
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -36,20 +37,27 @@ type Guidance struct {
 
 var fqdnPattern = regexp.MustCompile(`(?i)^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])\.)+[a-z]{2,}$`)
 
+// Sentinel errors for stable API mapping (use errors.Is in HTTP handlers).
+var (
+	ErrDomainNameEmpty   = errors.New("domain_name_empty")
+	ErrDomainNameTooLong = errors.New("domain_name_too_long")
+	ErrDomainNameInvalid = errors.New("domain_name_invalid")
+)
+
 // ValidateDomainName returns an error if host is not a plausible public DNS hostname.
 func ValidateDomainName(host string) error {
 	h := strings.TrimSpace(strings.ToLower(host))
 	if h == "" {
-		return fmt.Errorf("domain name is empty")
+		return ErrDomainNameEmpty
 	}
 	if len(h) > 253 {
-		return fmt.Errorf("domain name too long")
+		return ErrDomainNameTooLong
 	}
 	if !fqdnPattern.MatchString(h) {
-		return fmt.Errorf("domain name must be a valid hostname (e.g. app.example.com)")
+		return fmt.Errorf("%w: must be a valid hostname (e.g. app.example.com)", ErrDomainNameInvalid)
 	}
 	if strings.Contains(h, "..") || strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") {
-		return fmt.Errorf("domain name is invalid")
+		return fmt.Errorf("%w: malformed hostname", ErrDomainNameInvalid)
 	}
 	return nil
 }

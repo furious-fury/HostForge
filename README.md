@@ -395,6 +395,12 @@ Automation and the CLI should send **`Authorization: Bearer <HOSTFORGE_API_TOKEN
 - **Browser UI:** `POST /auth/session` with **`Authorization: Bearer`** (same token) → **signed** session cookie; `GET /auth/session` reports auth state; `DELETE /auth/session` clears the cookie.
 - Either credential type satisfies `requireManagementAuth` for REST and WebSockets.
 
+**Request correlation:** management routes, webhooks, and `/auth/session` run behind a small middleware that assigns a **`request_id`** (from `X-Request-ID` when present, else random) stored on `context` and attached to structured logs. GitHub webhooks also prefer **`X-GitHub-Delivery`** as the correlation id when set. Each HTTP request emits an **`http_request`** log line with `request_id`, `method`, `path`, `status`, and `duration_ms`.
+
+**Stable API `error` codes (JSON):** failure responses use a **snake_case** string in the `error` field (not raw exception text). Deploy / restart / rollback / domain-mutate paths use `internal/services` **coded errors** so the innermost code wins (e.g. `clone_failed`, `health_check_failed`, `caddy_sync_failed`, `docker_unavailable`). Domain validation returns `domain_name_empty`, `domain_name_too_long`, `domain_name_invalid`. Webhook synchronous failures return the same deploy codes as the UI. For full behavior, see tests in `internal/services`, `internal/dnsops`, and `internal/redact`.
+
+**System status (`GET /api/system/status`):** each check may include **`error_code`** (`docker_unreachable`, `caddy_validate_failed`, `webhook_probe_build_failed`, `webhook_route_unreachable`, …) with a short, non-sensitive **`detail`** string for the dashboard.
+
 The server refuses to start if **`HOSTFORGE_API_TOKEN`**, **`HOSTFORGE_SESSION_SECRET`** (length ≥ 16), **`HOSTFORGE_WEBHOOK_SECRET`**, or **`HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE`** (must be > 0) is missing or invalid, or if session cookie name / TTL are invalid.
 
 ### GitHub webhook configuration (Phase 7)

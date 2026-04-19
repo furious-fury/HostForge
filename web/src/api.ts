@@ -78,6 +78,7 @@ export type SystemStatusCheck = {
   label: string;
   status: string;
   detail?: string;
+  error_code?: string;
 };
 
 export type SystemStatus = {

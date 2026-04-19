@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hostforge/hostforge/internal/config"
+	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
 )
 
@@ -30,12 +31,13 @@ func StartCaddyCertPollLoop(log *slog.Logger, cfg *config.Config, store *reposit
 	interval := time.Duration(sec) * time.Second
 	log = log.With("component", "caddy_cert_poll")
 	if log != nil {
-		log.Info("caddy cert poll enabled", "interval_sec", sec, "admin", cfg.CaddyAdminURL, "storage_root", cfg.CaddyStorageRoot)
+		log.Info("caddy cert poll enabled", "interval_sec", sec, "admin_url", redact.HTTPURLForLog(cfg.CaddyAdminURL), "storage_root", cfg.CaddyStorageRoot)
 	}
 	ctx := context.Background()
 	run := func() {
+		t0 := time.Now()
 		if err := PollCaddyCertObservations(ctx, log, cfg, store); err != nil {
-			log.Warn("cert poll tick failed", "error", err)
+			log.Warn("cert poll tick failed", "duration_ms", time.Since(t0).Milliseconds(), "error", err)
 		}
 	}
 	run()
@@ -51,6 +53,7 @@ func StartCaddyCertPollLoop(log *slog.Logger, cfg *config.Config, store *reposit
 // PollCaddyCertObservations updates last_cert_message / cert_checked_at for each domain row.
 // It never changes ssl_status (route sync remains separate).
 func PollCaddyCertObservations(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store) error {
+	tickStart := time.Now()
 	domains, err := store.ListAllDomains(ctx)
 	if err != nil {
 		return err
@@ -71,6 +74,9 @@ func PollCaddyCertObservations(ctx context.Context, log *slog.Logger, cfg *confi
 		if err := store.UpdateDomainCertObservation(ctx, d.ID, msg, now); err != nil && log != nil {
 			log.Warn("update cert observation", "domain_id", d.ID, "error", err)
 		}
+	}
+	if log != nil {
+		log.Info("cert_poll tick complete", "domain_count", len(domains), "duration_ms", time.Since(tickStart).Milliseconds())
 	}
 	return nil
 }
@@ -153,7 +159,7 @@ func probeCaddyAdminConfig(ctx context.Context, cfg *config.Config) (string, err
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Sprintf("admin: unreachable (%v)", err), err
+		return "admin: unreachable", err
 	}
 	defer resp.Body.Close()
 	peek, err := io.ReadAll(io.LimitReader(resp.Body, 64))

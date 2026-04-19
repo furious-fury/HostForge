@@ -204,15 +204,26 @@ export function DashboardPage() {
         <Panel title="System">
           <p className="mb-3 text-[11px] leading-snug text-muted">
             Live checks from this HostForge server (Docker ping, <span className="mono">caddy validate</span>, local :80
-            /:443 accept, webhook GET returns 405).
+            /:443 accept, webhook GET returns 405). Stable <span className="mono">error_code</span> values are for support
+            and docs; request correlation and step durations stay in server logs (<span className="mono">http_request</span>,{" "}
+            <span className="mono">deploy step</span>, etc.).
           </p>
           <ul className="flex flex-col divide-y divide-border">
             {systemStatus?.checks?.map((c) => (
-              <li key={c.id} className="py-2 text-sm" title={c.detail || undefined}>
+              <li
+                key={c.id}
+                className="py-2 text-sm"
+                title={[c.error_code, c.detail].filter(Boolean).join(" — ") || undefined}
+              >
                 <div className="flex items-start justify-between gap-2">
                   <span className="text-muted">{c.label}</span>
                   <StatusPill status={c.status} size="sm" />
                 </div>
+                {c.error_code ? (
+                  <p className="mt-1 font-mono text-[10px] leading-snug text-text">
+                    <span className="text-muted">code</span> {c.error_code}
+                  </p>
+                ) : null}
                 {c.detail ? (
                   <p className="mt-1 line-clamp-3 font-mono text-[10px] leading-snug text-muted">{c.detail}</p>
                 ) : null}

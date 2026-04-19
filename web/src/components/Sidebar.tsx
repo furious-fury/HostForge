@@ -37,9 +37,9 @@ const groups: NavGroup[] = [
 export function Sidebar() {
   return (
     <aside className="row-span-2 flex h-screen flex-col border-r border-border bg-surface">
-      <div className="border-b border-border px-4 py-4">
-        <div className="mono text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">HostForge</div>
-        <div className="text-base font-semibold tracking-tight text-text">Control Plane</div>
+      <div className="flex h-14 shrink-0 flex-col justify-center gap-0.5 border-b border-border px-4">
+        <div className="mono text-[10px] font-semibold uppercase leading-tight tracking-[0.2em] text-muted">HostForge</div>
+        <div className="text-base font-semibold leading-tight tracking-tight text-text">Control Plane</div>
       </div>
 
       <nav className="flex-1 overflow-y-auto py-2">

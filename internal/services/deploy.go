@@ -20,6 +20,7 @@ import (
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/nixpacks"
+	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
 )
 
@@ -132,61 +133,81 @@ func PrepareDeploy(ctx context.Context, cfg *config.Config, store *repository.St
 
 // ExecuteDeploy runs clone/build/run/health/cutover for a prepared deployment.
 func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob) (DeployResult, error) {
+	deployStart := time.Now()
+	log = log.With("project_id", job.Project.ID, "deployment_id", job.Deployment.ID)
 	if err := store.UpdateDeploymentStatus(ctx, job.Deployment.ID, models.DeploymentBuilding, ""); err != nil {
-		return DeployResult{}, fmt.Errorf("deployment state: %w", err)
+		return DeployResult{}, ErrCode("deployment_state_update_failed", fmt.Errorf("deployment state: %w", err))
 	}
 
 	markFailed := func(stepErr error) {
-		if err := store.UpdateDeploymentStatus(ctx, job.Deployment.ID, models.DeploymentFailed, stepErr.Error()); err != nil {
+		code := FirstPublicCode(stepErr)
+		if code == "internal_error" {
+			code = "deploy_failed"
+		}
+		if err := store.UpdateDeploymentStatus(ctx, job.Deployment.ID, models.DeploymentFailed, code); err != nil {
 			log.Warn("failed to mark deployment failed", "deployment_id", job.Deployment.ID, "error", err)
 		}
+		log.Error("deploy failed", "deployment_id", job.Deployment.ID, "public_code", code, "error", stepErr)
 	}
 
 	dockerClient, err := docker.NewClient(ctx)
 	if err != nil {
-		markFailed(err)
-		return DeployResult{}, fmt.Errorf("docker: %w", err)
+		e := ErrCode("docker_unavailable", err)
+		markFailed(e)
+		return DeployResult{}, e
 	}
 	defer dockerClient.Close()
 
 	if err := os.MkdirAll(filepath.Dir(job.LogsPath), 0o755); err != nil {
-		markFailed(err)
-		return DeployResult{}, fmt.Errorf("mkdir logs dir: %w", err)
+		e := ErrCode("deploy_mkdir_logs_failed", err)
+		markFailed(e)
+		return DeployResult{}, e
 	}
 	logFile, err := os.OpenFile(job.LogsPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		markFailed(err)
-		return DeployResult{}, fmt.Errorf("open deployment log: %w", err)
+		e := ErrCode("deploy_log_open_failed", err)
+		markFailed(e)
+		return DeployResult{}, e
 	}
 	defer logFile.Close()
 	combinedOut := io.MultiWriter(os.Stdout, logFile)
 
-	log.Info("cloning", "url", job.RepoURL, "worktree", job.Worktree)
-	_, _ = fmt.Fprintf(combinedOut, "hostforge: cloning url=%s worktree=%s\n", job.RepoURL, job.Worktree)
+	t0 := time.Now()
+	log.Info("deploy step", "step", "clone_start", "repo_url", redact.RepoURLForLog(job.RepoURL), "worktree", job.Worktree)
+	_, _ = fmt.Fprintf(combinedOut, "hostforge: cloning url=%s worktree=%s\n", redact.RepoURLForLog(job.RepoURL), job.Worktree)
 	if err := git.CloneOrUpdate(ctx, job.RepoURL, job.Branch, job.Worktree); err != nil {
-		markFailed(err)
+		e := ErrCode("clone_failed", err)
+		markFailed(e)
 		_, _ = fmt.Fprintf(combinedOut, "hostforge: clone failed: %v\n", err)
-		return DeployResult{}, fmt.Errorf("clone: %w", err)
+		log.Info("deploy step", "step", "clone_end", "status", "failed", "duration_ms", time.Since(t0).Milliseconds())
+		return DeployResult{}, e
 	}
+	log.Info("deploy step", "step", "clone_end", "status", "ok", "duration_ms", time.Since(t0).Milliseconds())
 
 	reservedPorts, err := store.ListAllocatedHostPorts(ctx, "")
 	if err != nil {
-		markFailed(err)
-		return DeployResult{}, fmt.Errorf("reserved ports lookup: %w", err)
+		e := ErrCode("reserved_ports_lookup_failed", err)
+		markFailed(e)
+		return DeployResult{}, e
 	}
 	hostPortValue, err := docker.PickHostPortAvoiding(cfg.HostPort, cfg.PortStart, cfg.PortEnd, reservedPorts)
 	if err != nil {
-		markFailed(err)
-		return DeployResult{}, fmt.Errorf("host port selection: %w", err)
+		e := ErrCode("host_port_selection_failed", err)
+		markFailed(e)
+		return DeployResult{}, e
 	}
 
-	log.Info("running nixpacks image build", "dir", job.Worktree, "image", job.ImageRef)
+	t1 := time.Now()
+	log.Info("deploy step", "step", "nixpacks_build_start", "dir", job.Worktree, "image", job.ImageRef)
 	if err := nixpacks.BuildImageWithWriters(ctx, job.Worktree, job.ImageRef, combinedOut, combinedOut); err != nil {
-		markFailed(err)
+		e := ErrCode("nixpacks_build_failed", err)
+		markFailed(e)
 		_, _ = fmt.Fprintf(combinedOut, "hostforge: ===== NIXPACKS IMAGE BUILD FAILED =====\nhostforge: nixpacks failed: %v\n", err)
-		return DeployResult{}, fmt.Errorf("nixpacks: %w", err)
+		log.Info("deploy step", "step", "nixpacks_build_end", "status", "failed", "duration_ms", time.Since(t1).Milliseconds())
+		return DeployResult{}, e
 	}
 	_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== NIXPACKS IMAGE BUILD SUCCEEDED image=%s =====\n\n", job.ImageRef)
+	log.Info("deploy step", "step", "nixpacks_build_end", "status", "ok", "duration_ms", time.Since(t1).Milliseconds())
 
 	containerID, err := docker.RunContainer(ctx, dockerClient, docker.RunOptions{
 		ImageRef:      job.ImageRef,
@@ -195,8 +216,9 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		HostPort:      hostPortValue,
 	})
 	if err != nil {
-		markFailed(err)
-		return DeployResult{}, fmt.Errorf("run container: %w", err)
+		e := ErrCode("run_container_failed", err)
+		markFailed(e)
+		return DeployResult{}, e
 	}
 
 	candidateContainer, err := store.AttachContainer(ctx, repository.AttachContainerInput{
@@ -207,42 +229,52 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		Status:            "RUNNING",
 	})
 	if err != nil {
-		markFailed(err)
-		return DeployResult{}, fmt.Errorf("container state: %w", err)
+		e := ErrCode("container_attach_failed", err)
+		markFailed(e)
+		return DeployResult{}, e
 	}
 
 	cleanupCandidate := func(reason string) {
 		if stopErr := docker.StopAndRemove(ctx, dockerClient, containerID); stopErr != nil {
-			log.Warn("failed to remove candidate container", "reason", reason, "container_id", ShortID(containerID), "error", stopErr)
+			log.Warn("failed to remove candidate container", "reason", reason, "docker_container_id", ShortID(containerID), "error", stopErr)
 			return
 		}
 		if err := store.UpdateContainerStatus(ctx, candidateContainer.ID, "REMOVED"); err != nil {
-			log.Warn("failed to mark candidate container removed", "container_id", candidateContainer.ID, "error", err)
+			log.Warn("failed to mark candidate container removed", "container_row_id", candidateContainer.ID, "error", err)
 		}
 	}
 
-	if err := WaitForHealthy(ctx, hostPortValue, cfg); err != nil {
-		markFailed(err)
+	t2 := time.Now()
+	if err := WaitForHealthy(ctx, log, hostPortValue, cfg); err != nil {
+		e := ErrCode("health_check_failed", err)
+		markFailed(e)
 		cleanupCandidate("health check failure")
-		return DeployResult{}, fmt.Errorf("health check: %w", err)
+		log.Info("deploy step", "step", "health_check_end", "status", "failed", "host_port", hostPortValue, "duration_ms", time.Since(t2).Milliseconds())
+		return DeployResult{}, e
 	}
+	log.Info("deploy step", "step", "health_check_end", "status", "ok", "host_port", hostPortValue, "duration_ms", time.Since(t2).Milliseconds())
 
 	shouldSyncCaddy := cfg.SyncCaddy
 	if !shouldSyncCaddy {
 		projectDomains, err := store.ListDomainsByProject(ctx, job.Project.ID)
 		if err != nil {
-			markFailed(err)
+			e := ErrCode("domain_lookup_failed", err)
+			markFailed(e)
 			cleanupCandidate("domain lookup failure")
-			return DeployResult{}, fmt.Errorf("load project domains: %w", err)
+			return DeployResult{}, e
 		}
 		shouldSyncCaddy = len(projectDomains) > 0
 	}
 	if shouldSyncCaddy {
+		t3 := time.Now()
 		if err := SyncCaddyRoutes(ctx, log, cfg, store); err != nil {
-			markFailed(err)
+			e := ErrCode("caddy_sync_failed", err)
+			markFailed(e)
 			cleanupCandidate("caddy sync failure")
-			return DeployResult{}, fmt.Errorf("caddy sync: %w", err)
+			log.Info("deploy step", "step", "caddy_sync_end", "status", "failed", "duration_ms", time.Since(t3).Milliseconds())
+			return DeployResult{}, e
 		}
+		log.Info("deploy step", "step", "caddy_sync_end", "status", "ok", "duration_ms", time.Since(t3).Milliseconds())
 	}
 
 	if err := store.UpdateDeploymentStatus(ctx, job.Deployment.ID, models.DeploymentSuccess, ""); err != nil {
@@ -251,9 +283,9 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 
 	if job.PreviousContainer.DockerContainerID != "" && job.PreviousContainer.DockerContainerID != containerID {
 		if err := docker.StopAndRemove(ctx, dockerClient, job.PreviousContainer.DockerContainerID); err != nil {
-			log.Warn("old container teardown failed", "container_id", ShortID(job.PreviousContainer.DockerContainerID), "error", err)
+			log.Warn("old container teardown failed", "docker_container_id", ShortID(job.PreviousContainer.DockerContainerID), "error", err)
 		} else if err := store.UpdateContainerStatus(ctx, job.PreviousContainer.ID, "REMOVED"); err != nil {
-			log.Warn("failed to mark previous container removed", "container_id", job.PreviousContainer.ID, "error", err)
+			log.Warn("failed to mark previous container removed", "container_row_id", job.PreviousContainer.ID, "error", err)
 		}
 	}
 
@@ -265,7 +297,7 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		HostPort:      hostPortValue,
 		URL:           fmt.Sprintf("http://127.0.0.1:%d", hostPortValue),
 	}
-	log.Info("deploy finished", "deployment_id", result.DeploymentID, "image", result.ImageRef, "container_id", ShortID(result.ContainerID), "url", result.URL)
+	log.Info("deploy finished", "deployment_id", result.DeploymentID, "image", result.ImageRef, "docker_container_id", ShortID(result.ContainerID), "url", result.URL, "duration_ms_total", time.Since(deployStart).Milliseconds())
 	return result, nil
 }
 
@@ -280,9 +312,10 @@ func Deploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *re
 
 // SyncCaddyRoutes regenerates HostForge-managed routes and updates ssl_status per outcome.
 func SyncCaddyRoutes(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store) error {
+	syncStart := time.Now()
 	domainRoutes, err := store.ListDomainRoutes(ctx)
 	if err != nil {
-		return fmt.Errorf("load domain routes: %w", err)
+		return ErrCode("caddy_domain_routes_load_failed", err)
 	}
 	var routes []caddy.Route
 	var activeDomainIDs []string
@@ -312,7 +345,7 @@ func SyncCaddyRoutes(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 				log.Warn("failed to update domain ssl status", "domain_id", domainID, "status", models.SSLStatusError, "error", updateErr)
 			}
 		}
-		return err
+		return ErrCode("caddy_sync_failed", err)
 	}
 	if !syncRes.Applied {
 		log.Warn("caddy reload skipped (admin API unreachable); snippet written and validated. Start Caddy if it is stopped, or run caddy sync again after it is running to live-reload.")
@@ -322,7 +355,7 @@ func SyncCaddyRoutes(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 			log.Warn("failed to update domain ssl status", "domain_id", domainID, "status", models.SSLStatusActive, "error", err)
 		}
 	}
-	log.Info("caddy sync complete", "generated_path", cfg.CaddyGeneratedPath, "root_config", cfg.CaddyRootConfig, "routes", len(routes))
+	log.Info("caddy sync complete", "generated_path", cfg.CaddyGeneratedPath, "root_config", cfg.CaddyRootConfig, "routes", len(routes), "duration_ms", time.Since(syncStart).Milliseconds())
 	return nil
 }
 
@@ -335,34 +368,40 @@ func SyncCaddyRoutes(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 func RollbackProject(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, project models.Project) (RollbackResult, error) {
 	activeDeployment, err := store.GetLatestSuccessfulDeploymentByProjectID(ctx, project.ID)
 	if err != nil {
-		return RollbackResult{}, fmt.Errorf("active deployment: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return RollbackResult{}, ErrCode("rollback_no_active_deployment", err)
+		}
+		return RollbackResult{}, ErrCode("rollback_active_deployment_lookup_failed", err)
 	}
 	previousDeployment, err := store.GetPreviousSuccessfulDeploymentByProjectID(ctx, project.ID)
 	if err != nil {
-		return RollbackResult{}, fmt.Errorf("previous deployment: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return RollbackResult{}, ErrCode("rollback_no_previous_deployment", err)
+		}
+		return RollbackResult{}, ErrCode("rollback_previous_deployment_lookup_failed", err)
 	}
 	if strings.TrimSpace(previousDeployment.ImageRef) == "" {
-		return RollbackResult{}, fmt.Errorf("previous deployment has no image reference")
+		return RollbackResult{}, ErrCode("rollback_previous_image_missing", fmt.Errorf("previous deployment has no image reference"))
 	}
 
 	activeContainer, err := store.GetContainerByDeploymentID(ctx, activeDeployment.ID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return RollbackResult{}, fmt.Errorf("active container: %w", err)
+		return RollbackResult{}, ErrCode("rollback_active_container_lookup_failed", err)
 	}
 
 	dockerClient, err := docker.NewClient(ctx)
 	if err != nil {
-		return RollbackResult{}, fmt.Errorf("docker: %w", err)
+		return RollbackResult{}, ErrCode("docker_unavailable", err)
 	}
 	defer dockerClient.Close()
 
 	reservedPorts, err := store.ListAllocatedHostPorts(ctx, "")
 	if err != nil {
-		return RollbackResult{}, fmt.Errorf("reserved ports lookup: %w", err)
+		return RollbackResult{}, ErrCode("rollback_reserved_ports_lookup_failed", err)
 	}
 	hostPortValue, err := docker.PickHostPortAvoiding(cfg.HostPort, cfg.PortStart, cfg.PortEnd, reservedPorts)
 	if err != nil {
-		return RollbackResult{}, fmt.Errorf("host port selection: %w", err)
+		return RollbackResult{}, ErrCode("rollback_host_port_selection_failed", err)
 	}
 	containerName := fmt.Sprintf(
 		"hostforge-rb-%s-%s",
@@ -376,7 +415,7 @@ func RollbackProject(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 		HostPort:      hostPortValue,
 	})
 	if err != nil {
-		return RollbackResult{}, fmt.Errorf("run rollback container: %w", err)
+		return RollbackResult{}, ErrCode("rollback_run_container_failed", err)
 	}
 
 	rollbackContainerRec, err := store.AttachContainer(ctx, repository.AttachContainerInput{
@@ -388,7 +427,7 @@ func RollbackProject(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 	})
 	if err != nil {
 		_ = docker.StopAndRemove(ctx, dockerClient, rollbackContainerID)
-		return RollbackResult{}, fmt.Errorf("rollback container state: %w", err)
+		return RollbackResult{}, ErrCode("rollback_container_attach_failed", err)
 	}
 
 	cleanupRollbackContainer := func(reason string) {
@@ -400,21 +439,21 @@ func RollbackProject(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 		}
 	}
 
-	if err := WaitForHealthy(ctx, hostPortValue, cfg); err != nil {
+	if err := WaitForHealthy(ctx, log, hostPortValue, cfg); err != nil {
 		cleanupRollbackContainer("health check failure")
-		return RollbackResult{}, fmt.Errorf("rollback health check: %w", err)
+		return RollbackResult{}, ErrCode("rollback_health_check_failed", err)
 	}
 
 	rollbackMessage := fmt.Sprintf("rolled back to deployment %s", previousDeployment.ID)
 	if err := store.UpdateDeploymentStatus(ctx, activeDeployment.ID, models.DeploymentFailed, rollbackMessage); err != nil {
 		cleanupRollbackContainer("failed to mark active deployment failed")
-		return RollbackResult{}, fmt.Errorf("mark active deployment failed: %w", err)
+		return RollbackResult{}, ErrCode("rollback_mark_active_failed", err)
 	}
 
 	if err := SyncCaddyRoutes(ctx, log, cfg, store); err != nil {
 		_ = store.UpdateDeploymentStatus(ctx, activeDeployment.ID, models.DeploymentSuccess, "")
 		cleanupRollbackContainer("caddy sync failure")
-		return RollbackResult{}, fmt.Errorf("caddy sync during rollback: %w", err)
+		return RollbackResult{}, ErrCode("rollback_caddy_sync_failed", err)
 	}
 
 	if activeContainer.DockerContainerID != "" {
@@ -451,22 +490,28 @@ type RestartResult struct {
 func RestartProject(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, project models.Project) (RestartResult, error) {
 	deployment, err := store.GetLatestSuccessfulDeploymentByProjectID(ctx, project.ID)
 	if err != nil {
-		return RestartResult{}, fmt.Errorf("active deployment: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return RestartResult{}, ErrCode("restart_no_active_deployment", err)
+		}
+		return RestartResult{}, ErrCode("restart_active_deployment_lookup_failed", err)
 	}
 	containerRec, err := store.GetContainerByDeploymentID(ctx, deployment.ID)
 	if err != nil {
-		return RestartResult{}, fmt.Errorf("active container: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return RestartResult{}, ErrCode("restart_no_active_container", err)
+		}
+		return RestartResult{}, ErrCode("restart_active_container_lookup_failed", err)
 	}
 
 	cli, err := docker.NewClient(ctx)
 	if err != nil {
-		return RestartResult{}, fmt.Errorf("docker: %w", err)
+		return RestartResult{}, ErrCode("docker_unavailable", err)
 	}
 	defer cli.Close()
 
 	reservedPorts, err := store.ListAllocatedHostPorts(ctx, containerRec.ID)
 	if err != nil {
-		return RestartResult{}, fmt.Errorf("reserved ports lookup: %w", err)
+		return RestartResult{}, ErrCode("restart_reserved_ports_lookup_failed", err)
 	}
 	_, portStolen := reservedPorts[containerRec.HostPort]
 
@@ -491,7 +536,7 @@ func RestartProject(ctx context.Context, log *slog.Logger, cfg *config.Config, s
 	}
 
 	if strings.TrimSpace(deployment.ImageRef) == "" {
-		return RestartResult{}, fmt.Errorf("deployment %s has no image reference; cannot recreate", deployment.ID)
+		return RestartResult{}, ErrCode("restart_image_ref_missing", fmt.Errorf("deployment %s has no image reference; cannot recreate", deployment.ID))
 	}
 
 	if containerRec.DockerContainerID != "" {
@@ -502,7 +547,7 @@ func RestartProject(ctx context.Context, log *slog.Logger, cfg *config.Config, s
 
 	newPort, err := docker.PickHostPortAvoiding(cfg.HostPort, cfg.PortStart, cfg.PortEnd, reservedPorts)
 	if err != nil {
-		return RestartResult{}, fmt.Errorf("host port selection: %w", err)
+		return RestartResult{}, ErrCode("restart_host_port_selection_failed", err)
 	}
 
 	internalPort := containerRec.InternalPort
@@ -522,21 +567,21 @@ func RestartProject(ctx context.Context, log *slog.Logger, cfg *config.Config, s
 		HostPort:      newPort,
 	})
 	if err != nil {
-		return RestartResult{}, fmt.Errorf("recreate container: %w", err)
+		return RestartResult{}, ErrCode("restart_run_container_failed", err)
 	}
 
-	if err := WaitForHealthy(ctx, newPort, cfg); err != nil {
+	if err := WaitForHealthy(ctx, log, newPort, cfg); err != nil {
 		if stopErr := docker.StopAndRemove(ctx, cli, newContainerID); stopErr != nil {
-			log.Warn("cleanup of unhealthy recreated container failed", "container_id", ShortID(newContainerID), "error", stopErr)
+			log.Warn("cleanup of unhealthy recreated container failed", "docker_container_id", ShortID(newContainerID), "error", stopErr)
 		}
-		return RestartResult{}, fmt.Errorf("recreated container health check: %w", err)
+		return RestartResult{}, ErrCode("restart_health_check_failed", err)
 	}
 
 	if err := store.UpdateContainerHostBinding(ctx, containerRec.ID, newContainerID, newPort, "RUNNING"); err != nil {
 		if stopErr := docker.StopAndRemove(ctx, cli, newContainerID); stopErr != nil {
-			log.Warn("cleanup after binding update failure", "container_id", ShortID(newContainerID), "error", stopErr)
+			log.Warn("cleanup after binding update failure", "docker_container_id", ShortID(newContainerID), "error", stopErr)
 		}
-		return RestartResult{}, fmt.Errorf("update container binding: %w", err)
+		return RestartResult{}, ErrCode("restart_binding_update_failed", err)
 	}
 
 	shouldSyncCaddy := cfg.SyncCaddy
@@ -596,7 +641,8 @@ func ValidateRuntimeConfig(cfg *config.Config) error {
 }
 
 // WaitForHealthy polls localhost until the candidate container is ready.
-func WaitForHealthy(ctx context.Context, hostPort int, cfg *config.Config) error {
+func WaitForHealthy(ctx context.Context, log *slog.Logger, hostPort int, cfg *config.Config) error {
+	probeStart := time.Now()
 	path := cfg.HealthPath
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
@@ -604,6 +650,9 @@ func WaitForHealthy(ctx context.Context, hostPort int, cfg *config.Config) error
 	target := fmt.Sprintf("http://127.0.0.1:%d%s", hostPort, path)
 	client := &http.Client{Timeout: time.Duration(cfg.HealthTimeoutMS) * time.Millisecond}
 	var lastErr error
+	if log != nil {
+		log.Info("health_check start", "host_port", hostPort, "health_path", path, "retries", cfg.HealthRetries)
+	}
 	for attempt := 1; attempt <= cfg.HealthRetries; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
@@ -614,6 +663,9 @@ func WaitForHealthy(ctx context.Context, hostPort int, cfg *config.Config) error
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 			if resp.StatusCode >= cfg.HealthExpectedMin && resp.StatusCode <= cfg.HealthExpectedMax {
+				if log != nil {
+					log.Info("health_check end", "host_port", hostPort, "status", "ok", "attempt", attempt, "http_status", resp.StatusCode, "duration_ms", time.Since(probeStart).Milliseconds())
+				}
 				return nil
 			}
 			lastErr = fmt.Errorf("unexpected status code %d (expected %d..%d)", resp.StatusCode, cfg.HealthExpectedMin, cfg.HealthExpectedMax)
@@ -628,6 +680,9 @@ func WaitForHealthy(ctx context.Context, hostPort int, cfg *config.Config) error
 			return ctx.Err()
 		case <-time.After(time.Duration(cfg.HealthIntervalMS) * time.Millisecond):
 		}
+	}
+	if log != nil {
+		log.Info("health_check end", "host_port", hostPort, "status", "failed", "attempts", cfg.HealthRetries, "duration_ms", time.Since(probeStart).Milliseconds())
 	}
 	return fmt.Errorf("probe %s failed after %d attempts: %w", target, cfg.HealthRetries, lastErr)
 }
@@ -719,6 +774,7 @@ func CanonicalRepoURL(raw string) (string, error) {
 	u.RawPath = ""
 	u.RawQuery = ""
 	u.Fragment = ""
+	u.User = nil
 	return u.String(), nil
 }
 

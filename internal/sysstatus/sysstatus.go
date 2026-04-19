@@ -21,10 +21,11 @@ const BuildVersion = "v0.6.0 · phase 6"
 
 // Row is one line in the System panel.
 type Row struct {
-	ID     string `json:"id"`
-	Label  string `json:"label"`
-	Status string `json:"status"`
-	Detail string `json:"detail,omitempty"`
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	Status     string `json:"status"`
+	Detail     string `json:"detail,omitempty"`
+	ErrorCode  string `json:"error_code,omitempty"`
 }
 
 // Response is returned by GET /api/system/status.
@@ -101,7 +102,13 @@ func GatherCached(ctx context.Context, cfg *config.Config) Response {
 func checkDocker(ctx context.Context) Row {
 	cli, err := docker.NewClient(ctx)
 	if err != nil {
-		return Row{ID: "docker", Label: "Docker daemon", Status: "DOWN", Detail: truncate(err.Error(), 220)}
+		return Row{
+			ID:        "docker",
+			Label:     "Docker daemon",
+			Status:    "DOWN",
+			Detail:    "Cannot connect to the Docker daemon. Check DOCKER_HOST and that Docker is running.",
+			ErrorCode: "docker_unreachable",
+		}
 	}
 	_ = cli.Close()
 	return Row{ID: "docker", Label: "Docker daemon", Status: "RUNNING"}
@@ -118,7 +125,13 @@ func checkCaddy(ctx context.Context, cfg *config.Config) Row {
 		}
 	}
 	if err := caddy.ValidateRoot(ctx, cfg.CaddyBin, root); err != nil {
-		return Row{ID: "caddy", Label: "Caddy (HTTPS)", Status: "ERROR", Detail: truncate(err.Error(), 280)}
+		return Row{
+			ID:        "caddy",
+			Label:     "Caddy (HTTPS)",
+			Status:    "ERROR",
+			Detail:    "caddy validate failed for the configured root Caddyfile. See server logs for details.",
+			ErrorCode: "caddy_validate_failed",
+		}
 	}
 	if !tcpOpen(ctx, "127.0.0.1:443", 600*time.Millisecond) && !tcpOpen(ctx, "127.0.0.1:80", 600*time.Millisecond) {
 		return Row{
@@ -144,12 +157,24 @@ func checkWebhookRoute(ctx context.Context, cfg *config.Config) Row {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return Row{ID: "webhooks", Label: "Webhook route", Status: "ERROR", Detail: truncate(err.Error(), 200)}
+		return Row{
+			ID:        "webhooks",
+			Label:     "Webhook route",
+			Status:    "ERROR",
+			Detail:    "Could not build probe request for the webhook URL.",
+			ErrorCode: "webhook_probe_build_failed",
+		}
 	}
 	client := &http.Client{Timeout: 4 * time.Second}
 	res, err := client.Do(req)
 	if err != nil {
-		return Row{ID: "webhooks", Label: "Webhook route", Status: "DOWN", Detail: truncate(err.Error(), 220)}
+		return Row{
+			ID:        "webhooks",
+			Label:     "Webhook route",
+			Status:    "DOWN",
+			Detail:    "Could not reach the HostForge listen address over loopback HTTP.",
+			ErrorCode: "webhook_route_unreachable",
+		}
 	}
 	defer res.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 512))
@@ -196,12 +221,4 @@ func loopbackHTTPBase(listen string) string {
 		return fmt.Sprintf("http://[%s]:%s", host, port)
 	}
 	return "http://" + net.JoinHostPort(host, port)
-}
-
-func truncate(s string, max int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "…"
 }

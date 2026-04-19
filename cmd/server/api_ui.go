@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/hostforge/hostforge/internal/docker"
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/models"
+	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
 	"github.com/hostforge/hostforge/internal/services"
 )
@@ -88,7 +90,7 @@ type apiDomain struct {
 type caddySyncOutcome struct {
 	Attempted bool   `json:"attempted"`
 	OK        bool   `json:"ok"`
-	Error     string `json:"error,omitempty"`
+	Error     string `json:"error,omitempty"` // stable machine-oriented code when attempted && !ok
 }
 
 type domainNameRequest struct {
@@ -100,6 +102,19 @@ type repositoryBranchesResponse struct {
 	RepoURL       string   `json:"repo_url"`
 	Branches      []string `json:"branches"`
 	DefaultBranch string   `json:"default_branch"`
+}
+
+func mapDomainValidationError(err error) string {
+	switch {
+	case errors.Is(err, dnsops.ErrDomainNameEmpty):
+		return "domain_name_empty"
+	case errors.Is(err, dnsops.ErrDomainNameTooLong):
+		return "domain_name_too_long"
+	case errors.Is(err, dnsops.ErrDomainNameInvalid):
+		return "domain_name_invalid"
+	default:
+		return "invalid_domain_name"
+	}
 }
 
 func (s *server) handleProjectsCollection(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +171,7 @@ func (s *server) handleProjectsList(w http.ResponseWriter, r *http.Request) {
 	for _, p := range items {
 		apiItem := projectToAPI(p)
 		if err := s.attachProjectSummary(r.Context(), &apiItem, fullDNS); err != nil {
-			s.log.Warn("failed to build project summary", "project_id", p.ID, "error", err)
+			s.requestLog(r).Warn("failed to build project summary", "project_id", p.ID, "error", err)
 		}
 		out = append(out, apiItem)
 	}
@@ -302,12 +317,12 @@ func (s *server) handleProjectDelete(w http.ResponseWriter, r *http.Request, pro
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
 		return
 	}
-	if err := services.DeleteProject(r.Context(), s.log.With("project_id", projectID), s.cfg, s.store, projectID); err != nil {
+	if err := services.DeleteProject(r.Context(), s.requestLog(r).With("project_id", projectID), s.cfg, s.store, projectID); err != nil {
 		if errorsIsNoRows(err) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "project_not_found"})
 			return
 		}
-		s.log.Error("delete project failed", "project_id", projectID, "error", err)
+		s.requestLog(r).Error("delete project failed", "project_id", projectID, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "delete_project_failed"})
 		return
 	}
@@ -326,7 +341,7 @@ func (s *server) handleProjectGet(w http.ResponseWriter, r *http.Request, projec
 	}
 	resp := projectToAPI(project)
 	if err := s.attachProjectSummary(r.Context(), &resp, true); err != nil {
-		s.log.Warn("failed to load project summary", "project_id", projectID, "error", err)
+		s.requestLog(r).Warn("failed to load project summary", "project_id", projectID, "error", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"project": resp})
 }
@@ -371,7 +386,7 @@ func (s *server) handleProjectDomainsPost(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := dnsops.ValidateDomainName(body.DomainName); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": mapDomainValidationError(err)})
 		return
 	}
 	d, err := s.store.CreateDomain(r.Context(), projectID, body.DomainName)
@@ -383,7 +398,7 @@ func (s *server) handleProjectDomainsPost(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "create_domain_failed"})
 		return
 	}
-	syncOut := s.caddySyncAfterDomainChange(r.Context())
+	syncOut := s.caddySyncAfterDomainChange(r.Context(), s.requestLog(r))
 	expectedIPv4, v4src, v4warn := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
 	g := dnsops.BuildGuidanceWithIPv4(r.Context(), s.cfg, []string{d.DomainName}, expectedIPv4, v4src, v4warn)
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -409,7 +424,7 @@ func (s *server) handleProjectDomainPatch(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := dnsops.ValidateDomainName(body.DomainName); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": mapDomainValidationError(err)})
 		return
 	}
 	d, err := s.store.UpdateDomainName(r.Context(), projectID, domainID, body.DomainName)
@@ -425,7 +440,7 @@ func (s *server) handleProjectDomainPatch(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "update_domain_failed"})
 		return
 	}
-	syncOut := s.caddySyncAfterDomainChange(r.Context())
+	syncOut := s.caddySyncAfterDomainChange(r.Context(), s.requestLog(r))
 	expectedIPv4, v4src, v4warn := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
 	g := dnsops.BuildGuidanceWithIPv4(r.Context(), s.cfg, []string{d.DomainName}, expectedIPv4, v4src, v4warn)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -466,7 +481,7 @@ func (s *server) handleProjectDomainDelete(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "delete_domain_failed"})
 		return
 	}
-	syncOut := s.caddySyncAfterDomainChange(r.Context())
+	syncOut := s.caddySyncAfterDomainChange(r.Context(), s.requestLog(r))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":     "deleted",
 		"domain_id":  domainID,
@@ -474,7 +489,7 @@ func (s *server) handleProjectDomainDelete(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func (s *server) caddySyncAfterDomainChange(ctx context.Context) caddySyncOutcome {
+func (s *server) caddySyncAfterDomainChange(ctx context.Context, lg *slog.Logger) caddySyncOutcome {
 	out := caddySyncOutcome{}
 	if !s.cfg.DomainSyncAfterMutate {
 		return out
@@ -483,12 +498,18 @@ func (s *server) caddySyncAfterDomainChange(ctx context.Context) caddySyncOutcom
 		return out
 	}
 	out.Attempted = true
-	if err := services.SyncCaddyRoutes(ctx, s.log, s.cfg, s.store); err != nil {
+	if lg == nil {
+		lg = s.log
+	}
+	t0 := time.Now()
+	if err := services.SyncCaddyRoutes(ctx, lg, s.cfg, s.store); err != nil {
 		out.OK = false
-		out.Error = err.Error()
+		out.Error = publicAPIError(err, "caddy_sync_failed")
+		lg.Warn("caddy sync after domain change failed", "error", err, "public_code", out.Error, "duration_ms", time.Since(t0).Milliseconds())
 		return out
 	}
 	out.OK = true
+	lg.Info("caddy sync after domain change complete", "duration_ms", time.Since(t0).Milliseconds())
 	return out
 }
 
@@ -507,7 +528,7 @@ func (s *server) handleProjectDeploymentsGet(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "list_deployments_failed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"deployments": s.enrichDeploymentsWithContainers(r.Context(), items)})
+	writeJSON(w, http.StatusOK, map[string]any{"deployments": s.enrichDeploymentsWithContainers(r, items)})
 }
 
 func (s *server) handleDeploymentsCollection(w http.ResponseWriter, r *http.Request) {
@@ -524,7 +545,7 @@ func (s *server) handleDeploymentsCollection(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "list_deployments_failed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"deployments": s.enrichDeploymentsWithContainers(r.Context(), all)})
+	writeJSON(w, http.StatusOK, map[string]any{"deployments": s.enrichDeploymentsWithContainers(r, all)})
 }
 
 func (s *server) handleProjectDeployAction(w http.ResponseWriter, r *http.Request, projectID string) {
@@ -537,16 +558,16 @@ func (s *server) handleProjectDeployAction(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "project_lookup_failed"})
 		return
 	}
-	requestID := newRequestID()
-	deployLog := s.log.With("request_id", requestID, "project_id", project.ID)
+	deployLog := s.requestLog(r).With("project_id", project.ID)
 	job, err := services.PrepareDeploy(r.Context(), s.cfg, s.store, services.DeployPrepareInput{
 		Project: project,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "failed_to_accept_deployment"})
+		deployLog.Error("prepare deploy failed", "error", err, "public_code", publicAPIError(err, "failed_to_accept_deployment"))
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": publicAPIError(err, "failed_to_accept_deployment")})
 		return
 	}
-	deployLog = deployLog.With("deployment_id", job.Deployment.ID, "repo_url", project.RepoURL, "branch", project.Branch)
+	deployLog = deployLog.With("deployment_id", job.Deployment.ID, "repo_url", redact.RepoURLForLog(project.RepoURL), "branch", project.Branch)
 	asyncRequested := s.cfg.WebhookAsync || strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("async")), "true") || r.URL.Query().Get("async") == "1"
 	if asyncRequested {
 		go func(job services.DeployJob) {
@@ -562,17 +583,20 @@ func (s *server) handleProjectDeployAction(w http.ResponseWriter, r *http.Reques
 		})
 		return
 	}
+	tExec := time.Now()
 	result, err := services.ExecuteDeploy(r.Context(), deployLog, s.cfg, s.store, job)
 	if err != nil {
+		deployLog.Error("execute deploy failed", "error", err, "public_code", publicAPIError(err, "deploy_failed"), "duration_ms", time.Since(tExec).Milliseconds())
 		writeJSON(w, http.StatusOK, deploymentActionResponse{
 			Status:       "failed",
 			Mode:         "sync",
 			ProjectID:    project.ID,
 			DeploymentID: job.Deployment.ID,
-			Error:        err.Error(),
+			Error:        publicAPIError(err, "deploy_failed"),
 		})
 		return
 	}
+	deployLog.Info("execute deploy finished", "deployment_id", result.DeploymentID, "duration_ms", time.Since(tExec).Milliseconds())
 	writeJSON(w, http.StatusOK, deploymentActionResponse{
 		Status:       "success",
 		Mode:         "sync",
@@ -593,13 +617,15 @@ func (s *server) handleProjectRestartAction(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "project_lookup_failed"})
 		return
 	}
-	result, err := services.RestartProject(r.Context(), s.log.With("project_id", projectID), s.cfg, s.store, project)
+	result, err := services.RestartProject(r.Context(), s.requestLog(r).With("project_id", projectID), s.cfg, s.store, project)
 	if err != nil {
+		code := publicAPIError(err, "restart_failed")
+		status := http.StatusBadGateway
 		if errorsIsNoRows(err) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "active_container_not_found"})
-			return
+			status = http.StatusNotFound
 		}
-		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": err.Error()})
+		s.requestLog(r).Warn("restart failed", "project_id", projectID, "error", err, "public_code", code)
+		writeJSON(w, status, map[string]string{"status": "error", "error": code})
 		return
 	}
 	containerRec, err := s.store.GetContainerByDeploymentID(r.Context(), result.DeploymentID)
@@ -653,13 +679,15 @@ func (s *server) handleProjectRollbackAction(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "project_lookup_failed"})
 		return
 	}
-	result, err := services.RollbackProject(r.Context(), s.log.With("project_id", projectID), s.cfg, s.store, project)
+	result, err := services.RollbackProject(r.Context(), s.requestLog(r).With("project_id", projectID), s.cfg, s.store, project)
 	if err != nil {
+		code := publicAPIError(err, "rollback_failed")
 		status := http.StatusBadRequest
 		if !errors.Is(err, sql.ErrNoRows) {
 			status = http.StatusInternalServerError
 		}
-		writeJSON(w, status, map[string]string{"status": "error", "error": err.Error()})
+		s.requestLog(r).Warn("rollback failed", "project_id", projectID, "error", err, "public_code", code)
+		writeJSON(w, status, map[string]string{"status": "error", "error": code})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -736,17 +764,18 @@ func (s *server) attachProjectSummary(ctx context.Context, out *apiProject, full
 	return nil
 }
 
-func (s *server) enrichDeploymentsWithContainers(ctx context.Context, items []models.Deployment) []apiDeployment {
+func (s *server) enrichDeploymentsWithContainers(r *http.Request, items []models.Deployment) []apiDeployment {
 	if len(items) == 0 {
 		return nil
 	}
+	ctx := r.Context()
 	ids := make([]string, len(items))
 	for i := range items {
 		ids[i] = items[i].ID
 	}
 	byDep, err := s.store.GetLatestContainersByDeploymentIDs(ctx, ids)
 	if err != nil {
-		s.log.Warn("batch container lookup failed", "error", err)
+		s.requestLog(r).Warn("batch container lookup failed", "error", err)
 		byDep = nil
 	}
 	out := make([]apiDeployment, 0, len(items))
