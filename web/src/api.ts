@@ -22,11 +22,19 @@ export type CaddySyncOutcome = {
   error?: string;
 };
 
+export type ApiDeployConfig = {
+  runtime: string;
+  install_cmd: string;
+  build_cmd: string;
+  start_cmd: string;
+};
+
 export type ApiProject = {
   id: string;
   name: string;
   repo_url: string;
   branch: string;
+  deploy: ApiDeployConfig;
   created_at: string;
   updated_at: string;
   latest_deployment?: ApiDeployment;
@@ -122,10 +130,16 @@ export type HTTPRequestRow = {
   started_at: string;
 };
 
-type CreateProjectRequest = {
+export type CreateProjectRequest = {
   repo_url: string;
   branch: string;
   project_name: string;
+  deploy?: {
+    runtime?: string;
+    install_cmd?: string;
+    build_cmd?: string;
+    start_cmd?: string;
+  };
 };
 
 export type RepositoryBranches = {
@@ -283,6 +297,16 @@ export async function createProject(input: CreateProjectRequest): Promise<ApiPro
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
+  });
+  const body = await readJSON<{ project: ApiProject }>(res);
+  return body.project;
+}
+
+export async function updateProjectDeploy(projectID: string, deploy: ApiDeployConfig): Promise<ApiProject> {
+  const res = await apiFetch(`/api/projects/${projectID}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deploy }),
   });
   const body = await readJSON<{ project: ApiProject }>(res);
   return body.project;

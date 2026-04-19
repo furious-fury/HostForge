@@ -117,6 +117,16 @@ go run ./cmd/cli deploy https://github.com/heroku/node-js-getting-started
 
 **Deploy images:** `hostforge deploy` uses `nixpacks build . --name <image>` so Nixpacks emits a Docker image and HostForge runs a container. Image tags use `hostforge/<worktree-slug>:<utc-build-id>`.
 
+### Bun apps and Nixpacks (Node 18 EOL)
+
+Some Bun + frontend repos trigger Nixpacks’ **Node** provider with **`nodejs_18`** in the setup phase. On current **nixpkgs**, Node 18 is removed (`Node.js 18.x has reached End-Of-Life and has been removed`), so the image build fails even though the app runs on **Bun** elsewhere (e.g. Vercel).
+
+**HostForge override:** each project can set **`deploy.runtime`** to **`bun`**. On every deploy, after `git clone`, HostForge writes a **worktree-local `nixpacks.toml`** (not committed to your repo) with **`[variables] NIXPACKS_NODE_VERSION = "20"`**, **`[phases.setup]` `nixPkgs` including `bun` and `nodejs_20`** (not 18), and default **`bun install` / `bun run build` / `bun run start`** when you leave the command fields empty. (We intentionally do **not** set `providers = ["bun"]` — several Nixpacks versions error with **Provider bun not found**.) Deploy logs include a short banner showing the effective runtime and commands.
+
+**Precedence:** your repository may already contain **`nixpacks.toml`**. Nixpacks merges layers according to its own rules; HostForge’s generated file lives in the same directory as the clone. Prefer **repo-owned `nixpacks.toml`** for complex or version-controlled plans; use **HostForge project settings** for a consistent operator default across branches without editing the repo.
+
+**Debugging:** from the printed worktree path, run **`nixpacks plan .`** and inspect the setup/install/build/start phases. Compare with the **`hostforge: ===== generated worktree nixpacks.toml`** section in the deployment build log.
+
 ### Operator validation ([`task_list.md`](./task_list.md) — Detailed backlog §1)
 
 Use **[`docs/operator-validation-phase1.md`](./docs/operator-validation-phase1.md)** for staged proof of Docker (**1.1**), public HTTPS + restarts (**1.2**), and zero-downtime cutover (**1.3**). For **1.1** you can also run **`./scripts/operator-validation-phase1.sh`** (full automation) or **`hostforge validate docker`** / **`preflight`** for quick checks. Item **1.1** is recorded **PASS** in the runbook (2026-04-19, WSL2 + Docker Engine); **1.2** / **1.3** need a VPS with real DNS + Caddy—complete the runbook checklists and paste evidence in that file, then tick the matching exit rows in `task_list.md`.
@@ -361,8 +371,9 @@ Vite proxy config (`web/vite.config.ts` and `web/vite.config.js`) forwards:
 ### New API surface for UI
 
 - `GET /api/projects`
-- `POST /api/projects` (create project from repo URL/branch/name)
-- `GET /api/projects/{id}` (includes `domains` and `dns_guidance` when domains exist)
+- `POST /api/projects` (create project from repo URL/branch/name; optional `deploy`: `{ "runtime": "auto"|"bun", "install_cmd", "build_cmd", "start_cmd" }`)
+- `GET /api/projects/{id}` (includes `deploy`, `domains`, and `dns_guidance` when domains exist)
+- `PATCH /api/projects/{id}` (body: `{ "deploy": { "runtime", "install_cmd", "build_cmd", "start_cmd" } }` — updates persisted Nixpacks overrides)
 - `DELETE /api/projects/{id}` (removes project, deployments, domains, and stops/removes linked Docker containers; syncs Caddy when domains existed or `HOSTFORGE_SYNC_CADDY` is set)
 - `GET /api/projects/{id}/domains` (includes `dns_guidance` for all hostnames on the project)
 - `POST /api/projects/{id}/domains` (body: `{"domain_name":"app.example.com"}`; returns `domain`, `dns_guidance`, optional `caddy_sync`)
@@ -384,10 +395,11 @@ Vite proxy config (`web/vite.config.ts` and `web/vite.config.js`) forwards:
 - **Domains:** each project page includes **Domains** management (add / edit / remove hostnames) plus **copyable DNS hints** derived from the same guidance as the API. Caddy reload after changes follows `HOSTFORGE_DOMAIN_SYNC_AFTER_MUTATE` and requires `HOSTFORGE_CADDY_ROOT_CONFIG` when you want automatic sync.
 
 - New project flow supports:
-  1. Source step (repo URL, branch default `main`, name suggestion)
+  1. Source step (repo URL, branch default `main`, name suggestion, optional **Bun / Nixpacks** runtime + install/build/start overrides)
   2. Immediate deploy trigger and transition to BUILDING state
   3. Live deployment view with WebSocket logs
   4. Success/failure states with follow-up actions
+- Project page includes **Build & runtime (Nixpacks)** to edit the same `deploy` fields and save via `PATCH` (redeploy to rebuild with the new worktree `nixpacks.toml`).
 - Per-project environment-variable editing in the UI remains future scope; use the API/CLI patterns you have today.
 
 ### UI structure (post-redesign)

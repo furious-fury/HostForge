@@ -43,6 +43,10 @@ export function NewProjectPage() {
   const [branchLookupError, setBranchLookupError] = useState("");
   const [branchTouched, setBranchTouched] = useState(false);
   const branchLookupSeq = useRef(0);
+  const [deployRuntime, setDeployRuntime] = useState<"auto" | "bun">("auto");
+  const [deployInstallCmd, setDeployInstallCmd] = useState("");
+  const [deployBuildCmd, setDeployBuildCmd] = useState("");
+  const [deployStartCmd, setDeployStartCmd] = useState("");
 
   // After success, use an index past the last step so the stepper shows all steps completed (not “stuck” on Result).
   const stepIndex =
@@ -75,10 +79,25 @@ export function NewProjectPage() {
     setMessage("");
     setErrorMessage("");
     try {
+      const hasDeployOverrides =
+        deployRuntime === "bun" ||
+        deployInstallCmd.trim() ||
+        deployBuildCmd.trim() ||
+        deployStartCmd.trim();
       const project = await createProject({
         repo_url: repoURL.trim(),
         branch: branch.trim(),
         project_name: projectName.trim(),
+        ...(hasDeployOverrides
+          ? {
+              deploy: {
+                runtime: deployRuntime,
+                install_cmd: deployInstallCmd.trim(),
+                build_cmd: deployBuildCmd.trim(),
+                start_cmd: deployStartCmd.trim(),
+              },
+            }
+          : {}),
       });
       void queryClient.invalidateQueries({ queryKey: fleetKeys.projects });
       setProjectID(project.id);
@@ -252,6 +271,52 @@ export function NewProjectPage() {
                   placeholder="my-app"
                 />
               </Field>
+            </div>
+            <div className="rounded border border-border bg-surface-alt/40 p-4">
+              <div className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
+                Build runtime (Nixpacks)
+              </div>
+              <p className="mt-1 text-xs text-muted">
+                Choose <span className="font-medium text-text">Bun</span> to pin a Bun-friendly Nixpacks plan (Node 20,
+                not Node 18). Leave on <span className="font-medium text-text">Auto</span> for stock Nixpacks detection,
+                or add custom install/build/start commands only when needed.
+              </p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <Field label="Runtime">
+                  <select
+                    className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+                    value={deployRuntime}
+                    onChange={(e) => setDeployRuntime(e.target.value as "auto" | "bun")}
+                  >
+                    <option value="auto">Auto (Nixpacks default)</option>
+                    <option value="bun">Bun (recommended for Bun apps)</option>
+                  </select>
+                </Field>
+                <Field label="Install command (optional)">
+                  <input
+                    className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+                    value={deployInstallCmd}
+                    onChange={(e) => setDeployInstallCmd(e.target.value)}
+                    placeholder={deployRuntime === "bun" ? "default: bun install" : "e.g. npm ci"}
+                  />
+                </Field>
+                <Field label="Build command (optional)">
+                  <input
+                    className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+                    value={deployBuildCmd}
+                    onChange={(e) => setDeployBuildCmd(e.target.value)}
+                    placeholder={deployRuntime === "bun" ? "default: bun run build" : "e.g. npm run build"}
+                  />
+                </Field>
+                <Field label="Start command (optional)">
+                  <input
+                    className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+                    value={deployStartCmd}
+                    onChange={(e) => setDeployStartCmd(e.target.value)}
+                    placeholder={deployRuntime === "bun" ? "default: bun run start" : "e.g. npm run start"}
+                  />
+                </Field>
+              </div>
             </div>
             <div className="flex items-center justify-between border-t border-border pt-4">
               <div className="text-xs text-muted">

@@ -51,9 +51,13 @@ type AttachContainerInput struct {
 
 // CreateProjectInput defines explicit project fields supplied by the UI/API.
 type CreateProjectInput struct {
-	Name    string
-	RepoURL string
-	Branch  string
+	Name             string
+	RepoURL          string
+	Branch           string
+	DeployRuntime    string
+	DeployInstallCmd string
+	DeployBuildCmd   string
+	DeployStartCmd   string
 }
 
 // GetProjectByRepoAndBranch returns an existing project by repo URL and branch.
@@ -64,10 +68,10 @@ func (s *Store) GetProjectByRepoAndBranch(ctx context.Context, repoURL, branch s
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, name, repo_url, branch, created_at, updated_at FROM projects WHERE repo_url = ? AND branch = ?`,
+		`SELECT id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at FROM projects WHERE repo_url = ? AND branch = ?`,
 		trimmedRepo,
 		trimmedBranch,
-	).Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &createdAt, &updatedAt)
+	).Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &p.DeployRuntime, &p.DeployInstallCmd, &p.DeployBuildCmd, &p.DeployStartCmd, &createdAt, &updatedAt)
 	if err != nil {
 		return models.Project{}, fmt.Errorf("lookup project by repo+branch: %w", err)
 	}
@@ -80,7 +84,7 @@ func (s *Store) GetProjectByRepoAndBranch(ctx context.Context, repoURL, branch s
 func (s *Store) ListProjectsByRepoURL(ctx context.Context, repoURL string) ([]models.Project, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, name, repo_url, branch, created_at, updated_at FROM projects WHERE repo_url = ? ORDER BY created_at DESC`,
+		`SELECT id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at FROM projects WHERE repo_url = ? ORDER BY created_at DESC`,
 		strings.TrimSpace(repoURL),
 	)
 	if err != nil {
@@ -92,7 +96,7 @@ func (s *Store) ListProjectsByRepoURL(ctx context.Context, repoURL string) ([]mo
 	for rows.Next() {
 		var p models.Project
 		var createdAt, updatedAt string
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &p.DeployRuntime, &p.DeployInstallCmd, &p.DeployBuildCmd, &p.DeployStartCmd, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan project: %w", err)
 		}
 		p.CreatedAt = parseTime(createdAt)
@@ -112,10 +116,10 @@ func (s *Store) EnsureProject(ctx context.Context, repoURL, branch string) (mode
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, name, repo_url, branch, created_at, updated_at FROM projects WHERE repo_url = ? AND branch = ?`,
+		`SELECT id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at FROM projects WHERE repo_url = ? AND branch = ?`,
 		trimmedRepo,
 		trimmedBranch,
-	).Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &createdAt, &updatedAt)
+	).Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &p.DeployRuntime, &p.DeployInstallCmd, &p.DeployBuildCmd, &p.DeployStartCmd, &createdAt, &updatedAt)
 	if err == nil {
 		p.CreatedAt = parseTime(createdAt)
 		p.UpdatedAt = parseTime(updatedAt)
@@ -127,12 +131,16 @@ func (s *Store) EnsureProject(ctx context.Context, repoURL, branch string) (mode
 
 	now := time.Now().UTC()
 	p = models.Project{
-		ID:        newID(),
-		Name:      projectNameFromURL(trimmedRepo),
-		RepoURL:   trimmedRepo,
-		Branch:    trimmedBranch,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:               newID(),
+		Name:             projectNameFromURL(trimmedRepo),
+		RepoURL:          trimmedRepo,
+		Branch:           trimmedBranch,
+		DeployRuntime:    models.DeployRuntimeAuto,
+		DeployInstallCmd: "",
+		DeployBuildCmd:   "",
+		DeployStartCmd:   "",
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	_, err = s.db.ExecContext(
 		ctx,
@@ -159,21 +167,33 @@ func (s *Store) CreateProject(ctx context.Context, in CreateProjectInput) (model
 	if name == "" {
 		name = projectNameFromURL(repoURL)
 	}
+	rt := strings.TrimSpace(in.DeployRuntime)
+	if rt == "" {
+		rt = models.DeployRuntimeAuto
+	}
 	p := models.Project{
-		ID:        newID(),
-		Name:      name,
-		RepoURL:   repoURL,
-		Branch:    branch,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:               newID(),
+		Name:             name,
+		RepoURL:          repoURL,
+		Branch:           branch,
+		DeployRuntime:    rt,
+		DeployInstallCmd: strings.TrimSpace(in.DeployInstallCmd),
+		DeployBuildCmd:   strings.TrimSpace(in.DeployBuildCmd),
+		DeployStartCmd:   strings.TrimSpace(in.DeployStartCmd),
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO projects(id, name, repo_url, branch, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO projects(id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID,
 		p.Name,
 		p.RepoURL,
 		p.Branch,
+		p.DeployRuntime,
+		p.DeployInstallCmd,
+		p.DeployBuildCmd,
+		p.DeployStartCmd,
 		p.CreatedAt.Format(time.RFC3339),
 		p.UpdatedAt.Format(time.RFC3339),
 	)
@@ -387,15 +407,45 @@ func (s *Store) GetProjectByID(ctx context.Context, projectID string) (models.Pr
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, name, repo_url, branch, created_at, updated_at FROM projects WHERE id = ?`,
+		`SELECT id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at FROM projects WHERE id = ?`,
 		strings.TrimSpace(projectID),
-	).Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &createdAt, &updatedAt)
+	).Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &p.DeployRuntime, &p.DeployInstallCmd, &p.DeployBuildCmd, &p.DeployStartCmd, &createdAt, &updatedAt)
 	if err != nil {
 		return models.Project{}, fmt.Errorf("lookup project by id: %w", err)
 	}
 	p.CreatedAt = parseTime(createdAt)
 	p.UpdatedAt = parseTime(updatedAt)
 	return p, nil
+}
+
+// UpdateProjectDeployConfig updates Nixpacks-related deploy fields for a project.
+func (s *Store) UpdateProjectDeployConfig(ctx context.Context, projectID, runtime, install, build, start string) (models.Project, error) {
+	pid := strings.TrimSpace(projectID)
+	if pid == "" {
+		return models.Project{}, fmt.Errorf("empty project id")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE projects SET deploy_runtime = ?, deploy_install_cmd = ?, deploy_build_cmd = ?, deploy_start_cmd = ?, updated_at = ? WHERE id = ?`,
+		strings.TrimSpace(runtime),
+		strings.TrimSpace(install),
+		strings.TrimSpace(build),
+		strings.TrimSpace(start),
+		now,
+		pid,
+	)
+	if err != nil {
+		return models.Project{}, fmt.Errorf("update project deploy config: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return models.Project{}, err
+	}
+	if n == 0 {
+		return models.Project{}, sql.ErrNoRows
+	}
+	return s.GetProjectByID(ctx, pid)
 }
 
 // AttachContainer inserts a container row for a successful run (ports and Docker ID).
@@ -529,7 +579,7 @@ func (s *Store) UpdateContainerStatus(ctx context.Context, containerID, status s
 
 // ListProjects returns all projects, newest first by created_at.
 func (s *Store) ListProjects(ctx context.Context) ([]models.Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, repo_url, branch, created_at, updated_at FROM projects ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at FROM projects ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
@@ -539,7 +589,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]models.Project, error) {
 	for rows.Next() {
 		var p models.Project
 		var createdAt, updatedAt string
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &p.DeployRuntime, &p.DeployInstallCmd, &p.DeployBuildCmd, &p.DeployStartCmd, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan project: %w", err)
 		}
 		p.CreatedAt = parseTime(createdAt)

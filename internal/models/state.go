@@ -21,14 +21,25 @@ const (
 	SSLStatusError   = "ERROR"
 )
 
+// DeployRuntime values for projects.deploy_runtime (HostForge → Nixpacks worktree config).
+const (
+	DeployRuntimeAuto = "auto"
+	DeployRuntimeBun  = "bun"
+)
+
 // Project is a Git source (repo + branch) that deployments belong to.
 type Project struct {
-	ID        string
-	Name      string
-	RepoURL   string
-	Branch    string // empty means remote default branch at creation time
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID      string
+	Name    string
+	RepoURL string
+	Branch  string // empty means remote default branch at creation time
+	// DeployRuntime selects how HostForge generates a worktree-local nixpacks.toml before build (auto | bun).
+	DeployRuntime    string
+	DeployInstallCmd string
+	DeployBuildCmd   string
+	DeployStartCmd   string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // Deployment is one build/run attempt for a project.

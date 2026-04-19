@@ -136,14 +136,14 @@ func PrepareDeploy(ctx context.Context, cfg *config.Config, store *repository.St
 func recordDeployObs(ctx context.Context, log *slog.Logger, job DeployJob, step, status string, started time.Time, durMs int64, errCode string) {
 	obs.RecordDeployStep(ctx, log, repository.DeployStepRecord{
 		DeploymentID: job.Deployment.ID,
-		ProjectID:      job.Project.ID,
-		RequestID:      reqctx.RequestID(ctx),
-		Step:           step,
-		Status:         status,
-		DurationMS:     durMs,
-		ErrorCode:      errCode,
-		StartedAt:      started,
-		EndedAt:        time.Now().UTC(),
+		ProjectID:    job.Project.ID,
+		RequestID:    reqctx.RequestID(ctx),
+		Step:         step,
+		Status:       status,
+		DurationMS:   durMs,
+		ErrorCode:    errCode,
+		StartedAt:    started,
+		EndedAt:      time.Now().UTC(),
 	})
 }
 
@@ -226,6 +226,25 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	msClone := time.Since(t0).Milliseconds()
 	log.Info("deploy step", "step", "clone_end", "status", "ok", "duration_ms", msClone)
 	recordDeployObs(ctx, log, job, "clone", "ok", t0, msClone, "")
+
+	if tomlBody, gen := RenderWorktreeNixpacksToml(job.Project); gen {
+		nxPath := filepath.Join(job.Worktree, "nixpacks.toml")
+		if err := os.WriteFile(nxPath, []byte(tomlBody), 0o644); err != nil {
+			e := ErrCode("nixpacks_config_write_failed", err)
+			markFailed(e)
+			_, _ = fmt.Fprintf(combinedOut, "hostforge: failed to write nixpacks.toml: %v\n", err)
+			return DeployResult{}, e
+		}
+		rt, ei, eb, es := effectiveNixpacksCommandsForLog(job.Project)
+		_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== generated worktree nixpacks.toml (%d bytes) =====\n", len(tomlBody))
+		_, _ = fmt.Fprintf(combinedOut, "hostforge: effective nixpacks settings runtime=%s install=%q build=%q start=%q\n", rt, ei, eb, es)
+		_, _ = fmt.Fprint(combinedOut, "hostforge: (repo nixpacks.toml, if any, is merged/overridden per Nixpacks rules; see README)\n")
+		_, _ = fmt.Fprint(combinedOut, "hostforge: ========================================================\n\n")
+		log.Info("deploy step", "step", "nixpacks_toml_written", "path", nxPath, "bytes", len(tomlBody), "runtime", rt)
+	} else {
+		_, _ = fmt.Fprintf(combinedOut, "\nhostforge: no generated nixpacks.toml (runtime=auto, no command overrides)\n\n")
+		log.Info("deploy step", "step", "nixpacks_toml_skipped", "reason", "auto_no_overrides")
+	}
 
 	reservedPorts, err := store.ListAllocatedHostPorts(ctx, "")
 	if err != nil {
@@ -805,6 +824,28 @@ func DeleteProject(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	}
 
 	return nil
+}
+
+func effectiveNixpacksCommandsForLog(p models.Project) (runtime, install, build, start string) {
+	rt := strings.ToLower(strings.TrimSpace(p.DeployRuntime))
+	if rt == "" {
+		rt = models.DeployRuntimeAuto
+	}
+	install = strings.TrimSpace(p.DeployInstallCmd)
+	build = strings.TrimSpace(p.DeployBuildCmd)
+	start = strings.TrimSpace(p.DeployStartCmd)
+	if rt == models.DeployRuntimeBun {
+		if install == "" {
+			install = "bun install"
+		}
+		if build == "" {
+			build = "bun run build"
+		}
+		if start == "" {
+			start = "bun run start"
+		}
+	}
+	return rt, install, build, start
 }
 
 // CanonicalRepoURL normalizes repository URLs for consistent project matching.

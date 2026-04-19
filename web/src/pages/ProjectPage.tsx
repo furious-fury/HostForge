@@ -15,6 +15,7 @@ import {
   restartProject,
   rollbackProject,
   stopProject,
+  updateProjectDeploy,
   updateProjectDomain,
 } from "../api";
 import { projectAccessLinks } from "../accessUrls";
@@ -48,6 +49,13 @@ export function ProjectPage() {
   const [domainDeleteTarget, setDomainDeleteTarget] = useState<ApiDomain | null>(null);
   const [domainDeleteOpen, setDomainDeleteOpen] = useState(false);
   const [dnsRefreshing, setDnsRefreshing] = useState(false);
+  const [deployForm, setDeployForm] = useState({
+    runtime: "auto",
+    install_cmd: "",
+    build_cmd: "",
+    start_cmd: "",
+  });
+  const [deployBusy, setDeployBusy] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -58,6 +66,12 @@ export function ProjectPage() {
       ]);
       setProject(projectData);
       setDeployments(deploymentData);
+      setDeployForm({
+        runtime: projectData.deploy?.runtime || "auto",
+        install_cmd: projectData.deploy?.install_cmd || "",
+        build_cmd: projectData.deploy?.build_cmd || "",
+        start_cmd: projectData.deploy?.start_cmd || "",
+      });
       setError("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to load project");
@@ -314,6 +328,98 @@ export function ProjectPage() {
           Redeploy triggers a fresh build. Rollback re-points Caddy to the previous successful deploy. Stop halts the active container without removing it. The service URL is always under{" "}
           <span className="mono text-text">Access</span> above (restart does not change the loopback port).
         </p>
+      </Panel>
+
+      <Panel title="Build & runtime (Nixpacks)">
+        <p className="mb-3 text-xs text-muted">
+          Settings here are written to a generated <span className="mono text-text">nixpacks.toml</span> in the deploy
+          worktree before each build (see README). Use <span className="font-medium text-text">Bun</span> if Nixpacks
+          otherwise pulls an EOL Node 18 toolchain for Bun monorepos.
+        </p>
+        <div className="grid max-w-3xl gap-3 md:grid-cols-2">
+          <label className="flex flex-col gap-1.5">
+            <span className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Runtime</span>
+            <select
+              className="mono border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+              value={deployForm.runtime === "bun" ? "bun" : "auto"}
+              onChange={(e) =>
+                setDeployForm((f) => ({ ...f, runtime: e.target.value === "bun" ? "bun" : "auto" }))
+              }
+              disabled={loading || !project}
+            >
+              <option value="auto">Auto</option>
+              <option value="bun">Bun</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1.5 md:col-span-2">
+            <span className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
+              Install command
+            </span>
+            <input
+              className="mono border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+              value={deployForm.install_cmd}
+              onChange={(e) => setDeployForm((f) => ({ ...f, install_cmd: e.target.value }))}
+              placeholder="optional"
+              disabled={loading || !project}
+            />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
+              Build command
+            </span>
+            <input
+              className="mono border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+              value={deployForm.build_cmd}
+              onChange={(e) => setDeployForm((f) => ({ ...f, build_cmd: e.target.value }))}
+              placeholder="optional"
+              disabled={loading || !project}
+            />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
+              Start command
+            </span>
+            <input
+              className="mono border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+              value={deployForm.start_cmd}
+              onChange={(e) => setDeployForm((f) => ({ ...f, start_cmd: e.target.value }))}
+              placeholder="optional"
+              disabled={loading || !project}
+            />
+          </label>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={deployBusy || loading || !projectID}
+            onClick={async () => {
+              setDeployBusy(true);
+              try {
+                const updated = await updateProjectDeploy(projectID, {
+                  runtime: deployForm.runtime,
+                  install_cmd: deployForm.install_cmd.trim(),
+                  build_cmd: deployForm.build_cmd.trim(),
+                  start_cmd: deployForm.start_cmd.trim(),
+                });
+                setProject(updated);
+                setDeployForm({
+                  runtime: updated.deploy.runtime || "auto",
+                  install_cmd: updated.deploy.install_cmd || "",
+                  build_cmd: updated.deploy.build_cmd || "",
+                  start_cmd: updated.deploy.start_cmd || "",
+                });
+                toast.success("Deploy settings saved. Redeploy to apply in the next image build.");
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "Save failed.");
+              } finally {
+                setDeployBusy(false);
+              }
+            }}
+          >
+            {deployBusy ? "Saving…" : "Save deploy settings"}
+          </Button>
+        </div>
       </Panel>
 
       <Panel

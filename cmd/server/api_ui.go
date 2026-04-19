@@ -21,10 +21,22 @@ import (
 	"github.com/hostforge/hostforge/internal/services"
 )
 
+type apiDeployConfig struct {
+	Runtime    string `json:"runtime"`
+	InstallCmd string `json:"install_cmd"`
+	BuildCmd   string `json:"build_cmd"`
+	StartCmd   string `json:"start_cmd"`
+}
+
 type createProjectRequest struct {
-	RepoURL     string `json:"repo_url"`
-	Branch      string `json:"branch"`
-	ProjectName string `json:"project_name"`
+	RepoURL     string           `json:"repo_url"`
+	Branch      string           `json:"branch"`
+	ProjectName string           `json:"project_name"`
+	Deploy      *apiDeployConfig `json:"deploy,omitempty"`
+}
+
+type patchProjectRequest struct {
+	Deploy *apiDeployConfig `json:"deploy,omitempty"`
 }
 
 type deploymentActionResponse struct {
@@ -38,16 +50,17 @@ type deploymentActionResponse struct {
 }
 
 type apiProject struct {
-	ID               string          `json:"id"`
-	Name             string          `json:"name"`
-	RepoURL          string          `json:"repo_url"`
-	Branch           string          `json:"branch"`
-	CreatedAt        string          `json:"created_at"`
-	UpdatedAt        string          `json:"updated_at"`
-	LatestDeployment *apiDeployment  `json:"latest_deployment,omitempty"`
-	Domains          []apiDomain     `json:"domains,omitempty"`
+	ID               string           `json:"id"`
+	Name             string           `json:"name"`
+	RepoURL          string           `json:"repo_url"`
+	Branch           string           `json:"branch"`
+	Deploy           apiDeployConfig  `json:"deploy"`
+	CreatedAt        string           `json:"created_at"`
+	UpdatedAt        string           `json:"updated_at"`
+	LatestDeployment *apiDeployment   `json:"latest_deployment,omitempty"`
+	Domains          []apiDomain      `json:"domains,omitempty"`
 	DNSGuidance      *dnsops.Guidance `json:"dns_guidance,omitempty"`
-	CurrentContainer *apiContainer   `json:"current_container,omitempty"`
+	CurrentContainer *apiContainer    `json:"current_container,omitempty"`
 }
 
 type apiDeployment struct {
@@ -79,7 +92,7 @@ type apiDomain struct {
 	ID                 string   `json:"id"`
 	ProjectID          string   `json:"project_id"`
 	DomainName         string   `json:"domain_name"`
-	SSLStatus          string   `json:"ssl_status"` // Caddy route state: ACTIVE = snippet applied, not "HTTPS works publicly"
+	SSLStatus          string   `json:"ssl_status"`                  // Caddy route state: ACTIVE = snippet applied, not "HTTPS works publicly"
 	LastCertMessage    string   `json:"last_cert_message,omitempty"` // optional cert poll summary (see README)
 	CertCheckedAt      string   `json:"cert_checked_at,omitempty"`   // RFC3339 when last cert poll ran for this row
 	RegistrarDNSStatus string   `json:"registrar_dns_status"`        // ok | pending | unknown | lookup_error — public DNS vs expected server IPv4
@@ -213,11 +226,28 @@ func (s *server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project, err := s.store.CreateProject(r.Context(), repository.CreateProjectInput{
-		Name:    name,
-		RepoURL: repoURL,
-		Branch:  branch,
-	})
+	deployIn := repository.CreateProjectInput{
+		Name:             name,
+		RepoURL:          repoURL,
+		Branch:           branch,
+		DeployRuntime:    models.DeployRuntimeAuto,
+		DeployInstallCmd: "",
+		DeployBuildCmd:   "",
+		DeployStartCmd:   "",
+	}
+	if req.Deploy != nil {
+		rt, i, b, st, errCode := services.ValidateDeployFields(req.Deploy.Runtime, req.Deploy.InstallCmd, req.Deploy.BuildCmd, req.Deploy.StartCmd)
+		if errCode != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": errCode})
+			return
+		}
+		deployIn.DeployRuntime = rt
+		deployIn.DeployInstallCmd = i
+		deployIn.DeployBuildCmd = b
+		deployIn.DeployStartCmd = st
+	}
+
+	project, err := s.store.CreateProject(r.Context(), deployIn)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "create_project_failed"})
 		return
@@ -240,6 +270,8 @@ func (s *server) handleProjectRoutes(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			s.handleProjectGet(w, r, projectID)
+		case http.MethodPatch:
+			s.handleProjectPatch(w, r, projectID)
 		case http.MethodDelete:
 			s.handleProjectDelete(w, r, projectID)
 		default:
@@ -347,6 +379,42 @@ func (s *server) handleProjectGet(w http.ResponseWriter, r *http.Request, projec
 	writeJSON(w, http.StatusOK, map[string]any{"project": resp})
 }
 
+func (s *server) handleProjectPatch(w http.ResponseWriter, r *http.Request, projectID string) {
+	if !strings.Contains(strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type"))), "application/json") {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"status": "error", "error": "content_type_must_be_application_json"})
+		return
+	}
+	defer r.Body.Close()
+	var req patchProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_json_payload"})
+		return
+	}
+	if req.Deploy == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "missing_deploy"})
+		return
+	}
+	rt, i, b, st, errCode := services.ValidateDeployFields(req.Deploy.Runtime, req.Deploy.InstallCmd, req.Deploy.BuildCmd, req.Deploy.StartCmd)
+	if errCode != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": errCode})
+		return
+	}
+	project, err := s.store.UpdateProjectDeployConfig(r.Context(), projectID, rt, i, b, st)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "project_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "update_project_failed"})
+		return
+	}
+	resp := projectToAPI(project)
+	if err := s.attachProjectSummary(r.Context(), &resp, true); err != nil {
+		s.requestLog(r).Warn("failed to load project summary", "project_id", projectID, "error", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "project": resp})
+}
+
 func (s *server) handleProjectDomainsCollection(w http.ResponseWriter, r *http.Request, projectID string) {
 	if _, err := s.store.GetProjectByID(r.Context(), projectID); err != nil {
 		if errorsIsNoRows(err) {
@@ -403,10 +471,10 @@ func (s *server) handleProjectDomainsPost(w http.ResponseWriter, r *http.Request
 	expectedIPv4, v4src, v4warn := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
 	g := dnsops.BuildGuidanceWithIPv4(r.Context(), s.cfg, []string{d.DomainName}, expectedIPv4, v4src, v4warn)
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"status":        "created",
-		"domain":        s.domainToAPIExpected(r.Context(), d, expectedIPv4),
-		"dns_guidance":  g,
-		"caddy_sync":    syncOut,
+		"status":       "created",
+		"domain":       s.domainToAPIExpected(r.Context(), d, expectedIPv4),
+		"dns_guidance": g,
+		"caddy_sync":   syncOut,
 	})
 }
 
@@ -795,11 +863,21 @@ func (s *server) enrichDeploymentsWithContainers(r *http.Request, items []models
 }
 
 func projectToAPI(p models.Project) apiProject {
+	rt := strings.TrimSpace(p.DeployRuntime)
+	if rt == "" {
+		rt = models.DeployRuntimeAuto
+	}
 	return apiProject{
-		ID:        p.ID,
-		Name:      p.Name,
-		RepoURL:   p.RepoURL,
-		Branch:    p.Branch,
+		ID:      p.ID,
+		Name:    p.Name,
+		RepoURL: p.RepoURL,
+		Branch:  p.Branch,
+		Deploy: apiDeployConfig{
+			Runtime:    rt,
+			InstallCmd: p.DeployInstallCmd,
+			BuildCmd:   p.DeployBuildCmd,
+			StartCmd:   p.DeployStartCmd,
+		},
 		CreatedAt: formatTime(p.CreatedAt),
 		UpdatedAt: formatTime(p.UpdatedAt),
 	}
