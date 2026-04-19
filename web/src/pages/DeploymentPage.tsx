@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
-import { ApiDeployment, fetchDeploymentLogs, fetchProjectDeployments } from "../api";
+import { Link, useParams } from "react-router-dom";
+import { ApiDeployment, ApiProject, fetchDeploymentLogs, fetchProject, fetchProjectDeployments } from "../api";
+import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
 import { Button, ButtonLink } from "../components/Button";
 import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
@@ -19,6 +20,8 @@ const STREAM_LABEL: Record<string, string> = {
 
 export function DeploymentPage() {
   const { projectID = "", deploymentID = "" } = useParams();
+  const { registerProject } = useProjectBreadcrumb();
+  const [project, setProject] = useState<ApiProject | null>(null);
   const [deployments, setDeployments] = useState<ApiDeployment[]>([]);
   const [source, setSource] = useState<SourceKind>("build");
   const [lines, setLines] = useState("");
@@ -39,12 +42,15 @@ export function DeploymentPage() {
   }, [paused]);
 
   useEffect(() => {
+    setProject(null);
+    setDeployments([]);
     let cancelled = false;
     (async () => {
       try {
-        const data = await fetchProjectDeployments(projectID);
+        const [proj, deps] = await Promise.all([fetchProject(projectID), fetchProjectDeployments(projectID)]);
         if (!cancelled) {
-          setDeployments(data);
+          setProject(proj);
+          setDeployments(deps);
         }
       } catch (err) {
         if (!cancelled) {
@@ -56,6 +62,12 @@ export function DeploymentPage() {
       cancelled = true;
     };
   }, [projectID]);
+
+  useEffect(() => {
+    if (project && project.id === projectID) {
+      registerProject(project.id, project.name);
+    }
+  }, [project, projectID, registerProject]);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,7 +126,15 @@ export function DeploymentPage() {
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border p-4">
           <div className="min-w-0">
             <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Deployment</div>
-            <h1 className="mono text-lg text-text">{shortHash(deploymentID, 16)}</h1>
+            {project && (
+              <div className="mt-1 text-sm text-text">
+                <span className="text-muted">Project </span>
+                <Link to={`/projects/${project.id}`} className="font-semibold hover:underline">
+                  {project.name}
+                </Link>
+              </div>
+            )}
+            <h1 className="mono mt-2 text-lg text-text">{shortHash(deploymentID, 16)}</h1>
             <div className="mono mt-1 break-all text-[11px] text-muted">{deploymentID}</div>
           </div>
           <div className="flex items-center gap-2">

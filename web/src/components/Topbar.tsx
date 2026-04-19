@@ -1,4 +1,5 @@
 import { Link, useLocation, useParams } from "react-router-dom";
+import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
 import { Theme } from "../theme";
 import { ButtonLink } from "./Button";
 import { ThemeToggle } from "./ThemeToggle";
@@ -13,6 +14,7 @@ type Crumb = { label: string; to?: string };
 function useBreadcrumbs(): Crumb[] {
   const location = useLocation();
   const params = useParams();
+  const { entry: projectEntry } = useProjectBreadcrumb();
   const segments = location.pathname.split("/").filter(Boolean);
 
   const crumbs: Crumb[] = [{ label: "Overview", to: "/" }];
@@ -27,7 +29,9 @@ function useBreadcrumbs(): Crumb[] {
       crumbs.push({ label: "New Project" });
     } else if (segments[1]) {
       const projectID = params.projectID || segments[1];
-      crumbs.push({ label: shortenID(projectID), to: `/projects/${projectID}` });
+      const projectLabel =
+        projectEntry?.projectID === projectID ? projectEntry.name : shortenID(projectID);
+      crumbs.push({ label: projectLabel, to: `/projects/${projectID}` });
       if (segments[2] === "deployments" && segments[3]) {
         const deploymentID = params.deploymentID || segments[3];
         crumbs.push({ label: `Deployment ${shortenID(deploymentID)}` });
@@ -63,14 +67,23 @@ export function Topbar({ theme, onThemeChange }: TopbarProps) {
         {crumbs.map((crumb, idx) => {
           const last = idx === crumbs.length - 1;
           return (
-            <span key={`${crumb.label}-${idx}`} className="flex items-center gap-2">
-              {idx > 0 && <span className="text-muted" aria-hidden>/</span>}
+            <span key={`crumb-${idx}`} className="flex min-w-0 max-w-[18rem] items-center gap-2">
+              {idx > 0 && <span className="shrink-0 text-muted" aria-hidden>/</span>}
               {crumb.to && !last ? (
-                <Link to={crumb.to} className="text-muted hover:text-text">
+                <Link
+                  to={crumb.to}
+                  className="min-w-0 truncate text-muted hover:text-text"
+                  title={crumb.label}
+                >
                   {crumb.label}
                 </Link>
               ) : (
-                <span className={last ? "font-semibold text-text" : "text-muted"}>{crumb.label}</span>
+                <span
+                  className={`min-w-0 truncate ${last ? "font-semibold text-text" : "text-muted"}`}
+                  title={crumb.label}
+                >
+                  {crumb.label}
+                </span>
               )}
             </span>
           );

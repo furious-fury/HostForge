@@ -12,6 +12,7 @@ import {
   stopProject,
 } from "../api";
 import { projectAccessLinks } from "../accessUrls";
+import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
 import { Button } from "../components/Button";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/ToastProvider";
@@ -22,6 +23,7 @@ import { formatDuration, formatRelative, shortHash } from "../format";
 
 export function ProjectPage() {
   const toast = useToast();
+  const { registerProject } = useProjectBreadcrumb();
   const { projectID = "" } = useParams();
   const navigate = useNavigate();
   const [project, setProject] = useState<ApiProject | null>(null);
@@ -53,6 +55,12 @@ export function ProjectPage() {
     if (!projectID) return;
     void load();
   }, [projectID]);
+
+  useEffect(() => {
+    if (project && project.id === projectID) {
+      registerProject(project.id, project.name);
+    }
+  }, [project, projectID, registerProject]);
 
   async function confirmDeleteProject() {
     setDeleteBusy(true);

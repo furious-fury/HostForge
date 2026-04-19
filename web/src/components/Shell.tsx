@@ -1,4 +1,5 @@
 import { ReactNode, useCallback, useEffect, useState } from "react";
+import { ProjectBreadcrumbProvider } from "../ProjectBreadcrumbContext";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import {
@@ -35,10 +36,12 @@ export function Shell({ children }: ShellProps) {
   }, []);
 
   return (
-    <div className="grid h-screen grid-cols-[16rem_1fr] grid-rows-[3.5rem_1fr] bg-bg text-text">
-      <Sidebar />
-      <Topbar theme={theme} onThemeChange={handleThemeChange} />
-      <main className="overflow-y-auto bg-bg p-6">{children}</main>
-    </div>
+    <ProjectBreadcrumbProvider>
+      <div className="grid h-screen grid-cols-[16rem_1fr] grid-rows-[3.5rem_1fr] bg-bg text-text">
+        <Sidebar />
+        <Topbar theme={theme} onThemeChange={handleThemeChange} />
+        <main className="overflow-y-auto bg-bg p-6">{children}</main>
+      </div>
+    </ProjectBreadcrumbProvider>
   );
 }
