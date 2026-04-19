@@ -28,7 +28,7 @@ export function DashboardPage() {
         setLoading(true);
         const [p, d] = await Promise.all([
           fetchProjects(),
-          fetchAllDeployments(50).catch(() => [] as ApiDeployment[]),
+          fetchAllDeployments(30).catch(() => [] as ApiDeployment[]),
         ]);
         if (!cancelled) {
           setProjects(p);
@@ -82,7 +82,7 @@ export function DashboardPage() {
     };
   }, [projects, deployments]);
 
-  const recent = useMemo(() => deployments.slice(0, 8), [deployments]);
+  const recent = useMemo(() => deployments.slice(0, 5), [deployments]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -90,9 +90,18 @@ export function DashboardPage() {
         <div>
           <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Overview</div>
           <h1 className="text-2xl font-semibold tracking-tight">Fleet status</h1>
-          <p className="mt-1 text-sm text-muted">Live state of every project, build, and container under HostForge.</p>
+          <p className="mt-1 text-sm text-muted">
+            KPIs and a quick snapshot of recent activity. Full deployment history lives on{" "}
+            <Link to="/deployments" className="text-text underline decoration-border-strong underline-offset-2 hover:text-primary">
+              Deployments
+            </Link>
+            .
+          </p>
         </div>
         <div className="flex items-center gap-2">
+          <ButtonLink to="/deployments" variant="secondary" size="sm">
+            All deployments
+          </ButtonLink>
           <ButtonLink to="/projects" variant="secondary" size="sm">Open Projects</ButtonLink>
           <ButtonLink to="/projects/new" variant="primary" size="sm">+ New Project</ButtonLink>
         </div>
@@ -125,8 +134,20 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Panel
           className="xl:col-span-2"
-          title="Recent Deployments"
-          actions={<Link to="/projects" className="mono text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-text">View projects →</Link>}
+          title="Recent activity"
+          actions={
+            <div className="flex flex-wrap items-center gap-3">
+              <Link
+                to="/deployments"
+                className="mono text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-text"
+              >
+                All deployments →
+              </Link>
+              <Link to="/projects" className="mono text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-text">
+                Projects →
+              </Link>
+            </div>
+          }
           noBody
         >
           {loading && recent.length === 0 ? (
