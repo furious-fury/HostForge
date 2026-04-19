@@ -43,8 +43,24 @@ export function NewProjectPage() {
   const [branchTouched, setBranchTouched] = useState(false);
   const branchLookupSeq = useRef(0);
 
-  const stepIndex = phase === "form" ? 0 : phase === "deploying" ? 1 : 2;
-  const failedIndex = phase === "failure" ? stepIndex : undefined;
+  // After success, use an index past the last step so the stepper shows all steps completed (not “stuck” on Result).
+  const stepIndex =
+    phase === "form" ? 0 : phase === "deploying" ? 1 : phase === "success" ? STEPS.length : 2;
+  const failedIndex = phase === "failure" ? 2 : undefined;
+
+  const resultAnchorRef = useRef<HTMLDivElement>(null);
+  const [buildLogsExpanded, setBuildLogsExpanded] = useState(true);
+
+  useEffect(() => {
+    if (phase === "deploying") {
+      setBuildLogsExpanded(true);
+      return;
+    }
+    if (phase === "success" || phase === "failure") {
+      setBuildLogsExpanded(false);
+      resultAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [phase]);
 
   function suggestName(url: string) {
     const trimmed = url.trim().replace(/\/$/, "");
@@ -250,6 +266,7 @@ export function NewProjectPage() {
 
       {phase !== "form" && (
         <>
+          <div ref={resultAnchorRef} className="scroll-mt-4" />
           <Panel
             title={phase === "deploying" ? "Step 2 · Deploying" : "Step 3 · Result"}
             actions={
@@ -294,7 +311,11 @@ export function NewProjectPage() {
           </Panel>
 
           {deploymentID ? (
-            <InlineDeploymentLogs deploymentID={deploymentID} />
+            <InlineDeploymentLogs
+              deploymentID={deploymentID}
+              collapsed={!buildLogsExpanded}
+              onExpand={() => setBuildLogsExpanded(true)}
+            />
           ) : (
             <Panel title="Build Logs" noBody>
               <div className="border-t border-border bg-terminal p-4 font-mono text-xs text-muted">
@@ -316,7 +337,15 @@ const STREAM_LABEL: Record<string, string> = {
   "loading tail": "LOADING",
 };
 
-function InlineDeploymentLogs({ deploymentID }: { deploymentID: string }) {
+function InlineDeploymentLogs({
+  deploymentID,
+  collapsed,
+  onExpand,
+}: {
+  deploymentID: string;
+  collapsed?: boolean;
+  onExpand?: () => void;
+}) {
   const [lines, setLines] = useState("");
   const [paused, setPaused] = useState(false);
   const [streamState, setStreamState] = useState("connecting");
@@ -376,6 +405,21 @@ function InlineDeploymentLogs({ deploymentID }: { deploymentID: string }) {
   }
 
   const streamLabel = STREAM_LABEL[streamState] || streamState.toUpperCase();
+
+  if (collapsed) {
+    return (
+      <Panel title="Build Logs">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted">
+            Log stream continues in the background. Expand to read the full build output.
+          </p>
+          <Button variant="secondary" size="sm" onClick={onExpand}>
+            Show build logs
+          </Button>
+        </div>
+      </Panel>
+    );
+  }
 
   return (
     <Panel

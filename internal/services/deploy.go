@@ -183,9 +183,10 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	log.Info("running nixpacks image build", "dir", job.Worktree, "image", job.ImageRef)
 	if err := nixpacks.BuildImageWithWriters(ctx, job.Worktree, job.ImageRef, combinedOut, combinedOut); err != nil {
 		markFailed(err)
-		_, _ = fmt.Fprintf(combinedOut, "hostforge: nixpacks failed: %v\n", err)
+		_, _ = fmt.Fprintf(combinedOut, "hostforge: ===== NIXPACKS IMAGE BUILD FAILED =====\nhostforge: nixpacks failed: %v\n", err)
 		return DeployResult{}, fmt.Errorf("nixpacks: %w", err)
 	}
+	_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== NIXPACKS IMAGE BUILD SUCCEEDED image=%s =====\n\n", job.ImageRef)
 
 	containerID, err := docker.RunContainer(ctx, dockerClient, docker.RunOptions{
 		ImageRef:      job.ImageRef,
