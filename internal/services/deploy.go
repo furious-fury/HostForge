@@ -299,18 +299,22 @@ func SyncCaddyRoutes(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 		})
 		activeDomainIDs = append(activeDomainIDs, domainRoute.ID)
 	}
-	if _, err := caddy.Sync(ctx, caddy.SyncOptions{
+	syncRes, err := caddy.Sync(ctx, caddy.SyncOptions{
 		CaddyBin:      cfg.CaddyBin,
 		GeneratedPath: cfg.CaddyGeneratedPath,
 		RootConfig:    cfg.CaddyRootConfig,
 		Routes:        routes,
-	}); err != nil {
+	})
+	if err != nil {
 		for _, domainID := range activeDomainIDs {
 			if updateErr := store.UpdateDomainSSLStatus(ctx, domainID, models.SSLStatusError); updateErr != nil {
 				log.Warn("failed to update domain ssl status", "domain_id", domainID, "status", models.SSLStatusError, "error", updateErr)
 			}
 		}
 		return err
+	}
+	if !syncRes.Applied {
+		log.Warn("caddy reload skipped (admin API unreachable); snippet written and validated. Start Caddy if it is stopped, or run caddy sync again after it is running to live-reload.")
 	}
 	for _, domainID := range activeDomainIDs {
 		if err := store.UpdateDomainSSLStatus(ctx, domainID, models.SSLStatusActive); err != nil {

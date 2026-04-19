@@ -65,6 +65,18 @@ type Config struct {
 	WebhookRateLimitPerMinute int
 	// LogsDirPath overrides where build logs are written (default: <data-dir>/logs).
 	LogsDirPath string
+	// DNSServerIPv4 is an explicit public IPv4 for DNS A record suggestions (overrides auto-detect).
+	DNSServerIPv4 string
+	// DNSServerIPv6 is an explicit public IPv6 for AAAA suggestions (overrides auto-detect).
+	DNSServerIPv6 string
+	// DNSDetectURL is an HTTPS endpoint returning the server's public IPv4 as plain text.
+	DNSDetectURL string
+	// DNSDetectIPv6URL is an optional HTTPS endpoint returning public IPv6 as plain text.
+	DNSDetectIPv6URL string
+	// DNSDetectTimeoutMS bounds outbound IP discovery HTTP calls.
+	DNSDetectTimeoutMS int
+	// DomainSyncAfterMutate runs Caddy sync after domain add/edit/delete when root config is set.
+	DomainSyncAfterMutate bool
 }
 
 // DataDirEnv is the environment variable overriding the default data directory.
@@ -129,6 +141,18 @@ const (
 	WebhookRateLimitPerMinuteEnv = "HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE"
 	// LogsDirEnv overrides the default logs directory under data dir.
 	LogsDirEnv = "HOSTFORGE_LOGS_DIR"
+	// DNSServerIPv4Env sets a fixed IPv4 for DNS guidance (skips auto-detect when set).
+	DNSServerIPv4Env = "HOSTFORGE_DNS_SERVER_IPV4"
+	// DNSServerIPv6Env sets a fixed IPv6 for DNS guidance (optional).
+	DNSServerIPv6Env = "HOSTFORGE_DNS_SERVER_IPV6"
+	// DNSDetectURLEnv overrides the default IPv4 discovery URL (plain-text IP response).
+	DNSDetectURLEnv = "HOSTFORGE_DNS_DETECT_URL"
+	// DNSDetectIPv6URLEnv sets an optional IPv6 discovery URL (plain-text IP response).
+	DNSDetectIPv6URLEnv = "HOSTFORGE_DNS_DETECT_IPV6_URL"
+	// DNSDetectTimeoutMSEnv bounds outbound IP discovery HTTP calls.
+	DNSDetectTimeoutMSEnv = "HOSTFORGE_DNS_DETECT_TIMEOUT_MS"
+	// DomainSyncAfterMutateEnv toggles Caddy sync after domain CRUD API calls when root config exists.
+	DomainSyncAfterMutateEnv = "HOSTFORGE_DOMAIN_SYNC_AFTER_MUTATE"
 )
 
 // DefaultDataDir returns the default data directory (./.hostforge).
@@ -248,6 +272,24 @@ func Load(dataDirFlag string) (*Config, error) {
 		return nil, err
 	}
 	logsDirPath := strings.TrimSpace(os.Getenv(LogsDirEnv))
+	dnsServerIPv4 := strings.TrimSpace(os.Getenv(DNSServerIPv4Env))
+	dnsServerIPv6 := strings.TrimSpace(os.Getenv(DNSServerIPv6Env))
+	dnsDetectURL := strings.TrimSpace(os.Getenv(DNSDetectURLEnv))
+	if dnsDetectURL == "" {
+		dnsDetectURL = "https://api.ipify.org"
+	}
+	dnsDetectIPv6URL := strings.TrimSpace(os.Getenv(DNSDetectIPv6URLEnv))
+	if dnsDetectIPv6URL == "" {
+		dnsDetectIPv6URL = "https://api64.ipify.org"
+	}
+	dnsDetectTimeoutMS, err := envInt(DNSDetectTimeoutMSEnv, 2500)
+	if err != nil {
+		return nil, err
+	}
+	domainSyncAfterMutate, err := envBool(DomainSyncAfterMutateEnv, true)
+	if err != nil {
+		return nil, err
+	}
 	return &Config{
 		DataDir:                   abs,
 		ListenAddr:                listen,
@@ -276,6 +318,12 @@ func Load(dataDirFlag string) (*Config, error) {
 		SessionCookieSecure:       sessionCookieSecure,
 		WebhookRateLimitPerMinute: webhookRateLimitPerMinute,
 		LogsDirPath:               logsDirPath,
+		DNSServerIPv4:             dnsServerIPv4,
+		DNSServerIPv6:             dnsServerIPv6,
+		DNSDetectURL:              dnsDetectURL,
+		DNSDetectIPv6URL:          dnsDetectIPv6URL,
+		DNSDetectTimeoutMS:        dnsDetectTimeoutMS,
+		DomainSyncAfterMutate:     domainSyncAfterMutate,
 	}, nil
 }
 

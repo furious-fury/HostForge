@@ -47,13 +47,39 @@ func Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 	if err := writeAtomic(opts.GeneratedPath, []byte(content)); err != nil {
 		return SyncResult{}, err
 	}
-	if err := runCaddy(ctx, bin, "validate", "--config", opts.RootConfig); err != nil {
+	if err := ValidateRoot(ctx, bin, opts.RootConfig); err != nil {
 		return SyncResult{GeneratedPath: opts.GeneratedPath}, fmt.Errorf("caddy validate: %w", err)
 	}
 	if err := runCaddy(ctx, bin, "reload", "--config", opts.RootConfig); err != nil {
+		// `caddy reload` talks to the admin API (default :2019). When no daemon is running yet,
+		// reload fails even though validate passed and the snippet is on disk for `caddy run` / systemctl.
+		if isCaddyAdminUnreachable(err) {
+			return SyncResult{GeneratedPath: opts.GeneratedPath, Applied: false}, nil
+		}
 		return SyncResult{GeneratedPath: opts.GeneratedPath}, fmt.Errorf("caddy reload: %w", err)
 	}
 	return SyncResult{GeneratedPath: opts.GeneratedPath, Applied: true}, nil
+}
+
+func isCaddyAdminUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "connection refused") && strings.Contains(s, "2019")
+}
+
+// ValidateRoot runs `caddy validate` against an existing root Caddyfile (no reload, no snippet write).
+func ValidateRoot(ctx context.Context, caddyBin, rootConfig string) error {
+	root := strings.TrimSpace(rootConfig)
+	if root == "" {
+		return fmt.Errorf("root config path is required")
+	}
+	bin := strings.TrimSpace(caddyBin)
+	if bin == "" {
+		bin = "caddy"
+	}
+	return runCaddy(ctx, bin, "validate", "--config", root)
 }
 
 // RenderConfig converts routes into caddyfile server blocks.

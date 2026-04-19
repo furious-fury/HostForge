@@ -136,6 +136,7 @@ func runServer(log *slog.Logger, args []string) int {
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WebhookBasePath, handler.handleGitHubWebhook)
 	mux.HandleFunc("/auth/session", handler.handleSessionRoutes)
+	mux.HandleFunc("/api/system/status", handler.requireManagementAuth(handler.handleSystemStatus))
 	mux.HandleFunc("/api/repositories/branches", handler.requireManagementAuth(handler.handleRepositoryBranches))
 	mux.HandleFunc("/api/projects", handler.requireManagementAuth(handler.handleProjectsCollection))
 	mux.HandleFunc("/api/projects/", handler.requireManagementAuth(handler.handleProjectRoutes))

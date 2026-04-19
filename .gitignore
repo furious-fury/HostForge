@@ -3,6 +3,7 @@
 /.hostforge/
 *.db
 .env
+.hostforge.env
 *.exe
 coverage.out
 

@@ -5,6 +5,8 @@ import {
   ApiProject,
   fetchAllDeployments,
   fetchProjects,
+  fetchSystemStatus,
+  SystemStatus,
 } from "../api";
 import { ButtonLink } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
@@ -18,6 +20,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export function DashboardPage() {
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [deployments, setDeployments] = useState<ApiDeployment[]>([]);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -26,13 +29,15 @@ export function DashboardPage() {
     (async () => {
       try {
         setLoading(true);
-        const [p, d] = await Promise.all([
+        const [p, d, s] = await Promise.all([
           fetchProjects(),
           fetchAllDeployments(30).catch(() => [] as ApiDeployment[]),
+          fetchSystemStatus().catch(() => null),
         ]);
         if (!cancelled) {
           setProjects(p);
           setDeployments(d);
+          setSystemStatus(s);
           setError("");
         }
       } catch (err) {
@@ -210,22 +215,31 @@ export function DashboardPage() {
         </Panel>
 
         <Panel title="System">
+          <p className="mb-3 text-[11px] leading-snug text-muted">
+            Live checks from this HostForge server (Docker ping, <span className="mono">caddy validate</span>, local :80
+            /:443 accept, webhook GET returns 405).
+          </p>
           <ul className="flex flex-col divide-y divide-border">
-            <li className="flex items-center justify-between py-2 text-sm">
-              <span className="text-muted">Docker daemon</span>
-              <StatusPill status="RUNNING" size="sm" />
-            </li>
-            <li className="flex items-center justify-between py-2 text-sm">
-              <span className="text-muted">Caddy admin</span>
-              <StatusPill status="READY" size="sm" />
-            </li>
-            <li className="flex items-center justify-between py-2 text-sm">
-              <span className="text-muted">Webhook listener</span>
-              <StatusPill status="READY" size="sm" />
-            </li>
+            {systemStatus?.checks?.map((c) => (
+              <li key={c.id} className="py-2 text-sm" title={c.detail || undefined}>
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-muted">{c.label}</span>
+                  <StatusPill status={c.status} size="sm" />
+                </div>
+                {c.detail ? (
+                  <p className="mt-1 line-clamp-3 font-mono text-[10px] leading-snug text-muted">{c.detail}</p>
+                ) : null}
+              </li>
+            ))}
+            {!systemStatus && !loading ? (
+              <li className="py-2 text-xs text-muted">System status unavailable (retry by refreshing the page).</li>
+            ) : null}
+            {loading && !systemStatus ? (
+              <li className="py-2 text-xs text-muted">Loading system checks…</li>
+            ) : null}
             <li className="flex items-center justify-between py-2 text-sm">
               <span className="text-muted">Build version</span>
-              <span className="mono text-xs text-text">v0.6.0 · phase 6</span>
+              <span className="mono text-xs text-text">{systemStatus?.version || "—"}</span>
             </li>
           </ul>
           <div className="mt-4 border-t border-border pt-4">

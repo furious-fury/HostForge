@@ -2,6 +2,21 @@
 
 Self-hosted PaaS: deploy from Git to a single VPS. **Phase 0** implements the CLI spike: clone a repo and run [Nixpacks](https://github.com/railwayapp/nixpacks) with streamed logs.
 
+## Current project status (where things stand)
+
+**Implemented in-tree today**
+
+- **CLI (`cmd/cli`):** `deploy`, `domain` add/edit/remove, `caddy sync`, `version`; deploy pipeline shared with the server.
+- **Server (`cmd/server`):** management **REST** + **static UI** (`web/dist` when built), **GitHub push webhooks**, **session cookie** login for the UI, Phase **7**-style env (**API token**, **session secret**, **webhook secret** + rate limit required at startup).
+- **Caddy:** HostForge writes a **generated snippet** and runs **`caddy validate`**; **`caddy reload`** runs when the admin API is up, and is **skipped** (no error) if Caddy is not running yet so you can bootstrap `sync` then `systemctl start caddy`. Production-style layout uses a **root Caddyfile** that **`import`s** the snippet—often under **`/etc/caddy/`** so the **`caddy` systemd user** can read it (avoid snippet-only-under-`$HOME` with mode `700`).
+- **UI (`web/`):** projects, deployments, logs (REST + WebSocket), domains with **DNS hints** (Type / Name / Value table + copy), **registrar DNS** refresh (manual + auto while not “points here”), dashboard **System** panel from **`GET /api/system/status`** (Docker ping, Caddy validate + local :80/:443, webhook route probe)—not placeholder pills.
+- **Install:** `scripts/install.sh` optional **systemd** layout; `scripts/hostforge-server.env.example` documents env; **`scripts/ngrok-dev.sh`** for **public HTTPS to loopback** during dev (webhooks without opening home-router ports).
+
+**Operators should know**
+
+- **Public hostname + TLS:** DNS **A/AAAA** must point at the machine where **Caddy listens on 80/443**; **inbound** 80/443 must reach that host (firewall, cloud SG, **or** Windows→WSL forwarding on a dev PC). Residential **WAN IPs often change** on reconnect—update DNS, lower TTL while testing, or use **static IP / DDNS / a VPS** for stability.
+- **Dev without port-forwarding:** use **ngrok** (see [Local public URL (ngrok, free tier)](#local-public-url-ngrok-free-tier)); GitHub webhook URL becomes `https://<ngrok-host>/hooks/github` (free tier URL changes when the tunnel restarts unless you use a reserved domain).
+- **PRD vs code:** treat `HostForge_PRD_Production_Full.md` / `task_list.md` as planning sources; this README reflects what is wired up **now**; not every future PRD line is shipped yet.
 
 ## Prerequisites
 
@@ -27,6 +42,8 @@ go build -o hostforge ./cmd/cli
 ```bash
 ./hostforge deploy [flags] <repo_url>
 ./hostforge domain add [flags] --domain <hostname> <repo_url>
+./hostforge domain remove [flags] (--id <domain_id> | --domain <hostname> <repo_url>)
+./hostforge domain edit [flags] --id <domain_id> --domain <new_hostname>
 ./hostforge caddy sync [flags]
 ./hostforge version
 ```
@@ -75,6 +92,46 @@ HostForge writes a **generated Caddyfile fragment** under the data directory and
 - Caddy must be able to bind **80** and **443** on the VPS for automatic HTTPS (Let’s Encrypt). If you bind elsewhere, adjust your root Caddyfile accordingly.
 - **DNS:** point each public hostname (`domain add`) at this host with **`A`/`AAAA`** to the server’s public IP before TLS issuance will succeed.
 
+### DNS: what HostForge cannot do (and what to paste in your DNS panel)
+
+HostForge **does not** log in to Hostinger, Cloudflare, Route53, etc. There is **no one-liner** that creates DNS records for an arbitrary customer domain: that always happens in **their** DNS manager (or via a **future** optional integration if you add provider APIs and stored credentials).
+
+**What you can do today:** give the operator (or the app owner) **exact values** to enter manually.
+
+1. **On the HostForge / Caddy server**, get the public IPv4 you want the world to use (must match where Caddy listens on **80** and **443**):
+
+   ```bash
+   curl -4s ifconfig.me/ip
+   ```
+
+   Write that down as **`SERVER_IP`**. (If you use IPv6-only or dual-stack, also collect your provider’s public IPv6 for **`AAAA`**.)
+
+2. **In the DNS zone for the hostname** (e.g. `mrfury.dev` at Hostinger, or `app.customer.com` at the customer’s registrar), create or update records so the name resolves to **`SERVER_IP`**:
+
+   | Record | Name / Host (typical) | Points to / Value |
+   |--------|------------------------|-------------------|
+   | **A** | `@` or blank (apex) | `SERVER_IP` |
+   | **A** | `www` (optional) | `SERVER_IP` if you want `www.` to work |
+   | **AAAA** | `@` (optional) | Your server’s public IPv6 |
+
+   For a **subdomain only** (e.g. `app.example.com`), add an **A** record with host **`app`** (not `@`) → `SERVER_IP`.
+
+3. **Remove** conflicting records: delete or replace old **A** records that still point to a **parking / default host** page (common on shared hosting). Until `dig` shows your **`SERVER_IP`**, the browser will keep hitting the old host, not Caddy.
+
+4. **Verify from your laptop** (after a few minutes, sometimes up to 48h for slow TTLs):
+
+   ```bash
+   dig +short yourhostname.example A
+   ```
+
+   The answer must be **`SERVER_IP`**. Then try `curl -I https://yourhostname.example/`.
+
+5. **Firewall / cloud security group:** allow inbound **TCP 80** and **443** to this host so Let’s Encrypt (HTTP-01) and browsers can reach Caddy.
+
+**Summary for a “DNS handoff” blurb you can send to a user:** Point **A** `@` (and **A** `www` if needed) for their domain to your server’s public IPv4 (`SERVER_IP` from step 1), remove any old parking **A** records, wait for DNS to propagate, then HTTPS will work once that hostname is registered with `hostforge domain add` and Caddy has synced.
+
+The **UI** (project page) and **`hostforge domain add` / `edit`** output print **suggested DNS rows** using auto-detected public IP (or `HOSTFORGE_DNS_SERVER_IPV4` / `HOSTFORGE_DNS_SERVER_IPV6` overrides). Detection can fail behind strict egress firewalls—set overrides in that case.
+
 ### Environment (HostForge)
 
 | Variable | Purpose |
@@ -101,6 +158,12 @@ HostForge writes a **generated Caddyfile fragment** under the data directory and
 | `HOSTFORGE_SESSION_TTL_MINUTES` | Session lifetime (default: `720`) |
 | `HOSTFORGE_SESSION_COOKIE_SECURE` | If `true`, set `Secure` on session cookies (use behind HTTPS) |
 | `HOSTFORGE_LOGS_DIR` | Optional override for deployment build logs directory (default: `<data-dir>/logs`) |
+| `HOSTFORGE_DNS_SERVER_IPV4` | Optional: fixed public IPv4 shown in DNS guidance (skips auto-detect when set) |
+| `HOSTFORGE_DNS_SERVER_IPV6` | Optional: fixed public IPv6 for AAAA suggestions |
+| `HOSTFORGE_DNS_DETECT_URL` | URL returning plain-text public IPv4 (default: `https://api.ipify.org`) |
+| `HOSTFORGE_DNS_DETECT_IPV6_URL` | URL returning plain-text public IPv6 (default: `https://api64.ipify.org`; may return v4-only on some networks) |
+| `HOSTFORGE_DNS_DETECT_TIMEOUT_MS` | Timeout for outbound IP discovery (default: `2500`) |
+| `HOSTFORGE_DOMAIN_SYNC_AFTER_MUTATE` | If `true` (default), run Caddy sync after domain add/edit/delete API or CLI when `HOSTFORGE_CADDY_ROOT_CONFIG` is set |
 
 ### HTTPS / ACME
 
@@ -226,6 +289,24 @@ go run ./cmd/server -data-dir ./.hostforge -listen :8080
 npm --prefix web run dev
 ```
 
+### Local public URL (ngrok, free tier)
+
+When HostForge runs on **loopback** (e.g. `127.0.0.1:8080`), the internet cannot reach it for **GitHub webhooks** or sharing the UI without opening home-router ports. Use **ngrok** to get an **`https://…ngrok-free.app`** URL that forwards to the same port.
+
+1. Install [ngrok](https://ngrok.com/download) (Windows, macOS, or Linux/WSL).
+2. One-time auth: `ngrok config add-authtoken <token>` (token from the [ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken)).
+3. Start `go run ./cmd/server` (with env) so it listens on the port in `HOSTFORGE_LISTEN` (default `127.0.0.1:8080`).
+4. In another terminal, from the repo root:
+
+```bash
+chmod +x ./scripts/ngrok-dev.sh
+./scripts/ngrok-dev.sh
+```
+
+The ngrok web UI (link printed in the terminal) shows the public URL. Use **`https://<subdomain>.ngrok-free.app/hooks/github`** as the GitHub webhook **Payload URL** (same path as local). **Free tier:** the hostname changes whenever the tunnel process restarts unless you use a paid reserved domain.
+
+Optional: `NGROK_REGION=us|eu|ap|au|in|jp|sa` before the script to pick an edge region.
+
 Vite proxy config (`web/vite.config.ts` and `web/vite.config.js`) forwards:
 
 - `/api/*` → `http://127.0.0.1:8080` (including WebSocket upgrades for `/api/deployments/{id}/logs/live`)
@@ -236,9 +317,12 @@ Vite proxy config (`web/vite.config.ts` and `web/vite.config.js`) forwards:
 
 - `GET /api/projects`
 - `POST /api/projects` (create project from repo URL/branch/name)
-- `GET /api/projects/{id}`
+- `GET /api/projects/{id}` (includes `domains` and `dns_guidance` when domains exist)
 - `DELETE /api/projects/{id}` (removes project, deployments, domains, and stops/removes linked Docker containers; syncs Caddy when domains existed or `HOSTFORGE_SYNC_CADDY` is set)
-- `GET /api/projects/{id}/domains`
+- `GET /api/projects/{id}/domains` (includes `dns_guidance` for all hostnames on the project)
+- `POST /api/projects/{id}/domains` (body: `{"domain_name":"app.example.com"}`; returns `domain`, `dns_guidance`, optional `caddy_sync`)
+- `PATCH /api/projects/{id}/domains/{domain_id}` (rename hostname; returns `domain`, `dns_guidance`, optional `caddy_sync`)
+- `DELETE /api/projects/{id}/domains/{domain_id}` (optional `caddy_sync` in response)
 - `GET /api/projects/{id}/deployments`
 - `GET /api/deployments` (global deployment list)
 - Existing logs APIs:
@@ -251,6 +335,8 @@ Vite proxy config (`web/vite.config.ts` and `web/vite.config.js`) forwards:
   - `POST /api/projects/{id}/stop`
 
 ### Wizard and UI behavior
+
+- **Domains:** each project page includes **Domains** management (add / edit / remove hostnames) plus **copyable DNS hints** derived from the same guidance as the API. Caddy reload after changes follows `HOSTFORGE_DOMAIN_SYNC_AFTER_MUTATE` and requires `HOSTFORGE_CADDY_ROOT_CONFIG` when you want automatic sync.
 
 - New project flow supports:
   1. Source step (repo URL, branch default `main`, name suggestion)

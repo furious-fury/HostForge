@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -13,6 +14,12 @@ import (
 
 	"github.com/hostforge/hostforge/internal/models"
 )
+
+// ErrDuplicateDomain is returned when inserting or renaming to an existing domain_name.
+var ErrDuplicateDomain = errors.New("duplicate_domain")
+
+// ErrDomainNotFound is returned when no domain row matches the requested id.
+var ErrDomainNotFound = errors.New("domain_not_found")
 
 // Store wraps database/sql access for HostForge persistence.
 type Store struct {
@@ -647,9 +654,143 @@ func (s *Store) CreateDomain(ctx context.Context, projectID, domainName string) 
 		d.UpdatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
+		if isUniqueConstraint(err) {
+			return models.Domain{}, ErrDuplicateDomain
+		}
 		return models.Domain{}, fmt.Errorf("insert domain: %w", err)
 	}
 	return d, nil
+}
+
+func isUniqueConstraint(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique") && strings.Contains(msg, "constraint")
+}
+
+// GetDomainByProjectAndName returns a domain for a project by hostname (exact match).
+func (s *Store) GetDomainByProjectAndName(ctx context.Context, projectID, domainName string) (models.Domain, error) {
+	pid := strings.TrimSpace(projectID)
+	name := strings.TrimSpace(domainName)
+	if pid == "" || name == "" {
+		return models.Domain{}, fmt.Errorf("missing project id or domain name")
+	}
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, project_id, domain_name, ssl_status, created_at, updated_at FROM domains WHERE project_id = ? AND domain_name = ?`,
+		pid,
+		name,
+	)
+	var d models.Domain
+	var createdAt, updatedAt string
+	if err := row.Scan(&d.ID, &d.ProjectID, &d.DomainName, &d.SSLStatus, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return models.Domain{}, ErrDomainNotFound
+		}
+		return models.Domain{}, fmt.Errorf("get domain by name: %w", err)
+	}
+	d.CreatedAt = parseTime(createdAt)
+	d.UpdatedAt = parseTime(updatedAt)
+	return d, nil
+}
+
+// GetDomainByID returns a domain row by primary key.
+func (s *Store) GetDomainByID(ctx context.Context, domainID string) (models.Domain, error) {
+	id := strings.TrimSpace(domainID)
+	if id == "" {
+		return models.Domain{}, fmt.Errorf("empty domain id")
+	}
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, project_id, domain_name, ssl_status, created_at, updated_at FROM domains WHERE id = ?`,
+		id,
+	)
+	var d models.Domain
+	var createdAt, updatedAt string
+	if err := row.Scan(&d.ID, &d.ProjectID, &d.DomainName, &d.SSLStatus, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return models.Domain{}, ErrDomainNotFound
+		}
+		return models.Domain{}, fmt.Errorf("get domain: %w", err)
+	}
+	d.CreatedAt = parseTime(createdAt)
+	d.UpdatedAt = parseTime(updatedAt)
+	return d, nil
+}
+
+// DeleteDomain removes a domain row by id. Returns ErrDomainNotFound if no row was deleted.
+func (s *Store) DeleteDomain(ctx context.Context, domainID string) error {
+	id := strings.TrimSpace(domainID)
+	if id == "" {
+		return fmt.Errorf("empty domain id")
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM domains WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete domain: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrDomainNotFound
+	}
+	return nil
+}
+
+// UpdateDomainName changes the hostname for a domain owned by projectID. Resets ssl_status to PENDING.
+func (s *Store) UpdateDomainName(ctx context.Context, projectID, domainID, newName string) (models.Domain, error) {
+	pid := strings.TrimSpace(projectID)
+	did := strings.TrimSpace(domainID)
+	name := strings.TrimSpace(newName)
+	if pid == "" || did == "" || name == "" {
+		return models.Domain{}, fmt.Errorf("missing project id, domain id, or name")
+	}
+	existing, err := s.GetDomainByID(ctx, did)
+	if err != nil {
+		return models.Domain{}, err
+	}
+	if existing.ProjectID != pid {
+		return models.Domain{}, ErrDomainNotFound
+	}
+	var conflict int
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM domains WHERE domain_name = ? AND id != ?`,
+		name,
+		did,
+	).Scan(&conflict); err != nil {
+		return models.Domain{}, fmt.Errorf("check domain name: %w", err)
+	}
+	if conflict > 0 {
+		return models.Domain{}, ErrDuplicateDomain
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE domains SET domain_name = ?, ssl_status = ?, updated_at = ? WHERE id = ? AND project_id = ?`,
+		name,
+		models.SSLStatusPending,
+		now,
+		did,
+		pid,
+	)
+	if err != nil {
+		if isUniqueConstraint(err) {
+			return models.Domain{}, ErrDuplicateDomain
+		}
+		return models.Domain{}, fmt.Errorf("update domain: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return models.Domain{}, err
+	}
+	if n == 0 {
+		return models.Domain{}, ErrDomainNotFound
+	}
+	return s.GetDomainByID(ctx, did)
 }
 
 // ListDomainsByProject returns all domains for projectID.

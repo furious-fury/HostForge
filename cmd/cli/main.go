@@ -4,14 +4,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/hostforge/hostforge/internal/config"
+	"github.com/hostforge/hostforge/internal/dnsops"
 	"github.com/hostforge/hostforge/internal/database"
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/logging"
@@ -50,6 +53,8 @@ func printUsage() {
 Usage:
   hostforge deploy [flags] <repo_url>
   hostforge domain add [flags] --domain <host> <repo_url>
+  hostforge domain remove [flags] (--id <domain_id> | --domain <host> <repo_url>)
+  hostforge domain edit [flags] --id <domain_id> --domain <new_host>
   hostforge caddy sync [flags]
   hostforge version
 
@@ -191,12 +196,16 @@ func runDeploy(log *slog.Logger, args []string) int {
 
 func runDomain(log *slog.Logger, args []string) int {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
-		fmt.Fprintln(os.Stderr, "error: domain requires a subcommand (supported: add)")
+		fmt.Fprintln(os.Stderr, "error: domain requires a subcommand (supported: add, remove, edit)")
 		return 2
 	}
 	switch strings.TrimSpace(args[0]) {
 	case "add":
 		return runDomainAdd(log, args[1:])
+	case "remove":
+		return runDomainRemove(log, args[1:])
+	case "edit":
+		return runDomainEdit(log, args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "error: unsupported domain subcommand %q\n", args[0])
 		return 2
@@ -219,6 +228,10 @@ func runDomainAdd(log *slog.Logger, args []string) int {
 	}
 	if strings.TrimSpace(*domainName) == "" {
 		fmt.Fprintln(os.Stderr, "error: --domain is required")
+		return 2
+	}
+	if err := dnsops.ValidateDomainName(strings.TrimSpace(*domainName)); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 2
 	}
 	repoURL, err := services.CanonicalRepoURL(rest[0])
@@ -253,13 +266,214 @@ func runDomainAdd(log *slog.Logger, args []string) int {
 	}
 	domainRec, err := store.CreateDomain(ctx, project.ID, strings.TrimSpace(*domainName))
 	if err != nil {
+		if errors.Is(err, repository.ErrDuplicateDomain) {
+			fmt.Fprintln(os.Stderr, "error: duplicate domain (hostname already registered)")
+			return 1
+		}
 		fmt.Fprintf(os.Stderr, "error: domain state: %v\n", err)
 		return 1
 	}
 	log.Info("domain added", "domain", domainRec.DomainName, "project_id", domainRec.ProjectID)
 	fmt.Printf("domain_id=%s\ndomain=%s\nproject_id=%s\nssl_status=%s\n",
 		domainRec.ID, domainRec.DomainName, domainRec.ProjectID, domainRec.SSLStatus)
+	printDNSGuidance(os.Stdout, cfg, ctx, []string{domainRec.DomainName})
+	if err := maybeSyncDomainsCLI(ctx, log, cfg, store); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: caddy sync after domain change: %v\n", err)
+	}
 	return 0
+}
+
+func runDomainRemove(log *slog.Logger, args []string) int {
+	fs := flag.NewFlagSet("domain remove", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dataDir := fs.String("data-dir", "", "data directory (overrides "+config.DataDirEnv+")")
+	id := fs.String("id", "", "domain row id (from domain add / UI)")
+	domainName := fs.String("domain", "", "hostname to remove (requires <repo_url>)")
+	branch := fs.String("branch", "", "git branch when resolving project by repo (default: remote default)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	rest := fs.Args()
+	if strings.TrimSpace(*id) == "" && (strings.TrimSpace(*domainName) == "" || len(rest) != 1) {
+		fmt.Fprintln(os.Stderr, "error: domain remove requires either --id <domain_id> OR (--domain <host> and exactly one <repo_url>)")
+		return 2
+	}
+	if strings.TrimSpace(*id) != "" && (strings.TrimSpace(*domainName) != "" || len(rest) != 0) {
+		fmt.Fprintln(os.Stderr, "error: when using --id, do not pass --domain or <repo_url>")
+		return 2
+	}
+	cfg, err := config.Load(*dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: config: %v\n", err)
+		return 1
+	}
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", cfg.DataDir, err)
+		return 1
+	}
+	ctx := context.Background()
+	db, err := database.OpenSQLite(ctx, cfg.DBPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+	store := repository.New(db)
+
+	var removedID string
+	if strings.TrimSpace(*id) != "" {
+		if _, err := store.GetDomainByID(ctx, *id); err != nil {
+			if errors.Is(err, repository.ErrDomainNotFound) {
+				fmt.Fprintln(os.Stderr, "error: domain not found")
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "error: lookup domain: %v\n", err)
+			return 1
+		}
+		if err := store.DeleteDomain(ctx, *id); err != nil {
+			fmt.Fprintf(os.Stderr, "error: delete domain: %v\n", err)
+			return 1
+		}
+		removedID = strings.TrimSpace(*id)
+	} else {
+		repoURL, err := services.CanonicalRepoURL(rest[0])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: invalid repo URL: %v\n", err)
+			return 2
+		}
+		resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch))
+		project, err := store.EnsureProject(ctx, repoURL, resolvedBranch)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: project state: %v\n", err)
+			return 1
+		}
+		d, err := store.GetDomainByProjectAndName(ctx, project.ID, strings.TrimSpace(*domainName))
+		if err != nil {
+			if errors.Is(err, repository.ErrDomainNotFound) {
+				fmt.Fprintln(os.Stderr, "error: domain not found for this project")
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "error: lookup domain: %v\n", err)
+			return 1
+		}
+		if err := store.DeleteDomain(ctx, d.ID); err != nil {
+			fmt.Fprintf(os.Stderr, "error: delete domain: %v\n", err)
+			return 1
+		}
+		removedID = d.ID
+	}
+	log.Info("domain removed", "domain_id", removedID)
+	fmt.Printf("removed_domain_id=%s\n", removedID)
+	if err := maybeSyncDomainsCLI(ctx, log, cfg, store); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: caddy sync after domain change: %v\n", err)
+	}
+	return 0
+}
+
+func runDomainEdit(log *slog.Logger, args []string) int {
+	fs := flag.NewFlagSet("domain edit", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dataDir := fs.String("data-dir", "", "data directory (overrides "+config.DataDirEnv+")")
+	id := fs.String("id", "", "domain row id")
+	newName := fs.String("domain", "", "new hostname (FQDN)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*id) == "" || strings.TrimSpace(*newName) == "" {
+		fmt.Fprintln(os.Stderr, "error: domain edit requires --id and --domain <new_host>")
+		return 2
+	}
+	if err := dnsops.ValidateDomainName(strings.TrimSpace(*newName)); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
+	cfg, err := config.Load(*dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: config: %v\n", err)
+		return 1
+	}
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", cfg.DataDir, err)
+		return 1
+	}
+	ctx := context.Background()
+	db, err := database.OpenSQLite(ctx, cfg.DBPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+	store := repository.New(db)
+
+	existing, err := store.GetDomainByID(ctx, *id)
+	if err != nil {
+		if errors.Is(err, repository.ErrDomainNotFound) {
+			fmt.Fprintln(os.Stderr, "error: domain not found")
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "error: lookup domain: %v\n", err)
+		return 1
+	}
+	updated, err := store.UpdateDomainName(ctx, existing.ProjectID, existing.ID, strings.TrimSpace(*newName))
+	if err != nil {
+		if errors.Is(err, repository.ErrDuplicateDomain) {
+			fmt.Fprintln(os.Stderr, "error: duplicate domain (hostname already registered)")
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "error: update domain: %v\n", err)
+		return 1
+	}
+	log.Info("domain updated", "domain_id", updated.ID, "domain", updated.DomainName)
+	fmt.Printf("domain_id=%s\ndomain=%s\nproject_id=%s\nssl_status=%s\n",
+		updated.ID, updated.DomainName, updated.ProjectID, updated.SSLStatus)
+	printDNSGuidance(os.Stdout, cfg, ctx, []string{updated.DomainName})
+	if err := maybeSyncDomainsCLI(ctx, log, cfg, store); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: caddy sync after domain change: %v\n", err)
+	}
+	return 0
+}
+
+func maybeSyncDomainsCLI(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store) error {
+	if !cfg.DomainSyncAfterMutate {
+		return nil
+	}
+	if strings.TrimSpace(cfg.CaddyRootConfig) == "" {
+		return nil
+	}
+	return services.SyncCaddyRoutes(ctx, log, cfg, store)
+}
+
+func printDNSGuidance(w io.Writer, cfg *config.Config, ctx context.Context, hostnames []string) {
+	g := dnsops.BuildGuidance(ctx, cfg, hostnames)
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "# --- DNS records (add at your DNS provider) ---")
+	fmt.Fprintf(w, "# IPv4 source: %s\n", g.IPv4Source)
+	if g.IPv4 != "" {
+		fmt.Fprintf(w, "# Suggested IPv4 target: %s\n", g.IPv4)
+	}
+	if g.IPv6 != "" {
+		fmt.Fprintf(w, "# IPv6 source: %s\n", g.IPv6Source)
+		fmt.Fprintf(w, "# Suggested IPv6 target: %s\n", g.IPv6)
+	}
+	for _, step := range g.Steps {
+		fmt.Fprintf(w, "# %s\n", step)
+	}
+	if len(g.Steps) > 0 {
+		fmt.Fprintln(w, "#")
+	}
+	for _, r := range g.Records {
+		if strings.TrimSpace(r.Value) == "" {
+			continue
+		}
+		fmt.Fprintf(w, "# %-5s name=%-8s value=%-40s zone=%s\n", r.Type, r.Name, r.Value, r.ZoneHint)
+		if r.Note != "" {
+			fmt.Fprintf(w, "#       %s\n", r.Note)
+		}
+	}
+	if g.Message != "" {
+		fmt.Fprintf(w, "# Note: %s\n", g.Message)
+	}
+	fmt.Fprintln(w, "# --- end DNS ---")
 }
 
 func runCaddy(log *slog.Logger, args []string) int {
@@ -305,6 +519,8 @@ func runCaddySync(log *slog.Logger, args []string) int {
 		return 1
 	}
 	fmt.Printf("generated_path=%s\nroot_config=%s\n", cfg.CaddyGeneratedPath, cfg.CaddyRootConfig)
+	fmt.Println("caddy sync: ok (snippet written and root Caddyfile validated).")
+	fmt.Println("If Caddy was not running, reload was skipped; start it with: sudo systemctl start caddy")
 	return 0
 }
 

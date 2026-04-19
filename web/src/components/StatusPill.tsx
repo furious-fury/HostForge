@@ -8,13 +8,19 @@ function classify(status: string): { color: string; label: string } {
   if (normalized === "SUCCESS" || normalized === "RUNNING" || normalized === "READY") {
     return { color: "border-success text-success", label: normalized };
   }
-  if (normalized === "FAILED" || normalized === "ERROR" || normalized === "CRASHED") {
+  if (normalized === "FAILED" || normalized === "ERROR" || normalized === "CRASHED" || normalized === "DOWN") {
     return { color: "border-danger text-danger", label: normalized };
   }
-  if (normalized === "BUILDING" || normalized === "QUEUED" || normalized === "DEPLOYING" || normalized === "PENDING") {
+  if (
+    normalized === "BUILDING" ||
+    normalized === "QUEUED" ||
+    normalized === "DEPLOYING" ||
+    normalized === "PENDING" ||
+    normalized === "WARNING"
+  ) {
     return { color: "border-warning text-warning", label: normalized };
   }
-  if (normalized === "STOPPED" || normalized === "PAUSED") {
+  if (normalized === "STOPPED" || normalized === "PAUSED" || normalized === "SKIPPED" || normalized === "NOT_CONFIGURED") {
     return { color: "border-muted text-muted", label: normalized };
   }
   return { color: "border-border text-muted", label: normalized || "UNKNOWN" };

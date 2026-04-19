@@ -1,3 +1,27 @@
+export type DnsGuidanceRecord = {
+  type: string;
+  name: string;
+  value: string;
+  zone_hint?: string;
+  note?: string;
+};
+
+export type DnsGuidance = {
+  ipv4?: string;
+  ipv6?: string;
+  ipv4_source: string;
+  ipv6_source?: string;
+  records: DnsGuidanceRecord[];
+  steps?: string[];
+  message?: string;
+};
+
+export type CaddySyncOutcome = {
+  attempted: boolean;
+  ok: boolean;
+  error?: string;
+};
+
 export type ApiProject = {
   id: string;
   name: string;
@@ -7,6 +31,7 @@ export type ApiProject = {
   updated_at: string;
   latest_deployment?: ApiDeployment;
   domains?: ApiDomain[];
+  dns_guidance?: DnsGuidance;
   current_container?: ApiContainer;
 };
 
@@ -40,8 +65,22 @@ export type ApiDomain = {
   project_id: string;
   domain_name: string;
   ssl_status: string;
+  registrar_dns_status?: string;
+  resolved_ipv4?: string[];
   created_at: string;
   updated_at: string;
+};
+
+export type SystemStatusCheck = {
+  id: string;
+  label: string;
+  status: string;
+  detail?: string;
+};
+
+export type SystemStatus = {
+  version: string;
+  checks: SystemStatusCheck[];
 };
 
 type CreateProjectRequest = {
@@ -92,6 +131,11 @@ export async function fetchProjects(): Promise<ApiProject[]> {
   return body.projects || [];
 }
 
+export async function fetchSystemStatus(): Promise<SystemStatus> {
+  const res = await apiFetch("/api/system/status");
+  return await readJSON<SystemStatus>(res);
+}
+
 export async function fetchAllDeployments(limit = 100): Promise<ApiDeployment[]> {
   const res = await apiFetch(`/api/deployments?limit=${limit}`);
   const body = await readJSON<{ deployments: ApiDeployment[] }>(res);
@@ -115,10 +159,56 @@ export async function fetchProjectDeployments(projectID: string): Promise<ApiDep
   return body.deployments || [];
 }
 
-export async function fetchProjectDomains(projectID: string): Promise<ApiDomain[]> {
+export async function fetchProjectDomains(projectID: string): Promise<{
+  domains: ApiDomain[];
+  dns_guidance?: DnsGuidance;
+}> {
   const res = await apiFetch(`/api/projects/${projectID}/domains`);
-  const body = await readJSON<{ domains: ApiDomain[] }>(res);
-  return body.domains || [];
+  const body = await readJSON<{ domains: ApiDomain[]; dns_guidance?: DnsGuidance }>(res);
+  return { domains: body.domains || [], dns_guidance: body.dns_guidance };
+}
+
+export async function createProjectDomain(
+  projectID: string,
+  domainName: string,
+): Promise<{ domain: ApiDomain; dns_guidance?: DnsGuidance; caddy_sync?: CaddySyncOutcome }> {
+  const res = await apiFetch(`/api/projects/${projectID}/domains`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain_name: domainName }),
+  });
+  return await readJSON<{
+    domain: ApiDomain;
+    dns_guidance?: DnsGuidance;
+    caddy_sync?: CaddySyncOutcome;
+  }>(res);
+}
+
+export async function updateProjectDomain(
+  projectID: string,
+  domainID: string,
+  domainName: string,
+): Promise<{ domain: ApiDomain; dns_guidance?: DnsGuidance; caddy_sync?: CaddySyncOutcome }> {
+  const res = await apiFetch(`/api/projects/${projectID}/domains/${encodeURIComponent(domainID)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain_name: domainName }),
+  });
+  return await readJSON<{
+    domain: ApiDomain;
+    dns_guidance?: DnsGuidance;
+    caddy_sync?: CaddySyncOutcome;
+  }>(res);
+}
+
+export async function deleteProjectDomain(
+  projectID: string,
+  domainID: string,
+): Promise<{ caddy_sync?: CaddySyncOutcome }> {
+  const res = await apiFetch(`/api/projects/${projectID}/domains/${encodeURIComponent(domainID)}`, {
+    method: "DELETE",
+  });
+  return await readJSON<{ caddy_sync?: CaddySyncOutcome }>(res);
 }
 
 export async function createProject(input: CreateProjectRequest): Promise<ApiProject> {

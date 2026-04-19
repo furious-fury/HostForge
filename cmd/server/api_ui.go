@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hostforge/hostforge/internal/dnsops"
 	"github.com/hostforge/hostforge/internal/docker"
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/models"
@@ -34,15 +35,16 @@ type deploymentActionResponse struct {
 }
 
 type apiProject struct {
-	ID               string         `json:"id"`
-	Name             string         `json:"name"`
-	RepoURL          string         `json:"repo_url"`
-	Branch           string         `json:"branch"`
-	CreatedAt        string         `json:"created_at"`
-	UpdatedAt        string         `json:"updated_at"`
-	LatestDeployment *apiDeployment `json:"latest_deployment,omitempty"`
-	Domains          []apiDomain    `json:"domains,omitempty"`
-	CurrentContainer *apiContainer  `json:"current_container,omitempty"`
+	ID               string          `json:"id"`
+	Name             string          `json:"name"`
+	RepoURL          string          `json:"repo_url"`
+	Branch           string          `json:"branch"`
+	CreatedAt        string          `json:"created_at"`
+	UpdatedAt        string          `json:"updated_at"`
+	LatestDeployment *apiDeployment  `json:"latest_deployment,omitempty"`
+	Domains          []apiDomain     `json:"domains,omitempty"`
+	DNSGuidance      *dnsops.Guidance `json:"dns_guidance,omitempty"`
+	CurrentContainer *apiContainer   `json:"current_container,omitempty"`
 }
 
 type apiDeployment struct {
@@ -71,12 +73,24 @@ type apiContainer struct {
 }
 
 type apiDomain struct {
-	ID         string `json:"id"`
-	ProjectID  string `json:"project_id"`
+	ID                 string   `json:"id"`
+	ProjectID          string   `json:"project_id"`
+	DomainName         string   `json:"domain_name"`
+	SSLStatus          string   `json:"ssl_status"` // Caddy route state: ACTIVE = snippet applied, not "HTTPS works publicly"
+	RegistrarDNSStatus string   `json:"registrar_dns_status"` // ok | pending | unknown | lookup_error — public DNS vs expected server IPv4
+	ResolvedIPv4       []string `json:"resolved_ipv4,omitempty"`
+	CreatedAt          string   `json:"created_at"`
+	UpdatedAt          string   `json:"updated_at"`
+}
+
+type caddySyncOutcome struct {
+	Attempted bool   `json:"attempted"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
+}
+
+type domainNameRequest struct {
 	DomainName string `json:"domain_name"`
-	SSLStatus  string `json:"ssl_status"`
-	CreatedAt  string `json:"created_at"`
-	UpdatedAt  string `json:"updated_at"`
 }
 
 type repositoryBranchesResponse struct {
@@ -213,11 +227,35 @@ func (s *server) handleProjectRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[1] {
 	case "domains":
-		if r.Method != http.MethodGet {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+		if len(parts) == 2 {
+			switch r.Method {
+			case http.MethodGet:
+				s.handleProjectDomainsCollection(w, r, projectID)
+			case http.MethodPost:
+				s.handleProjectDomainsPost(w, r, projectID)
+			default:
+				writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+			}
 			return
 		}
-		s.handleProjectDomainsGet(w, r, projectID)
+		if len(parts) == 3 {
+			domainID := strings.TrimSpace(parts[2])
+			if domainID == "" {
+				http.NotFound(w, r)
+				return
+			}
+			switch r.Method {
+			case http.MethodPatch:
+				s.handleProjectDomainPatch(w, r, projectID, domainID)
+			case http.MethodDelete:
+				s.handleProjectDomainDelete(w, r, projectID, domainID)
+			default:
+				writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+			}
+			return
+		}
+		http.NotFound(w, r)
+		return
 	case "deployments":
 		if r.Method != http.MethodGet {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
@@ -287,7 +325,7 @@ func (s *server) handleProjectGet(w http.ResponseWriter, r *http.Request, projec
 	writeJSON(w, http.StatusOK, map[string]any{"project": resp})
 }
 
-func (s *server) handleProjectDomainsGet(w http.ResponseWriter, r *http.Request, projectID string) {
+func (s *server) handleProjectDomainsCollection(w http.ResponseWriter, r *http.Request, projectID string) {
 	if _, err := s.store.GetProjectByID(r.Context(), projectID); err != nil {
 		if errorsIsNoRows(err) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "project_not_found"})
@@ -301,11 +339,151 @@ func (s *server) handleProjectDomainsGet(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "list_domains_failed"})
 		return
 	}
+	expectedIPv4, _, _ := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
 	out := make([]apiDomain, 0, len(domains))
+	names := make([]string, 0, len(domains))
 	for _, d := range domains {
-		out = append(out, domainToAPI(d))
+		out = append(out, s.domainToAPIExpected(r.Context(), d, expectedIPv4))
+		names = append(names, d.DomainName)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"domains": out})
+	g := dnsops.BuildGuidance(r.Context(), s.cfg, names)
+	writeJSON(w, http.StatusOK, map[string]any{"domains": out, "dns_guidance": g})
+}
+
+func (s *server) handleProjectDomainsPost(w http.ResponseWriter, r *http.Request, projectID string) {
+	if _, err := s.store.GetProjectByID(r.Context(), projectID); err != nil {
+		if errorsIsNoRows(err) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "project_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "project_lookup_failed"})
+		return
+	}
+	var body domainNameRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_json"})
+		return
+	}
+	if err := dnsops.ValidateDomainName(body.DomainName); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": err.Error()})
+		return
+	}
+	d, err := s.store.CreateDomain(r.Context(), projectID, body.DomainName)
+	if err != nil {
+		if errors.Is(err, repository.ErrDuplicateDomain) {
+			writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "duplicate_domain"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "create_domain_failed"})
+		return
+	}
+	syncOut := s.caddySyncAfterDomainChange(r.Context())
+	expectedIPv4, _, _ := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
+	g := dnsops.BuildGuidance(r.Context(), s.cfg, []string{d.DomainName})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"status":        "created",
+		"domain":        s.domainToAPIExpected(r.Context(), d, expectedIPv4),
+		"dns_guidance":  g,
+		"caddy_sync":    syncOut,
+	})
+}
+
+func (s *server) handleProjectDomainPatch(w http.ResponseWriter, r *http.Request, projectID, domainID string) {
+	if _, err := s.store.GetProjectByID(r.Context(), projectID); err != nil {
+		if errorsIsNoRows(err) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "project_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "project_lookup_failed"})
+		return
+	}
+	var body domainNameRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_json"})
+		return
+	}
+	if err := dnsops.ValidateDomainName(body.DomainName); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": err.Error()})
+		return
+	}
+	d, err := s.store.UpdateDomainName(r.Context(), projectID, domainID, body.DomainName)
+	if err != nil {
+		if errors.Is(err, repository.ErrDomainNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "domain_not_found"})
+			return
+		}
+		if errors.Is(err, repository.ErrDuplicateDomain) {
+			writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "duplicate_domain"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "update_domain_failed"})
+		return
+	}
+	syncOut := s.caddySyncAfterDomainChange(r.Context())
+	expectedIPv4, _, _ := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
+	g := dnsops.BuildGuidance(r.Context(), s.cfg, []string{d.DomainName})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":       "ok",
+		"domain":       s.domainToAPIExpected(r.Context(), d, expectedIPv4),
+		"dns_guidance": g,
+		"caddy_sync":   syncOut,
+	})
+}
+
+func (s *server) handleProjectDomainDelete(w http.ResponseWriter, r *http.Request, projectID, domainID string) {
+	if _, err := s.store.GetProjectByID(r.Context(), projectID); err != nil {
+		if errorsIsNoRows(err) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "project_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "project_lookup_failed"})
+		return
+	}
+	existing, err := s.store.GetDomainByID(r.Context(), domainID)
+	if err != nil {
+		if errors.Is(err, repository.ErrDomainNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "domain_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "domain_lookup_failed"})
+		return
+	}
+	if existing.ProjectID != projectID {
+		writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "domain_not_found"})
+		return
+	}
+	if err := s.store.DeleteDomain(r.Context(), domainID); err != nil {
+		if errors.Is(err, repository.ErrDomainNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "domain_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "delete_domain_failed"})
+		return
+	}
+	syncOut := s.caddySyncAfterDomainChange(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     "deleted",
+		"domain_id":  domainID,
+		"caddy_sync": syncOut,
+	})
+}
+
+func (s *server) caddySyncAfterDomainChange(ctx context.Context) caddySyncOutcome {
+	out := caddySyncOutcome{}
+	if !s.cfg.DomainSyncAfterMutate {
+		return out
+	}
+	if strings.TrimSpace(s.cfg.CaddyRootConfig) == "" {
+		return out
+	}
+	out.Attempted = true
+	if err := services.SyncCaddyRoutes(ctx, s.log, s.cfg, s.store); err != nil {
+		out.OK = false
+		out.Error = err.Error()
+		return out
+	}
+	out.OK = true
+	return out
 }
 
 func (s *server) handleProjectDeploymentsGet(w http.ResponseWriter, r *http.Request, projectID string) {
@@ -522,8 +700,15 @@ func (s *server) attachProjectSummary(ctx context.Context, out *apiProject) erro
 		return fmt.Errorf("project domains: %w", err)
 	}
 	out.Domains = make([]apiDomain, 0, len(domains))
+	names := make([]string, 0, len(domains))
+	expectedIPv4, _, _ := dnsops.ResolveExpectedIPv4(ctx, s.cfg)
 	for _, d := range domains {
-		out.Domains = append(out.Domains, domainToAPI(d))
+		out.Domains = append(out.Domains, s.domainToAPIExpected(ctx, d, expectedIPv4))
+		names = append(names, d.DomainName)
+	}
+	if len(names) > 0 {
+		g := dnsops.BuildGuidance(ctx, s.cfg, names)
+		out.DNSGuidance = &g
 	}
 	deployments, err := s.store.ListDeploymentsByProjectID(ctx, out.ID, 1)
 	if err != nil {
@@ -594,14 +779,21 @@ func containerToAPI(c models.Container) apiContainer {
 	}
 }
 
-func domainToAPI(d models.Domain) apiDomain {
+func (s *server) domainToAPIExpected(ctx context.Context, d models.Domain, expectedIPv4 string) apiDomain {
+	lookupMS := s.cfg.DNSDetectTimeoutMS
+	if lookupMS <= 0 {
+		lookupMS = 2500
+	}
+	st, resolved := dnsops.CheckRegistrarARecord(ctx, d.DomainName, expectedIPv4, time.Duration(lookupMS)*time.Millisecond)
 	return apiDomain{
-		ID:         d.ID,
-		ProjectID:  d.ProjectID,
-		DomainName: d.DomainName,
-		SSLStatus:  d.SSLStatus,
-		CreatedAt:  formatTime(d.CreatedAt),
-		UpdatedAt:  formatTime(d.UpdatedAt),
+		ID:                 d.ID,
+		ProjectID:          d.ProjectID,
+		DomainName:         d.DomainName,
+		SSLStatus:          d.SSLStatus,
+		RegistrarDNSStatus: st,
+		ResolvedIPv4:       resolved,
+		CreatedAt:          formatTime(d.CreatedAt),
+		UpdatedAt:          formatTime(d.UpdatedAt),
 	}
 }
 
