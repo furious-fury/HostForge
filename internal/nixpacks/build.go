@@ -29,3 +29,21 @@ func Build(ctx context.Context, workDir, outDir, imageName string) error {
 	}
 	return nil
 }
+
+// BuildImage runs `nixpacks build` in workDir and emits an image in the local Docker daemon.
+// Streams stdout/stderr to the process stdout/stderr.
+func BuildImage(ctx context.Context, workDir, imageRef string) error {
+	if imageRef == "" {
+		imageRef = "hostforge/app:latest"
+	}
+	args := []string{"build", ".", "--name", imageRef}
+	cmd := exec.CommandContext(ctx, "nixpacks", args...)
+	cmd.Dir = workDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("nixpacks build image in %s: %w", workDir, err)
+	}
+	return nil
+}
