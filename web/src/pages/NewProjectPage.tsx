@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -13,6 +14,7 @@ import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { Stepper } from "../components/Stepper";
 import { Terminal } from "../components/Terminal";
+import { fleetKeys } from "../hooks/fleetQueries";
 
 const STEPS = [
   { id: "source", label: "Source" },
@@ -24,6 +26,7 @@ type Phase = "form" | "deploying" | "success" | "failure";
 
 export function NewProjectPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [repoURL, setRepoURL] = useState("");
   const [branch, setBranch] = useState("main");
   const [projectName, setProjectName] = useState("");
@@ -60,6 +63,7 @@ export function NewProjectPage() {
         branch: branch.trim(),
         project_name: projectName.trim(),
       });
+      void queryClient.invalidateQueries({ queryKey: fleetKeys.projects });
       setProjectID(project.id);
       setPhase("deploying");
       setMessage("Build accepted. Streaming live logs.");
@@ -95,6 +99,8 @@ export function NewProjectPage() {
         if (found) {
           setDeployment(found);
           if (found.status === "SUCCESS") {
+            void queryClient.invalidateQueries({ queryKey: fleetKeys.projects });
+            void queryClient.invalidateQueries({ queryKey: ["deployments", "list"] });
             setPhase("success");
             setMessage("Deployment finished.");
           } else if (found.status === "FAILED") {

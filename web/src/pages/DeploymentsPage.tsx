@@ -1,51 +1,38 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ApiDeployment, ApiProject, fetchAllDeployments, fetchProjects } from "../api";
+import { ApiDeployment, ApiProject } from "../api";
 import { Button, ButtonLink } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { formatDuration, formatRelative, shortHash } from "../format";
+import { useDeploymentsListQuery, useProjectsQuery } from "../hooks/fleetQueries";
 
 type StatusFilter = "all" | "building" | "success" | "failed";
+
+const PAGE_STEP = 50;
+const MAX_DEPLOYMENTS = 200;
 
 function normStatus(s: string | undefined): string {
   return (s || "").toUpperCase();
 }
 
 export function DeploymentsPage() {
-  const [projects, setProjects] = useState<ApiProject[]>([]);
-  const [deployments, setDeployments] = useState<ApiDeployment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [filter, setFilter] = useState<StatusFilter>("all");
+  const [listLimit, setListLimit] = useState(PAGE_STEP);
+  const projectsQ = useProjectsQuery();
+  const deploysQ = useDeploymentsListQuery(listLimit, { keepPreviousWhileFetching: true });
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true);
-        const [p, d] = await Promise.all([
-          fetchProjects(),
-          fetchAllDeployments(200).catch(() => [] as ApiDeployment[]),
-        ]);
-        if (!cancelled) {
-          setProjects(p);
-          setDeployments(d);
-          setError("");
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "failed to load deployments");
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const projects: ApiProject[] = projectsQ.data ?? [];
+  const deployments: ApiDeployment[] = deploysQ.data ?? [];
+  const tableLoading = deploysQ.isPending && deploysQ.data === undefined;
+  const error =
+    deploysQ.isError && deploysQ.error instanceof Error
+      ? deploysQ.error.message
+      : projectsQ.isError && projectsQ.error instanceof Error
+        ? projectsQ.error.message
+        : "";
+
+  const [filter, setFilter] = useState<StatusFilter>("all");
 
   const projectByID = useMemo(() => {
     const map = new Map<string, ApiProject>();
@@ -84,6 +71,8 @@ export function DeploymentsPage() {
     return { all: deployments.length, building, success, failed };
   }, [deployments]);
 
+  const canLoadMore = listLimit < MAX_DEPLOYMENTS && deployments.length >= listLimit;
+
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
@@ -119,33 +108,46 @@ export function DeploymentsPage() {
       <Panel
         title="All deployments"
         actions={
-          <div className="flex flex-wrap gap-1">
-            {(
-              [
-                ["all", "All", counts.all],
-                ["building", "Building", counts.building],
-                ["success", "Success", counts.success],
-                ["failed", "Failed", counts.failed],
-              ] as const
-            ).map(([key, label, n]) => (
-              <button
-                key={key}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap gap-1">
+              {(
+                [
+                  ["all", "All", counts.all],
+                  ["building", "Building", counts.building],
+                  ["success", "Success", counts.success],
+                  ["failed", "Failed", counts.failed],
+                ] as const
+              ).map(([key, label, n]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setFilter(key as StatusFilter)}
+                  className={`mono border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider ${
+                    filter === key
+                      ? "border-primary bg-primary text-primary-ink"
+                      : "border-border text-muted hover:border-border-strong hover:text-text"
+                  }`}
+                >
+                  {label} ({n})
+                </button>
+              ))}
+            </div>
+            {canLoadMore ? (
+              <Button
+                variant="secondary"
+                size="sm"
                 type="button"
-                onClick={() => setFilter(key as StatusFilter)}
-                className={`mono border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider ${
-                  filter === key
-                    ? "border-primary bg-primary text-primary-ink"
-                    : "border-border text-muted hover:border-border-strong hover:text-text"
-                }`}
+                disabled={deploysQ.isFetching}
+                onClick={() => setListLimit((n) => Math.min(n + PAGE_STEP, MAX_DEPLOYMENTS))}
               >
-                {label} ({n})
-              </button>
-            ))}
+                {deploysQ.isFetching ? "Loading…" : `Load more (up to ${MAX_DEPLOYMENTS})`}
+              </Button>
+            ) : null}
           </div>
         }
         noBody
       >
-        {loading && filtered.length === 0 ? (
+        {tableLoading && filtered.length === 0 ? (
           <div className="p-6 text-sm text-muted">Loading deployments…</div>
         ) : filtered.length === 0 ? (
           <div className="p-4">
@@ -192,9 +194,7 @@ export function DeploymentsPage() {
                         <Link to={`/projects/${d.project_id}`} className="font-semibold text-text hover:underline">
                           {projectName}
                         </Link>
-                        {proj?.repo_url && (
-                          <div className="mono truncate text-[11px] text-muted">{proj.repo_url}</div>
-                        )}
+                        {proj?.repo_url && <div className="mono truncate text-[11px] text-muted">{proj.repo_url}</div>}
                       </td>
                       <td className="px-4 py-3">
                         <Link

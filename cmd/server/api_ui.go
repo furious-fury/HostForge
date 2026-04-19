@@ -146,10 +146,14 @@ func (s *server) handleProjectsList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "list_projects_failed"})
 		return
 	}
+	// Default: fast list (DB + latest deploy only). Use ?dns=1 for live registrar checks + dns_guidance per project.
+	fullDNS := strings.EqualFold(r.URL.Query().Get("dns"), "true") ||
+		r.URL.Query().Get("dns") == "1" ||
+		strings.EqualFold(r.URL.Query().Get("full_dns"), "1")
 	out := make([]apiProject, 0, len(items))
 	for _, p := range items {
 		apiItem := projectToAPI(p)
-		if err := s.attachProjectSummary(r.Context(), &apiItem); err != nil {
+		if err := s.attachProjectSummary(r.Context(), &apiItem, fullDNS); err != nil {
 			s.log.Warn("failed to build project summary", "project_id", p.ID, "error", err)
 		}
 		out = append(out, apiItem)
@@ -319,7 +323,7 @@ func (s *server) handleProjectGet(w http.ResponseWriter, r *http.Request, projec
 		return
 	}
 	resp := projectToAPI(project)
-	if err := s.attachProjectSummary(r.Context(), &resp); err != nil {
+	if err := s.attachProjectSummary(r.Context(), &resp, true); err != nil {
 		s.log.Warn("failed to load project summary", "project_id", projectID, "error", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"project": resp})
@@ -339,14 +343,14 @@ func (s *server) handleProjectDomainsCollection(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "list_domains_failed"})
 		return
 	}
-	expectedIPv4, _, _ := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
+	expectedIPv4, v4src, v4warn := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
 	out := make([]apiDomain, 0, len(domains))
 	names := make([]string, 0, len(domains))
 	for _, d := range domains {
 		out = append(out, s.domainToAPIExpected(r.Context(), d, expectedIPv4))
 		names = append(names, d.DomainName)
 	}
-	g := dnsops.BuildGuidance(r.Context(), s.cfg, names)
+	g := dnsops.BuildGuidanceWithIPv4(r.Context(), s.cfg, names, expectedIPv4, v4src, v4warn)
 	writeJSON(w, http.StatusOK, map[string]any{"domains": out, "dns_guidance": g})
 }
 
@@ -378,8 +382,8 @@ func (s *server) handleProjectDomainsPost(w http.ResponseWriter, r *http.Request
 		return
 	}
 	syncOut := s.caddySyncAfterDomainChange(r.Context())
-	expectedIPv4, _, _ := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
-	g := dnsops.BuildGuidance(r.Context(), s.cfg, []string{d.DomainName})
+	expectedIPv4, v4src, v4warn := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
+	g := dnsops.BuildGuidanceWithIPv4(r.Context(), s.cfg, []string{d.DomainName}, expectedIPv4, v4src, v4warn)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"status":        "created",
 		"domain":        s.domainToAPIExpected(r.Context(), d, expectedIPv4),
@@ -420,8 +424,8 @@ func (s *server) handleProjectDomainPatch(w http.ResponseWriter, r *http.Request
 		return
 	}
 	syncOut := s.caddySyncAfterDomainChange(r.Context())
-	expectedIPv4, _, _ := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
-	g := dnsops.BuildGuidance(r.Context(), s.cfg, []string{d.DomainName})
+	expectedIPv4, v4src, v4warn := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
+	g := dnsops.BuildGuidanceWithIPv4(r.Context(), s.cfg, []string{d.DomainName}, expectedIPv4, v4src, v4warn)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":       "ok",
 		"domain":       s.domainToAPIExpected(r.Context(), d, expectedIPv4),
@@ -513,13 +517,10 @@ func (s *server) handleDeploymentsCollection(w http.ResponseWriter, r *http.Requ
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	all, err := s.store.ListDeployments(r.Context())
+	all, err := s.store.ListDeploymentsRecent(r.Context(), limit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "list_deployments_failed"})
 		return
-	}
-	if len(all) > limit {
-		all = all[:limit]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deployments": s.enrichDeploymentsWithContainers(r.Context(), all)})
 }
@@ -694,21 +695,27 @@ func (s *server) writeProjectContainerLookupError(w http.ResponseWriter, err err
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "lookup_active_container_failed"})
 }
 
-func (s *server) attachProjectSummary(ctx context.Context, out *apiProject) error {
+func (s *server) attachProjectSummary(ctx context.Context, out *apiProject, fullDNS bool) error {
 	domains, err := s.store.ListDomainsByProject(ctx, out.ID)
 	if err != nil {
 		return fmt.Errorf("project domains: %w", err)
 	}
 	out.Domains = make([]apiDomain, 0, len(domains))
-	names := make([]string, 0, len(domains))
-	expectedIPv4, _, _ := dnsops.ResolveExpectedIPv4(ctx, s.cfg)
-	for _, d := range domains {
-		out.Domains = append(out.Domains, s.domainToAPIExpected(ctx, d, expectedIPv4))
-		names = append(names, d.DomainName)
-	}
-	if len(names) > 0 {
-		g := dnsops.BuildGuidance(ctx, s.cfg, names)
-		out.DNSGuidance = &g
+	if fullDNS {
+		expectedIPv4, v4src, v4warn := dnsops.ResolveExpectedIPv4(ctx, s.cfg)
+		names := make([]string, 0, len(domains))
+		for _, d := range domains {
+			out.Domains = append(out.Domains, s.domainToAPIExpected(ctx, d, expectedIPv4))
+			names = append(names, d.DomainName)
+		}
+		if len(names) > 0 {
+			g := dnsops.BuildGuidanceWithIPv4(ctx, s.cfg, names, expectedIPv4, v4src, v4warn)
+			out.DNSGuidance = &g
+		}
+	} else {
+		for _, d := range domains {
+			out.Domains = append(out.Domains, s.domainToAPILite(d))
+		}
 	}
 	deployments, err := s.store.ListDeploymentsByProjectID(ctx, out.ID, 1)
 	if err != nil {
@@ -728,12 +735,26 @@ func (s *server) attachProjectSummary(ctx context.Context, out *apiProject) erro
 }
 
 func (s *server) enrichDeploymentsWithContainers(ctx context.Context, items []models.Deployment) []apiDeployment {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]string, len(items))
+	for i := range items {
+		ids[i] = items[i].ID
+	}
+	byDep, err := s.store.GetLatestContainersByDeploymentIDs(ctx, ids)
+	if err != nil {
+		s.log.Warn("batch container lookup failed", "error", err)
+		byDep = nil
+	}
 	out := make([]apiDeployment, 0, len(items))
 	for _, d := range items {
 		item := deploymentToAPI(d)
-		if containerRec, err := s.store.GetContainerByDeploymentID(ctx, d.ID); err == nil {
-			c := containerToAPI(containerRec)
-			item.Container = &c
+		if byDep != nil {
+			if containerRec, ok := byDep[d.ID]; ok {
+				c := containerToAPI(containerRec)
+				item.Container = &c
+			}
 		}
 		out = append(out, item)
 	}
@@ -776,6 +797,19 @@ func containerToAPI(c models.Container) apiContainer {
 		Status:            c.Status,
 		CreatedAt:         formatTime(c.CreatedAt),
 		UpdatedAt:         formatTime(c.UpdatedAt),
+	}
+}
+
+func (s *server) domainToAPILite(d models.Domain) apiDomain {
+	return apiDomain{
+		ID:                 d.ID,
+		ProjectID:          d.ProjectID,
+		DomainName:         d.DomainName,
+		SSLStatus:          d.SSLStatus,
+		RegistrarDNSStatus: "unknown",
+		ResolvedIPv4:       nil,
+		CreatedAt:          formatTime(d.CreatedAt),
+		UpdatedAt:          formatTime(d.UpdatedAt),
 	}
 }
 

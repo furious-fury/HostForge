@@ -11,6 +11,6 @@ func (s *server) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
 		return
 	}
-	out := sysstatus.Gather(r.Context(), s.cfg)
+	out := sysstatus.GatherCached(r.Context(), s.cfg)
 	writeJSON(w, http.StatusOK, out)
 }

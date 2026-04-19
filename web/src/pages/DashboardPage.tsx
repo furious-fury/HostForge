@@ -1,59 +1,32 @@
-import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import {
-  ApiDeployment,
-  ApiProject,
-  fetchAllDeployments,
-  fetchProjects,
-  fetchSystemStatus,
-  SystemStatus,
-} from "../api";
+import { ApiDeployment, ApiProject } from "../api";
 import { ButtonLink } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { KpiTile } from "../components/KpiTile";
 import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { formatDuration, formatRelative, shortHash } from "../format";
+import { useDeploymentsListQuery, useProjectsQuery, useSystemStatusQuery } from "../hooks/fleetQueries";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function DashboardPage() {
-  const [projects, setProjects] = useState<ApiProject[]>([]);
-  const [deployments, setDeployments] = useState<ApiDeployment[]>([]);
-  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+function dashOr(n: number | null): ReactNode {
+  return n === null ? "—" : n;
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true);
-        const [p, d, s] = await Promise.all([
-          fetchProjects(),
-          fetchAllDeployments(30).catch(() => [] as ApiDeployment[]),
-          fetchSystemStatus().catch(() => null),
-        ]);
-        if (!cancelled) {
-          setProjects(p);
-          setDeployments(d);
-          setSystemStatus(s);
-          setError("");
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "failed to load dashboard");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+export function DashboardPage() {
+  const projectsQ = useProjectsQuery();
+  const deploysQ = useDeploymentsListQuery(30);
+  const systemQ = useSystemStatusQuery();
+
+  const projects: ApiProject[] = projectsQ.data ?? [];
+  const deployments: ApiDeployment[] = deploysQ.data ?? [];
+  const systemStatus = systemQ.data ?? null;
+
+  const projectsReady = projectsQ.data !== undefined;
+  const deploysReady = deploysQ.data !== undefined;
 
   const projectByID = useMemo(() => {
     const map = new Map<string, ApiProject>();
@@ -65,29 +38,46 @@ export function DashboardPage() {
 
   const stats = useMemo(() => {
     const cutoff = Date.now() - DAY_MS;
-    let deploys24 = 0;
-    let failed24 = 0;
-    for (const d of deployments) {
-      const ts = Date.parse(d.created_at);
-      if (Number.isNaN(ts) || ts < cutoff) continue;
-      deploys24 += 1;
-      if (d.status?.toUpperCase() === "FAILED") failed24 += 1;
-    }
-    let runningContainers = 0;
-    for (const p of projects) {
-      if (p.current_container?.status?.toUpperCase() === "RUNNING") {
-        runningContainers += 1;
+    let deploys24: number | null = null;
+    let failed24: number | null = null;
+    if (deploysReady) {
+      deploys24 = 0;
+      failed24 = 0;
+      for (const d of deployments) {
+        const ts = Date.parse(d.created_at);
+        if (Number.isNaN(ts) || ts < cutoff) continue;
+        deploys24 += 1;
+        if (d.status?.toUpperCase() === "FAILED") failed24 += 1;
       }
     }
+    let runningContainers: number | null = null;
+    if (projectsReady) {
+      runningContainers = 0;
+      for (const p of projects) {
+        if (p.current_container?.status?.toUpperCase() === "RUNNING") {
+          runningContainers += 1;
+        }
+      }
+    }
+    const activeProjects = projectsReady ? projects.length : null;
     return {
-      activeProjects: projects.length,
+      activeProjects,
       deploys24,
       failed24,
       runningContainers,
     };
-  }, [projects, deployments]);
+  }, [projects, deployments, projectsReady, deploysReady]);
 
   const recent = useMemo(() => deployments.slice(0, 5), [deployments]);
+
+  const projectsError = projectsQ.isError
+    ? projectsQ.error instanceof Error
+      ? projectsQ.error.message
+      : "failed to load dashboard"
+    : "";
+
+  const recentLoading = deploysQ.isPending && deploysQ.data === undefined;
+  const systemLoading = systemQ.isPending && systemQ.data === undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -107,32 +97,36 @@ export function DashboardPage() {
           <ButtonLink to="/deployments" variant="secondary" size="sm">
             All deployments
           </ButtonLink>
-          <ButtonLink to="/projects" variant="secondary" size="sm">Open Projects</ButtonLink>
-          <ButtonLink to="/projects/new" variant="primary" size="sm">+ New Project</ButtonLink>
+          <ButtonLink to="/projects" variant="secondary" size="sm">
+            Open Projects
+          </ButtonLink>
+          <ButtonLink to="/projects/new" variant="primary" size="sm">
+            + New Project
+          </ButtonLink>
         </div>
       </header>
 
-      {error && <div className="border border-danger p-3 text-sm text-danger">{error}</div>}
+      {projectsError && <div className="border border-danger p-3 text-sm text-danger">{projectsError}</div>}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <KpiTile label="Active Projects" value={stats.activeProjects} hint="Projects registered with the control plane" />
+        <KpiTile label="Active Projects" value={dashOr(stats.activeProjects)} hint="Projects registered with the control plane" />
         <KpiTile
           label="Deploys (24h)"
-          value={stats.deploys24}
+          value={dashOr(stats.deploys24)}
           hint="Total deployments started in the last day"
-          tone={stats.deploys24 > 0 ? "info" : "default"}
+          tone={(stats.deploys24 ?? 0) > 0 ? "info" : "default"}
         />
         <KpiTile
           label="Failed (24h)"
-          value={stats.failed24}
-          hint={stats.failed24 === 0 ? "No failures detected" : "Investigate failed deploys"}
-          tone={stats.failed24 > 0 ? "danger" : "success"}
+          value={dashOr(stats.failed24)}
+          hint={(stats.failed24 ?? 0) === 0 ? "No failures detected" : "Investigate failed deploys"}
+          tone={(stats.failed24 ?? 0) > 0 ? "danger" : "success"}
         />
         <KpiTile
           label="Containers Running"
-          value={stats.runningContainers}
+          value={dashOr(stats.runningContainers)}
           hint="Currently active runtime containers"
-          tone={stats.runningContainers > 0 ? "success" : "default"}
+          tone={(stats.runningContainers ?? 0) > 0 ? "success" : "default"}
         />
       </div>
 
@@ -155,7 +149,7 @@ export function DashboardPage() {
           }
           noBody
         >
-          {loading && recent.length === 0 ? (
+          {recentLoading && recent.length === 0 ? (
             <div className="p-6 text-sm text-muted">Loading deployments…</div>
           ) : recent.length === 0 ? (
             <div className="p-4">
@@ -181,10 +175,7 @@ export function DashboardPage() {
                   const proj = projectByID.get(d.project_id);
                   const projectName = proj?.name || shortHash(d.project_id, 8);
                   return (
-                    <tr
-                      key={d.id}
-                      className="border-b border-border/60 hover:bg-surface-alt"
-                    >
+                    <tr key={d.id} className="border-b border-border/60 hover:bg-surface-alt">
                       <td className="px-4 py-3 truncate">
                         <Link
                           to={`/projects/${d.project_id}/deployments/${d.id}`}
@@ -192,9 +183,7 @@ export function DashboardPage() {
                         >
                           {projectName}
                         </Link>
-                        {proj?.repo_url && (
-                          <div className="mono truncate text-[11px] text-muted">{proj.repo_url}</div>
-                        )}
+                        {proj?.repo_url && <div className="mono truncate text-[11px] text-muted">{proj.repo_url}</div>}
                       </td>
                       <td className="px-4 py-3">
                         <span className="mono text-xs text-text">{shortHash(d.commit_hash, 7)}</span>
@@ -203,9 +192,7 @@ export function DashboardPage() {
                         <StatusPill status={d.status} size="sm" />
                       </td>
                       <td className="px-4 py-3 text-xs text-muted">{formatRelative(d.created_at)}</td>
-                      <td className="px-4 py-3 mono text-xs text-text">
-                        {formatDuration(d.created_at, d.updated_at)}
-                      </td>
+                      <td className="px-4 py-3 mono text-xs text-text">{formatDuration(d.created_at, d.updated_at)}</td>
                     </tr>
                   );
                 })}
@@ -231,12 +218,10 @@ export function DashboardPage() {
                 ) : null}
               </li>
             ))}
-            {!systemStatus && !loading ? (
+            {!systemStatus && !systemLoading ? (
               <li className="py-2 text-xs text-muted">System status unavailable (retry by refreshing the page).</li>
             ) : null}
-            {loading && !systemStatus ? (
-              <li className="py-2 text-xs text-muted">Loading system checks…</li>
-            ) : null}
+            {systemLoading ? <li className="py-2 text-xs text-muted">Loading system checks…</li> : null}
             <li className="flex items-center justify-between py-2 text-sm">
               <span className="text-muted">Build version</span>
               <span className="mono text-xs text-text">{systemStatus?.version || "—"}</span>
@@ -245,8 +230,12 @@ export function DashboardPage() {
           <div className="mt-4 border-t border-border pt-4">
             <div className="mono mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Quick Actions</div>
             <div className="flex flex-col gap-2">
-              <ButtonLink to="/projects/new" variant="primary" size="sm">+ New Project</ButtonLink>
-              <ButtonLink to="/projects" variant="secondary" size="sm">Open Projects</ButtonLink>
+              <ButtonLink to="/projects/new" variant="primary" size="sm">
+                + New Project
+              </ButtonLink>
+              <ButtonLink to="/projects" variant="secondary" size="sm">
+                Open Projects
+              </ButtonLink>
             </div>
           </div>
         </Panel>

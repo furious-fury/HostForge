@@ -586,6 +586,103 @@ func (s *Store) ListDeployments(ctx context.Context) ([]models.Deployment, error
 	return items, rows.Err()
 }
 
+// ListDeploymentsRecent returns the newest deployments across all projects, capped at limit (1..500).
+func (s *Store) ListDeploymentsRecent(ctx context.Context, limit int) ([]models.Deployment, error) {
+	lim := limit
+	if lim <= 0 || lim > 500 {
+		lim = 100
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at
+		 FROM deployments ORDER BY created_at DESC LIMIT ?`,
+		lim,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list deployments recent: %w", err)
+	}
+	defer rows.Close()
+
+	var items []models.Deployment
+	for rows.Next() {
+		var d models.Deployment
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&d.ID,
+			&d.ProjectID,
+			&d.Status,
+			&d.CommitHash,
+			&d.LogsPath,
+			&d.ImageRef,
+			&d.Worktree,
+			&d.ErrorMessage,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan deployment: %w", err)
+		}
+		d.CreatedAt = parseTime(createdAt)
+		d.UpdatedAt = parseTime(updatedAt)
+		items = append(items, d)
+	}
+	return items, rows.Err()
+}
+
+// GetLatestContainersByDeploymentIDs returns the newest container row per deployment_id for the given IDs.
+func (s *Store) GetLatestContainersByDeploymentIDs(ctx context.Context, deploymentIDs []string) (map[string]models.Container, error) {
+	out := make(map[string]models.Container)
+	if len(deploymentIDs) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(deploymentIDs))
+	ph := make([]string, 0, len(deploymentIDs))
+	for _, id := range deploymentIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		args = append(args, id)
+		ph = append(ph, "?")
+	}
+	if len(args) == 0 {
+		return out, nil
+	}
+	inClause := strings.Join(ph, ",")
+	q := fmt.Sprintf(`
+SELECT id, deployment_id, docker_container_id, internal_port, host_port, status, created_at, updated_at
+FROM (
+  SELECT id, deployment_id, docker_container_id, internal_port, host_port, status, created_at, updated_at,
+    ROW_NUMBER() OVER (PARTITION BY deployment_id ORDER BY created_at DESC) AS rn
+  FROM containers
+  WHERE deployment_id IN (%s)
+) WHERE rn = 1`, inClause)
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch latest containers: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c models.Container
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&c.ID,
+			&c.DeploymentID,
+			&c.DockerContainerID,
+			&c.InternalPort,
+			&c.HostPort,
+			&c.Status,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan container batch: %w", err)
+		}
+		c.CreatedAt = parseTime(createdAt)
+		c.UpdatedAt = parseTime(updatedAt)
+		out[c.DeploymentID] = c
+	}
+	return out, rows.Err()
+}
+
 // ListDeploymentsByProjectID returns deployments for one project, newest first.
 func (s *Store) ListDeploymentsByProjectID(ctx context.Context, projectID string, limit int) ([]models.Deployment, error) {
 	lim := limit

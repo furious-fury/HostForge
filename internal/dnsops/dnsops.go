@@ -117,6 +117,13 @@ func CheckRegistrarARecord(ctx context.Context, hostname, expectedIPv4 string, l
 
 // BuildGuidance resolves server IPs from config (override or HTTP detect) and returns suggested DNS rows for each hostname.
 func BuildGuidance(ctx context.Context, cfg *config.Config, hostnames []string) Guidance {
+	ipv4, v4src, v4warn := ResolveExpectedIPv4(ctx, cfg)
+	return BuildGuidanceWithIPv4(ctx, cfg, hostnames, ipv4, v4src, v4warn)
+}
+
+// BuildGuidanceWithIPv4 builds DNS guidance using a pre-resolved IPv4 (and optional warning from detection).
+// Skips another outbound IPv4 detect; use after ResolveExpectedIPv4 or when IPv4 is known from config.
+func BuildGuidanceWithIPv4(ctx context.Context, cfg *config.Config, hostnames []string, ipv4, v4src, v4warn string) Guidance {
 	out := Guidance{
 		IPv4Source: "unknown",
 		IPv6Source: "omitted",
@@ -129,7 +136,6 @@ func BuildGuidance(ctx context.Context, cfg *config.Config, hostnames []string) 
 	v6ctx, cancelV6 := context.WithTimeout(ctx, v6timeout)
 	defer cancelV6()
 
-	ipv4, v4src, v4warn := ResolveExpectedIPv4(ctx, cfg)
 	out.IPv4 = ipv4
 	out.IPv4Source = v4src
 	if v4warn != "" {

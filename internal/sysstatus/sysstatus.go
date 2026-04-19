@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hostforge/hostforge/internal/caddy"
@@ -33,19 +34,68 @@ type Response struct {
 }
 
 // Gather runs quick local checks (Docker ping, Caddy validate + listen, webhook route).
+// Independent checks run concurrently so wall time is roughly max(check), not sum(check).
 func Gather(ctx context.Context, cfg *config.Config) Response {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 
-	out := Response{
+	checks := make([]Row, 3)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		cctx, c := context.WithTimeout(ctx, 5*time.Second)
+		defer c()
+		checks[0] = checkDocker(cctx)
+	}()
+	go func() {
+		defer wg.Done()
+		cctx, c := context.WithTimeout(ctx, 10*time.Second)
+		defer c()
+		checks[1] = checkCaddy(cctx, cfg)
+	}()
+	go func() {
+		defer wg.Done()
+		cctx, c := context.WithTimeout(ctx, 4*time.Second)
+		defer c()
+		checks[2] = checkWebhookRoute(cctx, cfg)
+	}()
+	wg.Wait()
+
+	return Response{
 		Version: BuildVersion,
-		Checks: []Row{
-			checkDocker(ctx),
-			checkCaddy(ctx, cfg),
-			checkWebhookRoute(ctx, cfg),
-		},
+		Checks:  checks,
 	}
-	return out
+}
+
+var (
+	gatherCacheMu sync.Mutex
+	gatherCache   struct {
+		resp    Response
+		expires time.Time
+	}
+	gatherCacheTTL = 5 * time.Second
+)
+
+// GatherCached returns a recent Gather snapshot when still fresh (TTL), otherwise runs Gather.
+// Reduces repeated subprocess / Docker / HTTP probe cost when the UI polls or revisits quickly.
+func GatherCached(ctx context.Context, cfg *config.Config) Response {
+	now := time.Now()
+	gatherCacheMu.Lock()
+	if !gatherCache.expires.IsZero() && now.Before(gatherCache.expires) {
+		r := gatherCache.resp
+		gatherCacheMu.Unlock()
+		return r
+	}
+	gatherCacheMu.Unlock()
+
+	r := Gather(ctx, cfg)
+
+	gatherCacheMu.Lock()
+	gatherCache.resp = r
+	gatherCache.expires = time.Now().Add(gatherCacheTTL)
+	gatherCacheMu.Unlock()
+	return r
 }
 
 func checkDocker(ctx context.Context) Row {
@@ -96,7 +146,8 @@ func checkWebhookRoute(ctx context.Context, cfg *config.Config) Row {
 	if err != nil {
 		return Row{ID: "webhooks", Label: "Webhook route", Status: "ERROR", Detail: truncate(err.Error(), 200)}
 	}
-	res, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 4 * time.Second}
+	res, err := client.Do(req)
 	if err != nil {
 		return Row{ID: "webhooks", Label: "Webhook route", Status: "DOWN", Detail: truncate(err.Error(), 220)}
 	}

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ApiProject, deleteProject, fetchProjects } from "../api";
+import { ApiProject, deleteProject } from "../api";
 import { projectReachSummary } from "../accessUrls";
 import { Button, ButtonLink } from "../components/Button";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -9,46 +10,24 @@ import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { useToast } from "../components/ToastProvider";
 import { formatRelative } from "../format";
+import { fleetKeys, useProjectsQuery } from "../hooks/fleetQueries";
 
 type Filter = "all" | "running" | "failed";
 
 export function ProjectsPage() {
   const toast = useToast();
-  const [projects, setProjects] = useState<ApiProject[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const queryClient = useQueryClient();
+  const projectsQ = useProjectsQuery();
+  const projects = projectsQ.data ?? [];
+  const loading = projectsQ.isPending && projectsQ.data === undefined;
+  const error = projectsQ.isError
+    ? projectsQ.error instanceof Error
+      ? projectsQ.error.message
+      : "failed to load projects"
+    : "";
   const [filter, setFilter] = useState<Filter>("all");
   const [deletingId, setDeletingId] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ApiProject | null>(null);
-
-  const reload = useCallback(async () => {
-    const items = await fetchProjects();
-    setProjects(items);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true);
-        await reload();
-        if (!cancelled) {
-          setError("");
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "failed to load projects");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [reload]);
 
   const counts = useMemo(() => {
     let running = 0;
@@ -75,10 +54,10 @@ export function ProjectsPage() {
 
   async function executeDelete(project: ApiProject) {
     setDeletingId(project.id);
-    setError("");
     try {
       await deleteProject(project.id);
-      await reload();
+      await queryClient.invalidateQueries({ queryKey: fleetKeys.projects });
+      await queryClient.invalidateQueries({ queryKey: ["deployments", "list"] });
       toast.success(`Deleted project "${project.name}".`);
       setDeleteTarget(null);
     } catch (err) {
