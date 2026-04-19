@@ -89,6 +89,11 @@ HostForge writes a **generated Caddyfile fragment** under the data directory and
 | `HOSTFORGE_HEALTH_INTERVAL_MS` | Delay between health attempts in milliseconds (default: `1000`) |
 | `HOSTFORGE_HEALTH_EXPECTED_MIN` | Minimum accepted health status code (default: `200`) |
 | `HOSTFORGE_HEALTH_EXPECTED_MAX` | Maximum accepted health status code (default: `399`) |
+| `HOSTFORGE_LISTEN` | Server listen address for API/webhooks (default: `:8080`) |
+| `HOSTFORGE_WEBHOOK_BASE_PATH` | Webhook route path (default: `/hooks/github`) |
+| `HOSTFORGE_WEBHOOK_MAX_BODY_BYTES` | Max webhook body size in bytes (default: `1048576`) |
+| `HOSTFORGE_WEBHOOK_ASYNC` | If `true`, accept webhook deploys with `202` and run in background |
+| `HOSTFORGE_WEBHOOK_SECRET` | Optional shared-secret token expected in `X-HostForge-Token` |
 
 ### HTTPS / ACME
 
@@ -117,6 +122,43 @@ Failure behavior:
 - Previous successful deployment keeps serving traffic.
 - Candidate container is cleaned up on health/sync failure.
 
-## Server binary
+## Phase 4: Webhooks (GitHub push)
 
-`cmd/server` is a stub until later phases.
+Phase 4 adds an HTTP server that accepts GitHub `push` webhooks and runs the same deployment pipeline as `hostforge deploy`.
+
+### Build and run
+
+```bash
+go build -o hostforge-server ./cmd/server
+./hostforge-server -data-dir ./.hostforge -listen :8080
+```
+
+You can also set `HOSTFORGE_DATA_DIR` and `HOSTFORGE_LISTEN` instead of flags.
+
+### Reachability and networking
+
+- GitHub must be able to reach your webhook URL on a public IP or through a reverse proxy.
+- If this service is bound directly, allow the server port in your firewall.
+- If you terminate TLS at Caddy or another proxy, forward webhook requests to HostForge unchanged and preserve headers.
+
+### Endpoint and GitHub configuration
+
+- Default webhook URL path: `http(s)://<host>:<port>/hooks/github`.
+- Register a GitHub webhook with:
+  - Content type: `application/json`
+  - Event selection: `push` events only
+  - URL: your publicly reachable HostForge webhook endpoint
+- HostForge matches incoming payloads by `repository.clone_url` + branch against existing projects in SQLite. For reliable matching, register projects with an explicit `-branch`.
+
+### Request handling behavior
+
+- Non-JSON, malformed, or unauthorized requests are rejected with clear `4xx` responses.
+- Unsupported or ignorable events (for example non-`push`, tag refs, or branch mismatch) return `200` with an `ignored` response and do not create a deployment.
+- Unknown projects return `404` and do not trigger any deploy work.
+- By default (`HOSTFORGE_WEBHOOK_ASYNC=false`), webhook deploys run synchronously and return after deploy completion.
+- With async mode enabled, HostForge returns `202 Accepted` after durable acceptance and runs deployment in the background.
+
+### Security scope (MVP)
+
+- MVP supports an optional shared-secret header check (`X-HostForge-Token`) via `HOSTFORGE_WEBHOOK_SECRET`.
+- Full GitHub signature verification (`X-Hub-Signature-256`) remains future hardening work (PRD Phase 7 / future scope).

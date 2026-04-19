@@ -1,2 +1,2 @@
-// Package services will contain orchestration above repositories (e.g. deploy pipelines, Phase 4+).
+// Package services holds orchestration above repositories (deploy pipeline and route sync).
 package services

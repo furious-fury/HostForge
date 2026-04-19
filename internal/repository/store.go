@@ -62,6 +62,32 @@ func (s *Store) GetProjectByRepoAndBranch(ctx context.Context, repoURL, branch s
 	return p, nil
 }
 
+// ListProjectsByRepoURL returns projects that share repo_url, newest first.
+func (s *Store) ListProjectsByRepoURL(ctx context.Context, repoURL string) ([]models.Project, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, name, repo_url, branch, created_at, updated_at FROM projects WHERE repo_url = ? ORDER BY created_at DESC`,
+		strings.TrimSpace(repoURL),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list projects by repo: %w", err)
+	}
+	defer rows.Close()
+
+	var projects []models.Project
+	for rows.Next() {
+		var p models.Project
+		var createdAt, updatedAt string
+		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan project: %w", err)
+		}
+		p.CreatedAt = parseTime(createdAt)
+		p.UpdatedAt = parseTime(updatedAt)
+		projects = append(projects, p)
+	}
+	return projects, rows.Err()
+}
+
 // EnsureProject returns the project for repoURL and branch, inserting a row if missing.
 // Branch is part of the unique key with repo_url (default branch stored as "").
 func (s *Store) EnsureProject(ctx context.Context, repoURL, branch string) (models.Project, error) {

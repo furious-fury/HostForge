@@ -43,6 +43,14 @@ type Config struct {
 	HealthExpectedMin int
 	// HealthExpectedMax is the maximum accepted HTTP status code for health checks.
 	HealthExpectedMax int
+	// WebhookBasePath is the HTTP path for receiving provider webhook POSTs.
+	WebhookBasePath string
+	// WebhookMaxBodyBytes is the max accepted request body size for webhook payloads.
+	WebhookMaxBodyBytes int
+	// WebhookAsync controls whether webhook deploys are accepted (202) and run in background.
+	WebhookAsync bool
+	// WebhookSecret is an optional shared secret checked on webhook requests.
+	WebhookSecret string
 }
 
 // DataDirEnv is the environment variable overriding the default data directory.
@@ -85,6 +93,14 @@ const (
 	HealthExpectedMinEnv = "HOSTFORGE_HEALTH_EXPECTED_MIN"
 	// HealthExpectedMaxEnv sets the maximum accepted health status code.
 	HealthExpectedMaxEnv = "HOSTFORGE_HEALTH_EXPECTED_MAX"
+	// WebhookBasePathEnv configures the server route path for webhook POST requests.
+	WebhookBasePathEnv = "HOSTFORGE_WEBHOOK_BASE_PATH"
+	// WebhookMaxBodyBytesEnv sets a max webhook payload size in bytes.
+	WebhookMaxBodyBytesEnv = "HOSTFORGE_WEBHOOK_MAX_BODY_BYTES"
+	// WebhookAsyncEnv enables async webhook acceptance mode (HTTP 202 + background deploy).
+	WebhookAsyncEnv = "HOSTFORGE_WEBHOOK_ASYNC"
+	// WebhookSecretEnv sets an optional shared-secret token for webhook requests.
+	WebhookSecretEnv = "HOSTFORGE_WEBHOOK_SECRET"
 )
 
 // DefaultDataDir returns the default data directory (./.hostforge).
@@ -172,23 +188,40 @@ func Load(dataDirFlag string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	webhookBasePath := strings.TrimSpace(os.Getenv(WebhookBasePathEnv))
+	if webhookBasePath == "" {
+		webhookBasePath = "/hooks/github"
+	}
+	webhookMaxBodyBytes, err := envInt(WebhookMaxBodyBytesEnv, 1_048_576)
+	if err != nil {
+		return nil, err
+	}
+	webhookAsync, err := envBool(WebhookAsyncEnv, false)
+	if err != nil {
+		return nil, err
+	}
+	webhookSecret := strings.TrimSpace(os.Getenv(WebhookSecretEnv))
 	return &Config{
-		DataDir:            abs,
-		ListenAddr:         listen,
-		HostPort:           hostPort,
-		PortStart:          portStart,
-		PortEnd:            portEnd,
-		ContainerPort:      containerPort,
-		CaddyBin:           caddyBin,
-		CaddyGeneratedPath: caddyGeneratedPath,
-		CaddyRootConfig:    caddyRootConfig,
-		SyncCaddy:          syncCaddy,
-		HealthPath:         healthPath,
-		HealthTimeoutMS:    healthTimeoutMS,
-		HealthRetries:      healthRetries,
-		HealthIntervalMS:   healthIntervalMS,
-		HealthExpectedMin:  healthExpectedMin,
-		HealthExpectedMax:  healthExpectedMax,
+		DataDir:             abs,
+		ListenAddr:          listen,
+		HostPort:            hostPort,
+		PortStart:           portStart,
+		PortEnd:             portEnd,
+		ContainerPort:       containerPort,
+		CaddyBin:            caddyBin,
+		CaddyGeneratedPath:  caddyGeneratedPath,
+		CaddyRootConfig:     caddyRootConfig,
+		SyncCaddy:           syncCaddy,
+		HealthPath:          healthPath,
+		HealthTimeoutMS:     healthTimeoutMS,
+		HealthRetries:       healthRetries,
+		HealthIntervalMS:    healthIntervalMS,
+		HealthExpectedMin:   healthExpectedMin,
+		HealthExpectedMax:   healthExpectedMax,
+		WebhookBasePath:     webhookBasePath,
+		WebhookMaxBodyBytes: webhookMaxBodyBytes,
+		WebhookAsync:        webhookAsync,
+		WebhookSecret:       webhookSecret,
 	}, nil
 }
 
