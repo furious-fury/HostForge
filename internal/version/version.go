@@ -10,6 +10,12 @@ import (
 //go:embed VERSION
 var raw string
 
+// Commit is the git revision at build time (optional; set via -ldflags).
+var Commit string
+
+// BuildTime is an RFC3339 or human build timestamp (optional; set via -ldflags).
+var BuildTime string
+
 // String returns the single-line release version (e.g. "0.7.0").
 func String() string {
 	s := strings.TrimSpace(raw)

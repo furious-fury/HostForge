@@ -11,10 +11,12 @@ import { StatusPill } from "../components/StatusPill";
 import { useToast } from "../components/ToastProvider";
 import { formatRelative } from "../format";
 import { fleetKeys, useProjectsQuery } from "../hooks/fleetQueries";
+import { useFormatLocale } from "../hooks/useUIPrefs";
 
 type Filter = "all" | "running" | "failed";
 
 export function ProjectsPage() {
+  const fmtLocale = useFormatLocale();
   const toast = useToast();
   const queryClient = useQueryClient();
   const projectsQ = useProjectsQuery();
@@ -171,7 +173,7 @@ export function ProjectsPage() {
                     </td>
                     <td className="px-4 py-3 align-top font-mono text-xs text-text">{project.branch || "main"}</td>
                     <td className="px-4 py-3 align-top text-xs text-text">
-                      {formatRelative(project.latest_deployment?.created_at)}
+                      {formatRelative(project.latest_deployment?.created_at, new Date(), fmtLocale)}
                     </td>
                     <td className="px-4 py-3 align-top">
                       <div className="mono break-all text-xs text-text">{projectReachSummary(project)}</div>

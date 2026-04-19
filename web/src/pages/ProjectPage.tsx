@@ -26,8 +26,10 @@ import { EmptyState } from "../components/EmptyState";
 import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { formatDuration, formatRelative, shortHash } from "../format";
+import { useFormatLocale } from "../hooks/useUIPrefs";
 
 export function ProjectPage() {
+  const fmtLocale = useFormatLocale();
   const toast = useToast();
   const { registerProject } = useProjectBreadcrumb();
   const { projectID = "" } = useParams();
@@ -242,7 +244,7 @@ export function ProjectPage() {
         <dl className="grid grid-cols-2 gap-px bg-border md:grid-cols-3">
           <Stat label="Branch" value={project?.branch || "main"} />
           <Stat label="Container" value={containerStatus} />
-          <Stat label="Last deploy" value={formatRelative(latest?.created_at)} />
+          <Stat label="Last deploy" value={formatRelative(latest?.created_at, new Date(), fmtLocale)} />
         </dl>
         <div className="border-t border-border bg-surface px-4 py-3">
           <div className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Access</div>
@@ -555,7 +557,7 @@ export function ProjectPage() {
                   </td>
                   <td className="px-4 py-3 mono text-xs text-text">{shortHash(deployment.commit_hash, 7)}</td>
                   <td className="px-4 py-3"><StatusPill status={deployment.status} size="sm" /></td>
-                  <td className="px-4 py-3 text-xs text-muted">{formatRelative(deployment.created_at)}</td>
+                  <td className="px-4 py-3 text-xs text-muted">{formatRelative(deployment.created_at, new Date(), fmtLocale)}</td>
                   <td className="px-4 py-3 mono text-xs text-text">
                     {formatDuration(deployment.created_at, deployment.updated_at)}
                   </td>

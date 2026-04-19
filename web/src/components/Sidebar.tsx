@@ -32,7 +32,7 @@ const groups: NavGroup[] = [
   },
   {
     label: "System",
-    items: [{ to: "/settings", label: "Settings", disabled: true }],
+    items: [{ to: "/settings", label: "Settings" }],
   },
 ];
 

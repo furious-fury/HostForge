@@ -34,6 +34,9 @@ import (
 	"github.com/hostforge/hostforge/internal/services"
 )
 
+// serverStartedAt is used for uptime in /api/settings.
+var serverStartedAt = time.Now().UTC()
+
 func main() {
 	log := logging.New()
 	code := runServer(log, os.Args[1:])
@@ -141,6 +144,8 @@ func runServer(log *slog.Logger, args []string) int {
 	mux.HandleFunc(cfg.WebhookBasePath, handler.withRequestContext(handler.handleGitHubWebhook))
 	mux.HandleFunc("/auth/session", handler.withRequestContext(handler.handleSessionRoutes))
 	mux.HandleFunc("/api/system/status", handler.withRequestContext(handler.requireManagementAuth(handler.handleSystemStatus)))
+	mux.HandleFunc("/api/settings", handler.withRequestContext(handler.requireManagementAuth(handler.handleSettingsRoutes)))
+	mux.HandleFunc("/api/settings/", handler.withRequestContext(handler.requireManagementAuth(handler.handleSettingsRoutes)))
 	mux.HandleFunc("/api/repositories/branches", handler.withRequestContext(handler.requireManagementAuth(handler.handleRepositoryBranches)))
 	mux.HandleFunc("/api/projects", handler.withRequestContext(handler.requireManagementAuth(handler.handleProjectsCollection)))
 	mux.HandleFunc("/api/projects/", handler.withRequestContext(handler.requireManagementAuth(handler.handleProjectRoutes)))

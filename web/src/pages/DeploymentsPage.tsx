@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiDeployment, ApiProject } from "../api";
 import { Button, ButtonLink } from "../components/Button";
@@ -7,10 +7,10 @@ import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { formatDuration, formatRelative, shortHash } from "../format";
 import { useDeploymentsListQuery, useProjectsQuery } from "../hooks/fleetQueries";
+import { useFormatLocale, useUIPrefs } from "../hooks/useUIPrefs";
 
 type StatusFilter = "all" | "building" | "success" | "failed";
 
-const PAGE_STEP = 50;
 const MAX_DEPLOYMENTS = 200;
 
 function normStatus(s: string | undefined): string {
@@ -18,7 +18,15 @@ function normStatus(s: string | undefined): string {
 }
 
 export function DeploymentsPage() {
-  const [listLimit, setListLimit] = useState(PAGE_STEP);
+  const { prefs } = useUIPrefs();
+  const pageStep = prefs.deploymentsPageSize;
+  const [listLimit, setListLimit] = useState<number>(pageStep);
+  const fmtLocale = useFormatLocale();
+
+  useEffect(() => {
+    setListLimit(pageStep);
+  }, [pageStep]);
+
   const projectsQ = useProjectsQuery();
   const deploysQ = useDeploymentsListQuery(listLimit, { keepPreviousWhileFetching: true });
 
@@ -72,6 +80,10 @@ export function DeploymentsPage() {
   }, [deployments]);
 
   const canLoadMore = listLimit < MAX_DEPLOYMENTS && deployments.length >= listLimit;
+
+  function loadMore() {
+    setListLimit((n) => Math.min(MAX_DEPLOYMENTS, n + pageStep));
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -138,7 +150,7 @@ export function DeploymentsPage() {
                 size="sm"
                 type="button"
                 disabled={deploysQ.isFetching}
-                onClick={() => setListLimit((n) => Math.min(n + PAGE_STEP, MAX_DEPLOYMENTS))}
+                onClick={loadMore}
               >
                 {deploysQ.isFetching ? "Loading…" : `Load more (up to ${MAX_DEPLOYMENTS})`}
               </Button>
@@ -210,7 +222,7 @@ export function DeploymentsPage() {
                       <td className="px-4 py-3">
                         <StatusPill status={d.status} size="sm" />
                       </td>
-                      <td className="px-4 py-3 text-xs text-muted">{formatRelative(d.created_at)}</td>
+                      <td className="px-4 py-3 text-xs text-muted">{formatRelative(d.created_at, new Date(), fmtLocale)}</td>
                       <td className="px-4 py-3 mono text-xs text-text">{formatDuration(d.created_at, d.updated_at)}</td>
                     </tr>
                   );

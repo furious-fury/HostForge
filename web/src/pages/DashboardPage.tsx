@@ -9,6 +9,7 @@ import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { formatDuration, formatRelative, shortHash } from "../format";
 import { useDeploymentsListQuery, useProjectsQuery, useSystemStatusQuery } from "../hooks/fleetQueries";
+import { useFormatLocale } from "../hooks/useUIPrefs";
 import { effectiveBuildLabel } from "../uiVersion";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -18,6 +19,7 @@ function dashOr(n: number | null): ReactNode {
 }
 
 export function DashboardPage() {
+  const fmtLocale = useFormatLocale();
   const projectsQ = useProjectsQuery();
   const deploysQ = useDeploymentsListQuery(30);
   const systemQ = useSystemStatusQuery();
@@ -192,7 +194,7 @@ export function DashboardPage() {
                       <td className="px-4 py-3">
                         <StatusPill status={d.status} size="sm" />
                       </td>
-                      <td className="px-4 py-3 text-xs text-muted">{formatRelative(d.created_at)}</td>
+                      <td className="px-4 py-3 text-xs text-muted">{formatRelative(d.created_at, new Date(), fmtLocale)}</td>
                       <td className="px-4 py-3 mono text-xs text-text">{formatDuration(d.created_at, d.updated_at)}</td>
                     </tr>
                   );

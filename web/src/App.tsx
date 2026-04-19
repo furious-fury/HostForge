@@ -4,13 +4,15 @@ import { createSession, deleteSession, getSessionStatus } from "./api";
 import { Button } from "./components/Button";
 import { Shell } from "./components/Shell";
 import { ToastProvider } from "./components/ToastProvider";
-import { DashboardPage } from "./pages/DashboardPage";
+import { UIPrefsProvider } from "./hooks/useUIPrefs";
 import { DeploymentsPage } from "./pages/DeploymentsPage";
 import { DeploymentPage } from "./pages/DeploymentPage";
 import { ObservabilityPage } from "./pages/ObservabilityPage";
 import { NewProjectPage } from "./pages/NewProjectPage";
 import { ProjectPage } from "./pages/ProjectPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
+import { SettingsPage } from "./pages/SettingsPage";
+import { DefaultLandingRoute } from "./pages/DefaultLandingRoute";
 
 export default function App() {
   const [authChecking, setAuthChecking] = useState(true);
@@ -122,18 +124,21 @@ export default function App() {
 
   return (
     <ToastProvider>
-      <Shell onLogout={handleLogout}>
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/deployments" element={<DeploymentsPage />} />
-          <Route path="/observability" element={<ObservabilityPage />} />
-          <Route path="/projects" element={<ProjectsPage />} />
-          <Route path="/projects/new" element={<NewProjectPage />} />
-          <Route path="/projects/:projectID" element={<ProjectPage />} />
-          <Route path="/projects/:projectID/deployments/:deploymentID" element={<DeploymentPage />} />
-          <Route path="*" element={<DashboardPage />} />
-        </Routes>
-      </Shell>
+      <UIPrefsProvider>
+        <Shell onLogout={handleLogout}>
+          <Routes>
+            <Route path="/" element={<DefaultLandingRoute />} />
+            <Route path="/deployments" element={<DeploymentsPage />} />
+            <Route path="/observability" element={<ObservabilityPage />} />
+            <Route path="/projects" element={<ProjectsPage />} />
+            <Route path="/projects/new" element={<NewProjectPage />} />
+            <Route path="/projects/:projectID" element={<ProjectPage />} />
+            <Route path="/projects/:projectID/deployments/:deploymentID" element={<DeploymentPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<DefaultLandingRoute />} />
+          </Routes>
+        </Shell>
+      </UIPrefsProvider>
     </ToastProvider>
   );
 }

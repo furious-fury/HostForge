@@ -1,4 +1,4 @@
-export function formatDate(raw?: string | null): string {
+export function formatDate(raw?: string | null, locale?: string): string {
   if (!raw) {
     return "never";
   }
@@ -6,10 +6,10 @@ export function formatDate(raw?: string | null): string {
   if (Number.isNaN(ts)) {
     return raw;
   }
-  return new Date(ts).toLocaleString();
+  return new Date(ts).toLocaleString(locale && locale.trim() !== "" ? locale : undefined);
 }
 
-export function formatRelative(raw?: string | null, now: Date = new Date()): string {
+export function formatRelative(raw?: string | null, now: Date = new Date(), locale?: string): string {
   if (!raw) {
     return "never";
   }
@@ -21,18 +21,30 @@ export function formatRelative(raw?: string | null, now: Date = new Date()): str
   if (diffMs < 0) {
     return "just now";
   }
+  const rtf =
+    typeof Intl !== "undefined" && Intl.RelativeTimeFormat
+      ? new Intl.RelativeTimeFormat(locale && locale.trim() !== "" ? locale : undefined, { numeric: "auto" })
+      : null;
   const sec = Math.floor(diffMs / 1000);
-  if (sec < 45) return `${sec}s ago`;
+  if (sec < 45) return rtf ? rtf.format(-sec, "second") : `${sec}s ago`;
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return rtf ? rtf.format(-min, "minute") : `${min}m ago`;
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return rtf ? rtf.format(-hr, "hour") : `${hr}h ago`;
   const d = Math.floor(hr / 24);
-  if (d < 30) return `${d}d ago`;
+  if (d < 30) return rtf ? rtf.format(-d, "day") : `${d}d ago`;
   const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}mo ago`;
+  if (mo < 12) return rtf ? rtf.format(-mo, "month") : `${mo}mo ago`;
   const y = Math.floor(d / 365);
-  return `${y}y ago`;
+  return rtf ? rtf.format(-y, "year") : `${y}y ago`;
+}
+
+/** Resolve UI numeric/date locale from prefs (`en-US` or browser). */
+export function resolveFormatLocale(pref: "en-US" | "system"): string {
+  if (pref === "system" && typeof navigator !== "undefined" && navigator.language) {
+    return navigator.language;
+  }
+  return "en-US";
 }
 
 export function formatDuration(startRaw?: string | null, endRaw?: string | null): string {

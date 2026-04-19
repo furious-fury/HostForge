@@ -82,6 +82,24 @@ func ValidateRoot(ctx context.Context, caddyBin, rootConfig string) error {
 	return runCaddy(ctx, bin, "validate", "--config", root)
 }
 
+// ValidateRootCapture runs `caddy validate` and returns separate stdout/stderr streams.
+func ValidateRootCapture(ctx context.Context, caddyBin, rootConfig string) (stdout, stderr string, err error) {
+	root := strings.TrimSpace(rootConfig)
+	if root == "" {
+		return "", "", fmt.Errorf("root config path is required")
+	}
+	bin := strings.TrimSpace(caddyBin)
+	if bin == "" {
+		bin = "caddy"
+	}
+	cmd := exec.CommandContext(ctx, bin, "validate", "--config", root)
+	var outb, errb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &errb
+	err = cmd.Run()
+	return outb.String(), errb.String(), err
+}
+
 // RenderConfig converts routes into caddyfile server blocks.
 func RenderConfig(routes []Route) string {
 	filtered := make([]Route, 0, len(routes))

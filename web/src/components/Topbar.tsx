@@ -1,12 +1,13 @@
 import { Link, useLocation, useParams } from "react-router-dom";
+import type { ThemePreference } from "../hooks/useUIPrefs";
 import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
-import { Theme } from "../theme";
-import { Button, ButtonLink } from "./Button";
+import { Button } from "./Button";
 import { ThemeToggle } from "./ThemeToggle";
 
 type TopbarProps = {
-  theme: Theme;
-  onThemeChange: (theme: Theme) => void;
+  themePreference: ThemePreference;
+  effectiveTheme: "light" | "dark";
+  onThemeCycle: () => void;
   onLogout: () => void;
 };
 
@@ -46,6 +47,11 @@ function useBreadcrumbs(): Crumb[] {
     return crumbs;
   }
 
+  if (segments[0] === "settings") {
+    crumbs.push({ label: "Settings", to: "/settings" });
+    return crumbs;
+  }
+
   crumbs.push({ label: titleize(segments[0]) });
   return crumbs;
 }
@@ -59,7 +65,7 @@ function titleize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-export function Topbar({ theme, onThemeChange, onLogout }: TopbarProps) {
+export function Topbar({ themePreference, effectiveTheme, onThemeCycle, onLogout }: TopbarProps) {
   const crumbs = useBreadcrumbs();
 
   return (
@@ -109,13 +115,10 @@ export function Topbar({ theme, onThemeChange, onLogout }: TopbarProps) {
       </div>
 
       <div className="flex items-center gap-2">
-        <ThemeToggle theme={theme} onChange={onThemeChange} />
+        <ThemeToggle preference={themePreference} effective={effectiveTheme} onCycle={onThemeCycle} />
         <Button variant="ghost" size="sm" onClick={onLogout}>
           Logout
         </Button>
-        <ButtonLink to="/projects/new" variant="primary" size="sm">
-          + New Project
-        </ButtonLink>
       </div>
     </header>
   );

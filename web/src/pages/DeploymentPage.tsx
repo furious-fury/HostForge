@@ -9,6 +9,7 @@ import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { Terminal } from "../components/Terminal";
 import { formatDuration, formatRelative, shortHash } from "../format";
+import { useFormatLocale, useUIPrefs } from "../hooks/useUIPrefs";
 
 type SourceKind = "build" | "container";
 type PanelTab = "logs" | "steps";
@@ -24,11 +25,13 @@ const STREAM_LABEL: Record<string, string> = {
 export function DeploymentPage() {
   const { projectID = "", deploymentID = "" } = useParams();
   const { registerProject } = useProjectBreadcrumb();
+  const { prefs } = useUIPrefs();
+  const fmtLocale = useFormatLocale();
   const [project, setProject] = useState<ApiProject | null>(null);
   const [deployments, setDeployments] = useState<ApiDeployment[]>([]);
   const [source, setSource] = useState<SourceKind>("build");
   const [lines, setLines] = useState("");
-  const [paused, setPaused] = useState(false);
+  const [paused, setPaused] = useState(() => !prefs.logAutoScroll);
   const [streamState, setStreamState] = useState("connecting");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
@@ -157,7 +160,7 @@ export function DeploymentPage() {
         <dl className="grid grid-cols-2 gap-px bg-border md:grid-cols-4">
           <Stat label="Commit" value={shortHash(deployment?.commit_hash || "", 12)} mono />
           <Stat label="Image" value={deployment?.image_ref || "—"} mono />
-          <Stat label="Started" value={formatRelative(deployment?.created_at)} />
+          <Stat label="Started" value={formatRelative(deployment?.created_at, new Date(), fmtLocale)} />
           <Stat label="Duration" value={formatDuration(deployment?.created_at, deployment?.updated_at)} mono />
         </dl>
       </header>

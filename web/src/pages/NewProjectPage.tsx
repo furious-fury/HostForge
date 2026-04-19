@@ -15,6 +15,7 @@ import { StatusPill } from "../components/StatusPill";
 import { Stepper } from "../components/Stepper";
 import { Terminal } from "../components/Terminal";
 import { fleetKeys } from "../hooks/fleetQueries";
+import { useUIPrefs } from "../hooks/useUIPrefs";
 
 const STEPS = [
   { id: "source", label: "Source" },
@@ -346,8 +347,9 @@ function InlineDeploymentLogs({
   collapsed?: boolean;
   onExpand?: () => void;
 }) {
+  const { prefs } = useUIPrefs();
   const [lines, setLines] = useState("");
-  const [paused, setPaused] = useState(false);
+  const [paused, setPaused] = useState(() => !prefs.logAutoScroll);
   const [streamState, setStreamState] = useState("connecting");
   const [copied, setCopied] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);

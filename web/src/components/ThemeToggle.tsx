@@ -1,21 +1,28 @@
-import { Theme } from "../theme";
+import type { ThemePreference } from "../hooks/useUIPrefs";
 
 type ThemeToggleProps = {
-  theme: Theme;
-  onChange: (theme: Theme) => void;
+  preference: ThemePreference;
+  effective: "light" | "dark";
+  onCycle: () => void;
 };
 
-export function ThemeToggle({ theme, onChange }: ThemeToggleProps) {
-  const next: Theme = theme === "dark" ? "light" : "dark";
+export function ThemeToggle({ preference, effective, onCycle }: ThemeToggleProps) {
+  const label =
+    preference === "system"
+      ? `System (${effective === "dark" ? "Dark" : "Light"})`
+      : preference === "dark"
+        ? "Dark"
+        : "Light";
+  const icon = effective === "dark" ? "☾" : "☀";
   return (
     <button
       type="button"
-      onClick={() => onChange(next)}
-      title={`Switch to ${next} theme`}
+      onClick={onCycle}
+      title="Cycle theme: dark → light → system"
       className="mono inline-flex items-center gap-2 border border-border-strong bg-transparent px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-text hover:bg-surface-alt"
     >
-      <span aria-hidden>{theme === "dark" ? "☾" : "☀"}</span>
-      <span>{theme === "dark" ? "Dark" : "Light"}</span>
+      <span aria-hidden>{icon}</span>
+      <span>{label}</span>
     </button>
   );
 }
