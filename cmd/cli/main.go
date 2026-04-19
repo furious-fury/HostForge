@@ -38,6 +38,9 @@ func main() {
 	case "caddy":
 		code := runCaddy(log, os.Args[2:])
 		os.Exit(code)
+	case "validate":
+		code := runValidate(log, os.Args[2:])
+		os.Exit(code)
 	case "version":
 		fmt.Println("hostforge dev")
 		os.Exit(0)
@@ -56,6 +59,7 @@ Usage:
   hostforge domain remove [flags] (--id <domain_id> | --domain <host> <repo_url>)
   hostforge domain edit [flags] --id <domain_id> --domain <new_host>
   hostforge caddy sync [flags]
+  hostforge validate docker|preflight
   hostforge version
 
 deploy clones the repository (HTTPS), runs nixpacks build in the worktree, and streams build logs to stdout/stderr.

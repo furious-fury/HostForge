@@ -46,6 +46,7 @@ go build -o hostforge ./cmd/cli
 ./hostforge domain remove [flags] (--id <domain_id> | --domain <hostname> <repo_url>)
 ./hostforge domain edit [flags] --id <domain_id> --domain <new_hostname>
 ./hostforge caddy sync [flags]
+./hostforge validate docker|preflight
 ./hostforge version
 ```
 
@@ -82,6 +83,10 @@ go run ./cmd/cli deploy https://github.com/heroku/node-js-getting-started
 **If Nixpacks fails:** Run `nixpacks plan .` inside the worktree path printed in logs, or install/upgrade Nixpacks. Ensure sufficient disk and that the stack is supported by Nixpacks.
 
 Phase 1 note: Phase 0 uses `-o` filesystem output for fast validation; Phase 1 switches to `nixpacks build . --name <image>` so `hostforge deploy` can build an image and run a container. Image tags use `hostforge/<worktree-slug>:<utc-build-id>`.
+
+### Operator validation ([`task_list.md`](./task_list.md) — Detailed backlog §1)
+
+Use **[`docs/operator-validation-phase1.md`](./docs/operator-validation-phase1.md)** for staged proof of Docker (**1.1**), public HTTPS + restarts (**1.2**), and zero-downtime cutover (**1.3**). For **1.1** you can also run **`./scripts/operator-validation-phase1.sh`** (full automation) or **`hostforge validate docker`** / **`preflight`** for quick checks. Item **1.1** is recorded **PASS** in the runbook (2026-04-19, WSL2 + Docker Engine); **1.2** / **1.3** need a VPS with real DNS + Caddy—complete the runbook checklists and paste evidence in that file, then tick the matching exit rows in `task_list.md`.
 
 ## Phase 3: Caddy (reverse proxy + TLS)
 
