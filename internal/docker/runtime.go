@@ -1,3 +1,4 @@
+// Package docker wraps the Docker Engine API for container lifecycle and port publishing.
 package docker
 
 import (
@@ -61,7 +62,9 @@ func RunContainer(ctx context.Context, cli *client.Client, opts RunOptions) (str
 		Config: &container.Config{
 			Image:        opts.ImageRef,
 			ExposedPorts: exposed,
-			Env:          []string{fmt.Sprintf("PORT=%d", opts.ContainerPort)},
+			// PORT matches common PaaS conventions (e.g. Heroku); app must listen on this port
+			// for the host→container port mapping to receive traffic.
+			Env: []string{fmt.Sprintf("PORT=%d", opts.ContainerPort)},
 		},
 		HostConfig: &container.HostConfig{
 			PortBindings: bindings,

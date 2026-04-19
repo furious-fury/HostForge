@@ -14,14 +14,17 @@ import (
 	"github.com/hostforge/hostforge/internal/models"
 )
 
+// Store wraps database/sql access for HostForge persistence.
 type Store struct {
 	db *sql.DB
 }
 
+// New returns a Store that uses db (typically from database.OpenSQLite).
 func New(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
+// CreateDeploymentInput holds optional metadata for a new deployment row.
 type CreateDeploymentInput struct {
 	ProjectID  string
 	CommitHash string
@@ -30,6 +33,7 @@ type CreateDeploymentInput struct {
 	Worktree   string
 }
 
+// AttachContainerInput links a running Docker container to a deployment.
 type AttachContainerInput struct {
 	DeploymentID      string
 	DockerContainerID string
@@ -38,6 +42,8 @@ type AttachContainerInput struct {
 	Status            string
 }
 
+// EnsureProject returns the project for repoURL and branch, inserting a row if missing.
+// Branch is part of the unique key with repo_url (default branch stored as "").
 func (s *Store) EnsureProject(ctx context.Context, repoURL, branch string) (models.Project, error) {
 	trimmedRepo := strings.TrimSpace(repoURL)
 	trimmedBranch := strings.TrimSpace(branch)
@@ -84,6 +90,7 @@ func (s *Store) EnsureProject(ctx context.Context, repoURL, branch string) (mode
 	return p, nil
 }
 
+// CreateDeployment inserts a deployment with status QUEUED.
 func (s *Store) CreateDeployment(ctx context.Context, in CreateDeploymentInput) (models.Deployment, error) {
 	now := time.Now().UTC()
 	d := models.Deployment{
@@ -118,6 +125,7 @@ func (s *Store) CreateDeployment(ctx context.Context, in CreateDeploymentInput) 
 	return d, nil
 }
 
+// UpdateDeploymentStatus sets status and optional error_message (terminal failures).
 func (s *Store) UpdateDeploymentStatus(ctx context.Context, deploymentID, status, errorMessage string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.ExecContext(
@@ -134,6 +142,7 @@ func (s *Store) UpdateDeploymentStatus(ctx context.Context, deploymentID, status
 	return nil
 }
 
+// AttachContainer inserts a container row for a successful run (ports and Docker ID).
 func (s *Store) AttachContainer(ctx context.Context, in AttachContainerInput) (models.Container, error) {
 	now := time.Now().UTC()
 	status := strings.TrimSpace(in.Status)
@@ -169,6 +178,7 @@ func (s *Store) AttachContainer(ctx context.Context, in AttachContainerInput) (m
 	return c, nil
 }
 
+// ListProjects returns all projects, newest first by created_at.
 func (s *Store) ListProjects(ctx context.Context) ([]models.Project, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, name, repo_url, branch, created_at, updated_at FROM projects ORDER BY created_at DESC`)
 	if err != nil {
@@ -190,6 +200,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]models.Project, error) {
 	return items, rows.Err()
 }
 
+// ListDeployments returns all deployments, newest first by created_at.
 func (s *Store) ListDeployments(ctx context.Context) ([]models.Deployment, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
@@ -226,6 +237,7 @@ func (s *Store) ListDeployments(ctx context.Context) ([]models.Deployment, error
 	return items, rows.Err()
 }
 
+// projectNameFromURL derives a display name from the repo path (e.g. "myapp" from github.com/org/myapp).
 func projectNameFromURL(repoURL string) string {
 	u, err := url.Parse(repoURL)
 	if err != nil {
@@ -238,6 +250,7 @@ func projectNameFromURL(repoURL string) string {
 	return base
 }
 
+// parseTime parses RFC3339 timestamps stored in SQLite TEXT columns.
 func parseTime(raw string) time.Time {
 	t, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
@@ -246,6 +259,7 @@ func parseTime(raw string) time.Time {
 	return t
 }
 
+// newID returns a 32-hex-character identifier (128 random bits, or time-based fallback).
 func newID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {

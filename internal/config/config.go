@@ -1,3 +1,4 @@
+// Package config loads HostForge paths and runtime defaults from flags and environment.
 package config
 
 import (
@@ -9,7 +10,7 @@ import (
 
 // Config holds HostForge paths and runtime options for the CLI and server.
 type Config struct {
-	// DataDir is the root for worktrees, build outputs, and (later) SQLite.
+	// DataDir is the root for worktrees, build outputs, and the SQLite DB (hostforge.db).
 	DataDir string
 	// ListenAddr is the bind address for the HTTP API (Phase 4+). Unused by the Phase 0 CLI.
 	ListenAddr string

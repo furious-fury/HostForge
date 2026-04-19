@@ -1,3 +1,4 @@
+// Package git wraps go-git for cloning and updating deploy worktrees.
 package git
 
 import (

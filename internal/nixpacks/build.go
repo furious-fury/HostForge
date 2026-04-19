@@ -1,3 +1,4 @@
+// Package nixpacks invokes the nixpacks CLI to build app images for Docker.
 package nixpacks
 
 import (

@@ -1,3 +1,4 @@
+// Package main is the HTTP API entrypoint (webhooks, WebSocket logs); stub until later phases.
 package main
 
 import (

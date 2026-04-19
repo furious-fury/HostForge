@@ -13,7 +13,9 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-// ApplyMigrations creates/updates the schema to the latest embedded version.
+// ApplyMigrations ensures schema_migrations exists, then runs each embedded migrations/*.sql
+// file once, in sorted filename order. Filenames act as version keys (e.g. 0001_initial.sql).
+// Each migration runs in a single transaction: DDL + insert into schema_migrations.
 func ApplyMigrations(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -55,6 +57,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	return nil
 }
 
+// migrationApplied returns true if version (the migration file name) was already applied.
 func migrationApplied(ctx context.Context, db *sql.DB, version string) (bool, error) {
 	var count int
 	if err := db.QueryRowContext(
@@ -67,6 +70,7 @@ func migrationApplied(ctx context.Context, db *sql.DB, version string) (bool, er
 	return count > 0, nil
 }
 
+// applyMigration runs one migration file in a transaction: execute SQL, then insert version.
 func applyMigration(ctx context.Context, db *sql.DB, version, sqlText string) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {

@@ -1,3 +1,6 @@
+-- Initial control-plane schema (projects, deployments, domains, containers).
+-- Timestamps are RFC3339 UTC in TEXT columns. IDs are opaque hex strings from the application.
+
 CREATE TABLE IF NOT EXISTS projects (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,

@@ -1,3 +1,5 @@
+// Package main implements the hostforge command-line interface: deploy (clone, build, run)
+// and version. Deploy persists control-plane state to SQLite under the configured data directory.
 package main
 
 import (
@@ -66,6 +68,10 @@ Flags for deploy:
 `, os.Args[0], config.DataDirEnv, config.HostPortEnv, config.PortStartEnv, config.PortEndEnv, config.ContainerPortEnv)
 }
 
+// runDeploy clones repoURL, builds a Docker image with Nixpacks, runs a container, and records
+// project/deployment/container rows in SQLite. Status flow: QUEUED → BUILDING → SUCCESS or FAILED
+// (FAILED also records error_message). On failure after deployment creation, the deployment is
+// marked FAILED; no container row is written unless the container started successfully.
 func runDeploy(log *slog.Logger, args []string) int {
 	defaultHostPort, defaultPortStart, defaultPortEnd, defaultContainerPort, err := config.RuntimeDefaults()
 	if err != nil {
@@ -118,6 +124,7 @@ func runDeploy(log *slog.Logger, args []string) int {
 	}
 
 	ctx := context.Background()
+	// Control-plane DB: schema + migrations applied on open (see internal/database).
 	db, err := database.OpenSQLite(ctx, cfg.DBPath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
@@ -152,6 +159,7 @@ func runDeploy(log *slog.Logger, args []string) int {
 		fmt.Fprintf(os.Stderr, "error: deployment state: %v\n", err)
 		return 1
 	}
+	// Best-effort: keep DB aligned with stderr errors for operators and future UI/API.
 	markFailed := func(stepErr error) {
 		if err := store.UpdateDeploymentStatus(ctx, deployment.ID, models.DeploymentFailed, stepErr.Error()); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to mark deployment FAILED: %v\n", err)
