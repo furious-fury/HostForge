@@ -50,6 +50,12 @@ type CreateProjectRequest = {
   project_name: string;
 };
 
+export type RepositoryBranches = {
+  repo_url: string;
+  branches: string[];
+  default_branch: string;
+};
+
 async function readJSON<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text();
@@ -101,6 +107,21 @@ export async function createProject(input: CreateProjectRequest): Promise<ApiPro
   });
   const body = await readJSON<{ project: ApiProject }>(res);
   return body.project;
+}
+
+export async function fetchRepositoryBranches(repoURL: string): Promise<RepositoryBranches> {
+  const qs = new URLSearchParams({ repo_url: repoURL }).toString();
+  const res = await fetch(`/api/repositories/branches?${qs}`);
+  const body = await readJSON<{
+    repo_url: string;
+    branches?: string[];
+    default_branch?: string;
+  }>(res);
+  return {
+    repo_url: body.repo_url,
+    branches: body.branches || [],
+    default_branch: body.default_branch || "main",
+  };
 }
 
 export async function deployProject(

@@ -13,6 +13,7 @@ import (
 
 	"github.com/hostforge/hostforge/internal/config"
 	"github.com/hostforge/hostforge/internal/database"
+	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/logging"
 	"github.com/hostforge/hostforge/internal/repository"
 	"github.com/hostforge/hostforge/internal/services"
@@ -168,7 +169,8 @@ func runDeploy(log *slog.Logger, args []string) int {
 	}
 	defer db.Close()
 	store := repository.New(db)
-	project, err := store.EnsureProject(ctx, repoURL, strings.TrimSpace(*branch))
+	resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch))
+	project, err := store.EnsureProject(ctx, repoURL, resolvedBranch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: project state: %v\n", err)
 		return 1
@@ -176,7 +178,7 @@ func runDeploy(log *slog.Logger, args []string) int {
 	result, err := services.Deploy(ctx, log, cfg, store, services.DeployPrepareInput{
 		Project: project,
 		RepoURL: repoURL,
-		Branch:  strings.TrimSpace(*branch),
+		Branch:  resolvedBranch,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: deploy: %v\n", err)
@@ -243,7 +245,8 @@ func runDomainAdd(log *slog.Logger, args []string) int {
 	defer db.Close()
 	store := repository.New(db)
 
-	project, err := store.EnsureProject(ctx, repoURL, strings.TrimSpace(*branch))
+	resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch))
+	project, err := store.EnsureProject(ctx, repoURL, resolvedBranch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: project state: %v\n", err)
 		return 1

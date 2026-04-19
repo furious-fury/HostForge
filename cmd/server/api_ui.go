@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hostforge/hostforge/internal/docker"
+	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/repository"
 	"github.com/hostforge/hostforge/internal/services"
@@ -78,6 +79,13 @@ type apiDomain struct {
 	UpdatedAt  string `json:"updated_at"`
 }
 
+type repositoryBranchesResponse struct {
+	Status        string   `json:"status"`
+	RepoURL       string   `json:"repo_url"`
+	Branches      []string `json:"branches"`
+	DefaultBranch string   `json:"default_branch"`
+}
+
 func (s *server) handleProjectsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -87,6 +95,35 @@ func (s *server) handleProjectsCollection(w http.ResponseWriter, r *http.Request
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
 	}
+}
+
+func (s *server) handleRepositoryBranches(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+		return
+	}
+	repoRaw := strings.TrimSpace(r.URL.Query().Get("repo_url"))
+	if repoRaw == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "missing_repo_url"})
+		return
+	}
+	repoURL, err := services.CanonicalRepoURL(repoRaw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_repository_clone_url"})
+		return
+	}
+	branches, inferredDefault, err := git.ListRemoteBranches(r.Context(), repoURL)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "list_remote_branches_failed"})
+		return
+	}
+	defaultBranch := git.ResolveBranch(r.Context(), repoURL, "")
+	writeJSON(w, http.StatusOK, repositoryBranchesResponse{
+		Status:        "ok",
+		RepoURL:       repoURL,
+		Branches:      branches,
+		DefaultBranch: firstNonEmpty(inferredDefault, defaultBranch),
+	})
 }
 
 func (s *server) handleProjectsList(w http.ResponseWriter, r *http.Request) {
@@ -123,9 +160,7 @@ func (s *server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	branch := strings.TrimSpace(req.Branch)
-	if branch == "" {
-		branch = "main"
-	}
+	branch = git.ResolveBranch(r.Context(), repoURL, branch)
 	name := strings.TrimSpace(req.ProjectName)
 	if name == "" {
 		name = inferProjectName(repoURL)
@@ -392,12 +427,12 @@ func (s *server) handleProjectRestartAction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":       "restarted",
-		"project_id":   projectID,
-		"container":    containerToAPI(containerRec),
-		"url":          result.URL,
-		"host_port":    result.HostPort,
-		"recreated":    result.Recreated,
+		"status":        "restarted",
+		"project_id":    projectID,
+		"container":     containerToAPI(containerRec),
+		"url":           result.URL,
+		"host_port":     result.HostPort,
+		"recreated":     result.Recreated,
 		"deployment_id": result.DeploymentID,
 	})
 }
@@ -583,6 +618,16 @@ func inferProjectName(repoURL string) string {
 		return "project"
 	}
 	return name
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func formatTime(t time.Time) string {

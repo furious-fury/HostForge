@@ -1,6 +1,13 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiDeployment, createProject, deployProject, fetchDeploymentLogs, fetchProjectDeployments } from "../api";
+import {
+  ApiDeployment,
+  createProject,
+  deployProject,
+  fetchDeploymentLogs,
+  fetchProjectDeployments,
+  fetchRepositoryBranches,
+} from "../api";
 import { Button, ButtonLink } from "../components/Button";
 import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
@@ -27,6 +34,11 @@ export function NewProjectPage() {
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [deployment, setDeployment] = useState<ApiDeployment | null>(null);
+  const [availableBranches, setAvailableBranches] = useState<string[]>([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchLookupError, setBranchLookupError] = useState("");
+  const [branchTouched, setBranchTouched] = useState(false);
+  const branchLookupSeq = useRef(0);
 
   const stepIndex = phase === "form" ? 0 : phase === "deploying" ? 1 : 2;
   const failedIndex = phase === "failure" ? stepIndex : undefined;
@@ -45,7 +57,7 @@ export function NewProjectPage() {
     try {
       const project = await createProject({
         repo_url: repoURL.trim(),
-        branch: branch.trim() || "main",
+        branch: branch.trim(),
         project_name: projectName.trim(),
       });
       setProjectID(project.id);
@@ -102,6 +114,44 @@ export function NewProjectPage() {
     };
   }, [phase, projectID, deploymentID]);
 
+  useEffect(() => {
+    const trimmedRepo = repoURL.trim();
+    if (!trimmedRepo || !/^https?:\/\//i.test(trimmedRepo)) {
+      setAvailableBranches([]);
+      setBranchesLoading(false);
+      setBranchLookupError("");
+      return;
+    }
+    const seq = ++branchLookupSeq.current;
+    setBranchesLoading(true);
+    setBranchLookupError("");
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await fetchRepositoryBranches(trimmedRepo);
+        if (branchLookupSeq.current !== seq) return;
+        const branches = result.branches || [];
+        setAvailableBranches(branches);
+        if (!branchTouched) {
+          const fallback = result.default_branch || branches[0] || "main";
+          setBranch(fallback);
+        } else if (branch.trim() !== "" && branches.length > 0 && !branches.includes(branch.trim())) {
+          setBranch(result.default_branch || branches[0] || "main");
+          setBranchTouched(false);
+        }
+      } catch {
+        if (branchLookupSeq.current !== seq) return;
+        setAvailableBranches([]);
+        setBranchLookupError("Could not load branches; you can still type one manually.");
+      } finally {
+        if (branchLookupSeq.current === seq) {
+          setBranchesLoading(false);
+        }
+      }
+    }, 400);
+
+    return () => window.clearTimeout(timer);
+  }, [repoURL, branchTouched]);
+
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
       <header>
@@ -124,6 +174,7 @@ export function NewProjectPage() {
                 onChange={(e) => {
                   const next = e.target.value;
                   setRepoURL(next);
+                  setBranchTouched(false);
                   if (!projectName) {
                     setProjectName(suggestName(next));
                   }
@@ -134,12 +185,41 @@ export function NewProjectPage() {
             </Field>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Field label="Branch">
-                <input
-                  className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
-                  value={branch}
-                  onChange={(e) => setBranch(e.target.value)}
-                  placeholder="main"
-                />
+                {availableBranches.length > 0 ? (
+                  <select
+                    className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+                    value={branch}
+                    onChange={(e) => {
+                      setBranch(e.target.value);
+                      setBranchTouched(true);
+                    }}
+                  >
+                    {availableBranches.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+                    value={branch}
+                    onChange={(e) => {
+                      setBranch(e.target.value);
+                      setBranchTouched(true);
+                    }}
+                    placeholder="Auto-detected (main/master/remote default)"
+                  />
+                )}
+                <div className="mono mt-1 text-[10px] uppercase tracking-wider text-muted">
+                  {branchesLoading
+                    ? "Loading branches..."
+                    : branchLookupError
+                    ? branchLookupError
+                    : availableBranches.length > 0
+                    ? `${availableBranches.length} branch${availableBranches.length > 1 ? "es" : ""} detected`
+                    : "Enter repo URL to auto-detect branches"}
+                </div>
               </Field>
               <Field label="Project name">
                 <input

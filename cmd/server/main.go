@@ -102,6 +102,7 @@ func runServer(log *slog.Logger, args []string) int {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WebhookBasePath, handler.handleGitHubWebhook)
+	mux.HandleFunc("/api/repositories/branches", handler.handleRepositoryBranches)
 	mux.HandleFunc("/api/projects", handler.handleProjectsCollection)
 	mux.HandleFunc("/api/projects/", handler.handleProjectRoutes)
 	mux.HandleFunc("/api/deployments", handler.handleDeploymentsCollection)
