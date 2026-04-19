@@ -4,9 +4,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -74,10 +78,22 @@ Flags for deploy:
     	range end when host-port=-1 (default from %s)
   -container-port int
     	app port inside container (default from %s)
+  -health-path string
+		HTTP path probed before cutover (default from %s)
+  -health-timeout-ms int
+		per-request health timeout in milliseconds (default from %s)
+  -health-retries int
+		number of health probe attempts before deploy fails (default from %s)
+  -health-interval-ms int
+		delay between health probes in milliseconds (default from %s)
+  -health-expected-min int
+		minimum accepted health status code (default from %s)
+  -health-expected-max int
+		maximum accepted health status code (default from %s)
   -sync-caddy
 		run caddy sync after successful deploy (default from %s)
 
-`, os.Args[0], config.DataDirEnv, config.HostPortEnv, config.PortStartEnv, config.PortEndEnv, config.ContainerPortEnv, config.SyncCaddyEnv)
+`, os.Args[0], config.DataDirEnv, config.HostPortEnv, config.PortStartEnv, config.PortEndEnv, config.ContainerPortEnv, config.HealthPathEnv, config.HealthTimeoutMSEnv, config.HealthRetriesEnv, config.HealthIntervalMSEnv, config.HealthExpectedMinEnv, config.HealthExpectedMaxEnv, config.SyncCaddyEnv)
 }
 
 // runDeploy clones repoURL, builds a Docker image with Nixpacks, runs a container, and records
@@ -90,6 +106,11 @@ func runDeploy(log *slog.Logger, args []string) int {
 		fmt.Fprintf(os.Stderr, "error: runtime env defaults: %v\n", err)
 		return 2
 	}
+	defaultHealthPath, defaultHealthTimeoutMS, defaultHealthRetries, defaultHealthIntervalMS, defaultHealthExpectedMin, defaultHealthExpectedMax, err := config.HealthDefaults()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: health env defaults: %v\n", err)
+		return 2
+	}
 
 	fs := flag.NewFlagSet("deploy", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -99,6 +120,12 @@ func runDeploy(log *slog.Logger, args []string) int {
 	portStart := fs.Int("port-start", defaultPortStart, "range start when host-port=-1")
 	portEnd := fs.Int("port-end", defaultPortEnd, "range end when host-port=-1")
 	containerPort := fs.Int("container-port", defaultContainerPort, "app port inside container")
+	healthPath := fs.String("health-path", defaultHealthPath, "HTTP path probed before cutover")
+	healthTimeoutMS := fs.Int("health-timeout-ms", defaultHealthTimeoutMS, "per-request health timeout in milliseconds")
+	healthRetries := fs.Int("health-retries", defaultHealthRetries, "number of health probe attempts before deploy fails")
+	healthIntervalMS := fs.Int("health-interval-ms", defaultHealthIntervalMS, "delay between health probes in milliseconds")
+	healthExpectedMin := fs.Int("health-expected-min", defaultHealthExpectedMin, "minimum accepted health status code")
+	healthExpectedMax := fs.Int("health-expected-max", defaultHealthExpectedMax, "maximum accepted health status code")
 	syncCaddy := fs.Bool("sync-caddy", cfgBoolDefault(config.SyncCaddyEnv, false), "run caddy sync after successful deploy")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -125,6 +152,12 @@ func runDeploy(log *slog.Logger, args []string) int {
 	cfg.PortStart = *portStart
 	cfg.PortEnd = *portEnd
 	cfg.ContainerPort = *containerPort
+	cfg.HealthPath = *healthPath
+	cfg.HealthTimeoutMS = *healthTimeoutMS
+	cfg.HealthRetries = *healthRetries
+	cfg.HealthIntervalMS = *healthIntervalMS
+	cfg.HealthExpectedMin = *healthExpectedMin
+	cfg.HealthExpectedMax = *healthExpectedMax
 	cfg.SyncCaddy = *syncCaddy
 	if err := validateRuntimeConfig(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "error: runtime config: %v\n", err)
@@ -163,6 +196,19 @@ func runDeploy(log *slog.Logger, args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: project state: %v\n", err)
 		return 1
+	}
+	previousDeployment, err := store.GetLatestSuccessfulDeploymentByProjectID(ctx, project.ID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		fmt.Fprintf(os.Stderr, "error: previous deployment state: %v\n", err)
+		return 1
+	}
+	var previousContainer models.Container
+	if err == nil {
+		previousContainer, err = store.GetContainerByDeploymentID(ctx, previousDeployment.ID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			fmt.Fprintf(os.Stderr, "error: previous container state: %v\n", err)
+			return 1
+		}
 	}
 	deployment, err := store.CreateDeployment(ctx, repository.CreateDeploymentInput{
 		ProjectID: project.ID,
@@ -215,30 +261,70 @@ func runDeploy(log *slog.Logger, args []string) int {
 		fmt.Fprintf(os.Stderr, "error: run container: %v\n", err)
 		return 1
 	}
-	if _, err := store.AttachContainer(ctx, repository.AttachContainerInput{
+	candidateContainer, err := store.AttachContainer(ctx, repository.AttachContainerInput{
 		DeploymentID:      deployment.ID,
 		DockerContainerID: containerID,
 		InternalPort:      cfg.ContainerPort,
 		HostPort:          hostPortValue,
 		Status:            "RUNNING",
-	}); err != nil {
+	})
+	if err != nil {
 		markFailed(err)
 		fmt.Fprintf(os.Stderr, "error: container state: %v\n", err)
 		return 1
 	}
+	cleanupCandidate := func(reason string) {
+		if stopErr := docker.StopAndRemove(ctx, dockerClient, containerID); stopErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove candidate container after %s: %v\n", reason, stopErr)
+			return
+		}
+		if err := store.UpdateContainerStatus(ctx, candidateContainer.ID, "REMOVED"); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to mark candidate container removed: %v\n", err)
+		}
+	}
+
+	if err := waitForHealthy(ctx, hostPortValue, cfg); err != nil {
+		markFailed(err)
+		cleanupCandidate("health check failure")
+		fmt.Fprintf(os.Stderr, "error: health check: %v\n", err)
+		return 1
+	}
+
+	shouldSyncCaddy := cfg.SyncCaddy
+	if !shouldSyncCaddy {
+		projectDomains, err := store.ListDomainsByProject(ctx, project.ID)
+		if err != nil {
+			markFailed(err)
+			cleanupCandidate("domain lookup failure")
+			fmt.Fprintf(os.Stderr, "error: load project domains: %v\n", err)
+			return 1
+		}
+		shouldSyncCaddy = len(projectDomains) > 0
+	}
+	if shouldSyncCaddy {
+		if err := syncCaddyRoutes(ctx, log, cfg, store); err != nil {
+			markFailed(err)
+			cleanupCandidate("caddy sync failure")
+			fmt.Fprintf(os.Stderr, "error: caddy sync: %v\n", err)
+			return 1
+		}
+	}
+
 	if err := store.UpdateDeploymentStatus(ctx, deployment.ID, models.DeploymentSuccess, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to mark deployment SUCCESS: %v\n", err)
+	}
+	if previousContainer.DockerContainerID != "" && previousContainer.DockerContainerID != containerID {
+		if err := docker.StopAndRemove(ctx, dockerClient, previousContainer.DockerContainerID); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: old container teardown failed (%s): %v\n", shortID(previousContainer.DockerContainerID), err)
+		} else if err := store.UpdateContainerStatus(ctx, previousContainer.ID, "REMOVED"); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to mark previous container removed: %v\n", err)
+		}
 	}
 
 	url := fmt.Sprintf("http://127.0.0.1:%d", hostPortValue)
 	log.Info("deploy finished", "image", imageRef, "container_id", shortID(containerID), "url", url)
 	fmt.Printf("container_id=%s\nimage=%s\ncontainer_port=%d\nhost_port=%d\nurl=%s\n",
 		containerID, imageRef, cfg.ContainerPort, hostPortValue, url)
-	if cfg.SyncCaddy {
-		if err := syncCaddyRoutes(ctx, log, cfg, store); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: caddy sync failed: %v\n", err)
-		}
-	}
 	return 0
 }
 
@@ -428,6 +514,21 @@ func validateRuntimeConfig(cfg *config.Config) error {
 			return fmt.Errorf("invalid host port range %d..%d", cfg.PortStart, cfg.PortEnd)
 		}
 	}
+	if cfg.HealthPath == "" {
+		return fmt.Errorf("health path must not be empty")
+	}
+	if cfg.HealthTimeoutMS <= 0 {
+		return fmt.Errorf("health timeout must be > 0")
+	}
+	if cfg.HealthRetries <= 0 {
+		return fmt.Errorf("health retries must be > 0")
+	}
+	if cfg.HealthIntervalMS < 0 {
+		return fmt.Errorf("health interval must be >= 0")
+	}
+	if cfg.HealthExpectedMin <= 0 || cfg.HealthExpectedMax <= 0 || cfg.HealthExpectedMin > cfg.HealthExpectedMax {
+		return fmt.Errorf("invalid health expected status range %d..%d", cfg.HealthExpectedMin, cfg.HealthExpectedMax)
+	}
 	return nil
 }
 
@@ -448,4 +549,40 @@ func cfgBoolDefault(envKey string, def bool) bool {
 		return def
 	}
 	return val
+}
+
+func waitForHealthy(ctx context.Context, hostPort int, cfg *config.Config) error {
+	path := cfg.HealthPath
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	target := fmt.Sprintf("http://127.0.0.1:%d%s", hostPort, path)
+	client := &http.Client{Timeout: time.Duration(cfg.HealthTimeoutMS) * time.Millisecond}
+	var lastErr error
+	for attempt := 1; attempt <= cfg.HealthRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return fmt.Errorf("build health request: %w", err)
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode >= cfg.HealthExpectedMin && resp.StatusCode <= cfg.HealthExpectedMax {
+				return nil
+			}
+			lastErr = fmt.Errorf("unexpected status code %d (expected %d..%d)", resp.StatusCode, cfg.HealthExpectedMin, cfg.HealthExpectedMax)
+		} else {
+			lastErr = err
+		}
+		if attempt == cfg.HealthRetries {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(cfg.HealthIntervalMS) * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("probe %s failed after %d attempts: %w", target, cfg.HealthRetries, lastErr)
 }

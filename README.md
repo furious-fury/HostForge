@@ -83,6 +83,12 @@ HostForge writes a **generated Caddyfile fragment** under the data directory and
 | `HOSTFORGE_CADDY_GENERATED_PATH` | Where HostForge writes the snippet (default: `<data-dir>/caddy/hostforge.caddy`) |
 | `HOSTFORGE_CADDY_ROOT_CONFIG` | Root Caddyfile path passed to `caddy validate` / `caddy reload` (required for sync) |
 | `HOSTFORGE_SYNC_CADDY` | If `true`, run `caddy sync` after a successful deploy (same as `-sync-caddy`) |
+| `HOSTFORGE_HEALTH_PATH` | HTTP path probed before promotion (default: `/`) |
+| `HOSTFORGE_HEALTH_TIMEOUT_MS` | Per-request health timeout in milliseconds (default: `3000`) |
+| `HOSTFORGE_HEALTH_RETRIES` | Number of health attempts before deploy fails (default: `10`) |
+| `HOSTFORGE_HEALTH_INTERVAL_MS` | Delay between health attempts in milliseconds (default: `1000`) |
+| `HOSTFORGE_HEALTH_EXPECTED_MIN` | Minimum accepted health status code (default: `200`) |
+| `HOSTFORGE_HEALTH_EXPECTED_MAX` | Maximum accepted health status code (default: `399`) |
 
 ### HTTPS / ACME
 
@@ -94,7 +100,22 @@ TLS is handled by **Caddy automatic HTTPS** (typically Let’s Encrypt). Certifi
 - **`hostforge caddy sync`** regenerates the snippet from SQLite and reloads Caddy. Each domain maps to the **latest successful deployment’s** container **`host_port`** for that project.
 - **`hostforge deploy ... -sync-caddy`** runs that sync after a good deploy so routes point at the new container without hand-editing config.
 
-**Not in v1:** attaching domains automatically during deploy, or zero-downtime cutover (see **Orchestration** in [task_list.md](./task_list.md)).
+### Zero-downtime orchestration
+
+Deploy now uses a candidate-first cutover sequence:
+
+1. Keep previous successful container running.
+2. Start a new candidate container on a new host port.
+3. Probe `127.0.0.1:<new_port><health_path>` using the health env/flags above.
+4. If health passes, run Caddy sync (when `-sync-caddy` is set or when the project has registered domains).
+5. Mark deployment `SUCCESS` only after successful health + sync.
+6. Stop and remove the previous container after route switch.
+
+Failure behavior:
+
+- Build/health/Caddy-sync failures mark the candidate deployment as `FAILED`.
+- Previous successful deployment keeps serving traffic.
+- Candidate container is cleaned up on health/sync failure.
 
 ## Server binary
 

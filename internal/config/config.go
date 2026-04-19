@@ -31,6 +31,18 @@ type Config struct {
 	CaddyRootConfig string
 	// SyncCaddy enables automatic caddy sync after successful deploy.
 	SyncCaddy bool
+	// HealthPath is the HTTP path used to probe new containers before cutover.
+	HealthPath string
+	// HealthTimeoutMS is per-request health probe timeout in milliseconds.
+	HealthTimeoutMS int
+	// HealthRetries is the number of health probe attempts before failing deploy.
+	HealthRetries int
+	// HealthIntervalMS is the delay between health probe attempts in milliseconds.
+	HealthIntervalMS int
+	// HealthExpectedMin is the minimum accepted HTTP status code for health checks.
+	HealthExpectedMin int
+	// HealthExpectedMax is the maximum accepted HTTP status code for health checks.
+	HealthExpectedMax int
 }
 
 // DataDirEnv is the environment variable overriding the default data directory.
@@ -61,6 +73,18 @@ const (
 	CaddyRootConfigEnv = "HOSTFORGE_CADDY_ROOT_CONFIG"
 	// SyncCaddyEnv enables post-deploy Caddy sync when set to true.
 	SyncCaddyEnv = "HOSTFORGE_SYNC_CADDY"
+	// HealthPathEnv configures the HTTP path used for container readiness probes.
+	HealthPathEnv = "HOSTFORGE_HEALTH_PATH"
+	// HealthTimeoutMSEnv sets per-request health check timeout in milliseconds.
+	HealthTimeoutMSEnv = "HOSTFORGE_HEALTH_TIMEOUT_MS"
+	// HealthRetriesEnv sets how many health probe attempts deploy will perform.
+	HealthRetriesEnv = "HOSTFORGE_HEALTH_RETRIES"
+	// HealthIntervalMSEnv sets delay between health probe attempts in milliseconds.
+	HealthIntervalMSEnv = "HOSTFORGE_HEALTH_INTERVAL_MS"
+	// HealthExpectedMinEnv sets the minimum accepted health status code.
+	HealthExpectedMinEnv = "HOSTFORGE_HEALTH_EXPECTED_MIN"
+	// HealthExpectedMaxEnv sets the maximum accepted health status code.
+	HealthExpectedMaxEnv = "HOSTFORGE_HEALTH_EXPECTED_MAX"
 )
 
 // DefaultDataDir returns the default data directory (./.hostforge).
@@ -124,6 +148,30 @@ func Load(dataDirFlag string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	healthPath := strings.TrimSpace(os.Getenv(HealthPathEnv))
+	if healthPath == "" {
+		healthPath = "/"
+	}
+	healthTimeoutMS, err := envInt(HealthTimeoutMSEnv, 3000)
+	if err != nil {
+		return nil, err
+	}
+	healthRetries, err := envInt(HealthRetriesEnv, 10)
+	if err != nil {
+		return nil, err
+	}
+	healthIntervalMS, err := envInt(HealthIntervalMSEnv, 1000)
+	if err != nil {
+		return nil, err
+	}
+	healthExpectedMin, err := envInt(HealthExpectedMinEnv, 200)
+	if err != nil {
+		return nil, err
+	}
+	healthExpectedMax, err := envInt(HealthExpectedMaxEnv, 399)
+	if err != nil {
+		return nil, err
+	}
 	return &Config{
 		DataDir:            abs,
 		ListenAddr:         listen,
@@ -135,6 +183,12 @@ func Load(dataDirFlag string) (*Config, error) {
 		CaddyGeneratedPath: caddyGeneratedPath,
 		CaddyRootConfig:    caddyRootConfig,
 		SyncCaddy:          syncCaddy,
+		HealthPath:         healthPath,
+		HealthTimeoutMS:    healthTimeoutMS,
+		HealthRetries:      healthRetries,
+		HealthIntervalMS:   healthIntervalMS,
+		HealthExpectedMin:  healthExpectedMin,
+		HealthExpectedMax:  healthExpectedMax,
 	}, nil
 }
 
@@ -196,4 +250,33 @@ func RuntimeDefaults() (hostPort, portStart, portEnd, containerPort int, err err
 		return 0, 0, 0, 0, err
 	}
 	return hostPort, portStart, portEnd, containerPort, nil
+}
+
+// HealthDefaults returns deploy health-check settings resolved from env with defaults.
+func HealthDefaults() (path string, timeoutMS, retries, intervalMS, expectedMin, expectedMax int, err error) {
+	path = strings.TrimSpace(os.Getenv(HealthPathEnv))
+	if path == "" {
+		path = "/"
+	}
+	timeoutMS, err = envInt(HealthTimeoutMSEnv, 3000)
+	if err != nil {
+		return "", 0, 0, 0, 0, 0, err
+	}
+	retries, err = envInt(HealthRetriesEnv, 10)
+	if err != nil {
+		return "", 0, 0, 0, 0, 0, err
+	}
+	intervalMS, err = envInt(HealthIntervalMSEnv, 1000)
+	if err != nil {
+		return "", 0, 0, 0, 0, 0, err
+	}
+	expectedMin, err = envInt(HealthExpectedMinEnv, 200)
+	if err != nil {
+		return "", 0, 0, 0, 0, 0, err
+	}
+	expectedMax, err = envInt(HealthExpectedMaxEnv, 399)
+	if err != nil {
+		return "", 0, 0, 0, 0, 0, err
+	}
+	return path, timeoutMS, retries, intervalMS, expectedMin, expectedMax, nil
 }

@@ -162,6 +162,39 @@ func (s *Store) UpdateDeploymentStatus(ctx context.Context, deploymentID, status
 	return nil
 }
 
+// GetLatestSuccessfulDeploymentByProjectID returns the newest SUCCESS deployment for a project.
+func (s *Store) GetLatestSuccessfulDeploymentByProjectID(ctx context.Context, projectID string) (models.Deployment, error) {
+	var d models.Deployment
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at
+		 FROM deployments
+		 WHERE project_id = ? AND status = ?
+		 ORDER BY created_at DESC
+		 LIMIT 1`,
+		strings.TrimSpace(projectID),
+		models.DeploymentSuccess,
+	).Scan(
+		&d.ID,
+		&d.ProjectID,
+		&d.Status,
+		&d.CommitHash,
+		&d.LogsPath,
+		&d.ImageRef,
+		&d.Worktree,
+		&d.ErrorMessage,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		return models.Deployment{}, fmt.Errorf("lookup latest successful deployment: %w", err)
+	}
+	d.CreatedAt = parseTime(createdAt)
+	d.UpdatedAt = parseTime(updatedAt)
+	return d, nil
+}
+
 // AttachContainer inserts a container row for a successful run (ports and Docker ID).
 func (s *Store) AttachContainer(ctx context.Context, in AttachContainerInput) (models.Container, error) {
 	now := time.Now().UTC()
@@ -196,6 +229,51 @@ func (s *Store) AttachContainer(ctx context.Context, in AttachContainerInput) (m
 		return models.Container{}, fmt.Errorf("insert container: %w", err)
 	}
 	return c, nil
+}
+
+// GetContainerByDeploymentID returns the container row linked to deploymentID.
+func (s *Store) GetContainerByDeploymentID(ctx context.Context, deploymentID string) (models.Container, error) {
+	var c models.Container
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, deployment_id, docker_container_id, internal_port, host_port, status, created_at, updated_at
+		 FROM containers
+		 WHERE deployment_id = ?
+		 ORDER BY created_at DESC
+		 LIMIT 1`,
+		strings.TrimSpace(deploymentID),
+	).Scan(
+		&c.ID,
+		&c.DeploymentID,
+		&c.DockerContainerID,
+		&c.InternalPort,
+		&c.HostPort,
+		&c.Status,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		return models.Container{}, fmt.Errorf("lookup container by deployment: %w", err)
+	}
+	c.CreatedAt = parseTime(createdAt)
+	c.UpdatedAt = parseTime(updatedAt)
+	return c, nil
+}
+
+// UpdateContainerStatus updates a container row status and updated_at timestamp.
+func (s *Store) UpdateContainerStatus(ctx context.Context, containerID, status string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE containers SET status = ?, updated_at = ? WHERE id = ?`,
+		strings.TrimSpace(status),
+		time.Now().UTC().Format(time.RFC3339),
+		strings.TrimSpace(containerID),
+	)
+	if err != nil {
+		return fmt.Errorf("update container status: %w", err)
+	}
+	return nil
 }
 
 // ListProjects returns all projects, newest first by created_at.
