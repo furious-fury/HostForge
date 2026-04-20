@@ -52,7 +52,7 @@ export function Shell({ children, onLogout }: ShellProps) {
 
   return (
     <ProjectBreadcrumbProvider>
-      <div className="grid h-screen grid-cols-[16rem_1fr] grid-rows-[3.5rem_1fr] bg-bg text-text">
+      <div className="grid h-screen grid-cols-[16rem_1fr] grid-rows-[4.75rem_1fr] bg-bg text-text">
         <Sidebar />
         <Topbar
           theme={prefs.theme}

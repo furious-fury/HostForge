@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Route, Routes } from "react-router-dom";
 import { createSession, deleteSession, getSessionStatus } from "./api";
+import { BrandMark } from "./components/BrandMark";
 import { Button } from "./components/Button";
 import { Shell } from "./components/Shell";
 import { ToastProvider } from "./components/ToastProvider";
@@ -85,8 +86,8 @@ export default function App() {
       <div className="flex min-h-screen items-center justify-center bg-bg p-6 text-text">
         <form className="flex w-full max-w-md flex-col gap-4 border border-border bg-surface p-6" onSubmit={handleLogin}>
           <div>
-            <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">HostForge</div>
-            <h1 className="text-2xl font-semibold tracking-tight">Admin Login</h1>
+            <BrandMark size="lg" />
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight">Admin Login</h1>
             <p className="mt-1 text-sm text-muted">Sign in to start an authenticated admin session.</p>
           </div>
           <label className="flex flex-col gap-1.5">

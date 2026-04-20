@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { RELEASE_LABEL } from "../uiVersion";
+import { BrandMark } from "./BrandMark";
 
 type NavItem = {
   to: string;
@@ -39,9 +40,11 @@ const groups: NavGroup[] = [
 export function Sidebar() {
   return (
     <aside className="row-span-2 flex h-screen flex-col border-r border-border bg-surface">
-      <div className="flex h-14 shrink-0 flex-col justify-center gap-0.5 border-b border-border px-4">
-        <div className="mono text-[10px] font-semibold uppercase leading-tight tracking-[0.2em] text-muted">HostForge</div>
-        <div className="text-base font-semibold leading-tight tracking-tight text-text">Control Plane</div>
+      <div className="flex h-[4.75rem] shrink-0 flex-col justify-center gap-0.5 border-b border-border px-4">
+        <BrandMark size="md" className="leading-tight" />
+        <div className="mono text-[10px] font-semibold uppercase leading-tight tracking-[0.2em] text-muted">
+          Control Plane
+        </div>
       </div>
 
       <nav className="flex-1 overflow-y-auto py-2">

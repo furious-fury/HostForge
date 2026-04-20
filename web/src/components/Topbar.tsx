@@ -86,7 +86,7 @@ export function Topbar({ theme, onThemeCycle, onLogout, onOpenCommandPalette }: 
   }, [onOpenCommandPalette]);
 
   return (
-    <header className="flex h-14 items-center justify-between border-b border-border bg-surface px-6">
+    <header className="flex h-[4.75rem] items-center justify-between border-b border-border bg-surface px-6">
       <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm">
         {crumbs.map((crumb, idx) => {
           const last = idx === crumbs.length - 1;
