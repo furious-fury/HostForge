@@ -95,3 +95,14 @@
   background: var(--hf-primary);
   color: var(--hf-primary-ink);
 }
+
+/* Faint grid background used on the final CTA. Works in both themes via --hf-border. */
+.hf-grid-bg {
+  background-image:
+    linear-gradient(to right, var(--hf-border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--hf-border) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at center, black 40%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 75%);
+  opacity: 0.35;
+}
