@@ -303,11 +303,29 @@ Build/deploy logs are retained on disk with APIs for historical tail and live st
   - Optional query params:
     - `tail_bytes` (default `65536`, capped to prevent unbounded reads)
     - `tail_lines` (optional, trims to ending N lines)
+  - Response header **`X-Log-EOF-Offset`**: exclusive byte offset at end of file when the tail was read (used by the UI to resume the live WebSocket without duplicating bytes).
+  - Query **`eof_meta=1`** (or `eof_meta=true`): response body is JSON `{"eof":<int>,"text":"<tail>"}` with the same tail rules—use this when a proxy strips `X-Log-EOF-Offset` (the web UI always requests `eof_meta=1`).
 - Live WebSocket stream: `GET /api/deployments/{deployment_id}/logs/live`
   - `?source=build` streams appended file output.
   - `?source=container` streams Docker `ContainerLogs` for the deployment container.
   - Default source prefers container logs for successful deployments, otherwise build logs.
-  - The server sends **periodic WebSocket pings** so quiet build phases (no new log lines) do not look “idle” to reverse proxies; the UI **reconnects** the log socket while a deployment is still `QUEUED` / `BUILDING` if the connection drops.
+  - **`format=json`** (default): each WebSocket **text** frame is one JSON object:
+    - `{"t":"hello",...}` — protocol version, source, whether byte `cursor` resume is supported, and for build logs the current **`eof`** file size.
+    - `{"t":"chunk","end":<int>,"d":"<text>"}` — build log bytes; **`end`** is the exclusive byte offset in the log file after `d`.
+    - `{"t":"chunk","seq":<int>,"d":"<text>"}` — container log chunks (best-effort; resume is not byte-addressable like files).
+    - `{"t":"heartbeat","seq":<int>}` — application-level keepalive so **idle** streams still carry data on paths that do not treat WebSocket **Ping** control frames as activity.
+    - `{"t":"resync","reason":"truncated|rotated",...}` — build log file shrank or rotated; clients should reset local state as needed.
+    - `{"t":"end","reason":...}` or `{"t":"error","code":...}` — terminal events.
+  - **`?cursor=<bytes>`** (build only): resume after the last received **`chunk.end`** (or after **`X-Log-EOF-Offset`** from the HTTP tail).
+  - **`format=raw`**: legacy plain-text stream (same framing as pre-JSON clients); use for `curl`/scripts.
+  - The server still sends **periodic WebSocket pings**; the UI **reconnects** while a deployment is still `QUEUED` / `BUILDING` if the connection drops.
+
+### Reverse proxies and long-lived log sockets
+
+- Ensure **`Upgrade`** and **`Connection`** headers are passed for `/api/deployments/*/logs/live`, and set **idle / read timeouts** above your longest quiet build phase (or rely on the server’s **pings** + **JSON heartbeats** as activity).
+- Some proxies mishandle WebSocket control frames; the JSON **`heartbeat`** exists so the TCP stream still sees periodic application traffic.
+- **WSL2 / Windows browser → Linux**: extra hops can reset idle connections; if logs flap between live and reconnecting, compare the same UI against **direct** `http://127.0.0.1:8080` (production-style) vs **Vite dev proxy** to see which layer drops first.
+- Server logs: **`deployment log ws opened`** / **`deployment log ws session ended`** / **`deployment log ws ping failed`** (structured `slog`) help attribute disconnects.
 
 ### Authentication (logs)
 
@@ -382,8 +400,8 @@ Vite proxy config (`web/vite.config.ts` and `web/vite.config.js`) forwards:
 - `GET /api/projects/{id}/deployments`
 - `GET /api/deployments` (global deployment list)
 - Existing logs APIs:
-  - `GET /api/deployments/{id}/logs`
-  - `GET /api/deployments/{id}/logs/live` (WebSocket)
+  - `GET /api/deployments/{id}/logs` (optional `X-Log-EOF-Offset` response header)
+  - `GET /api/deployments/{id}/logs/live` (WebSocket; **`format=json`** default, JSON-framed chunks + **`?cursor=`** resume for build logs)
 - Control endpoints:
   - `POST /api/projects/{id}/deploy`
   - `POST /api/projects/{id}/restart`

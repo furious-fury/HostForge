@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiDeployment, ApiProject, fetchDeploymentLogs, fetchProject, fetchProjectDeployments } from "../api";
 import { DeployStepTimeline } from "../components/DeployStepTimeline";
 import { useDeploymentStepsQuery } from "../hooks/observabilityQueries";
+import { useDeploymentLogStream } from "../hooks/useDeploymentLogStream";
 import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
 import { Button, ButtonLink } from "../components/Button";
 import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { Terminal } from "../components/Terminal";
-import { formatDuration, formatRelative, shortHash } from "../format";
+import { formatDuration, formatDurationMs, formatRelative, shortHash } from "../format";
 import { useFormatLocale, useUIPrefs } from "../hooks/useUIPrefs";
 
 type SourceKind = "build" | "container";
@@ -23,9 +24,24 @@ const STREAM_LABEL: Record<string, string> = {
   reconnecting: "RECONNECTING",
 };
 
-function deploymentStatusInFlight(status: string | undefined): boolean {
-  const u = status?.toUpperCase();
-  return u === "QUEUED" || u === "BUILDING";
+/** Whether the log WebSocket should reconnect after a drop (still building or list not ready yet). */
+function shouldReconnectDeploymentLogs(
+  deployment: ApiDeployment | null,
+  deployments: ApiDeployment[],
+  deploymentID: string,
+  deployListFetched: boolean,
+): boolean {
+  if (deployment) {
+    const u = deployment.status?.toUpperCase();
+    return u === "QUEUED" || u === "BUILDING";
+  }
+  if (!deployListFetched) {
+    return true;
+  }
+  if (deployments.length === 0) {
+    return false;
+  }
+  return deployments.some((d) => d.id === deploymentID);
 }
 
 export function DeploymentPage() {
@@ -36,143 +52,110 @@ export function DeploymentPage() {
   const [project, setProject] = useState<ApiProject | null>(null);
   const [deployments, setDeployments] = useState<ApiDeployment[]>([]);
   const [source, setSource] = useState<SourceKind>("build");
-  const [lines, setLines] = useState("");
   const [paused, setPaused] = useState(() => !prefs.logAutoScroll);
-  const [streamState, setStreamState] = useState("connecting");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [panelTab, setPanelTab] = useState<PanelTab>("logs");
-  const stepsQ = useDeploymentStepsQuery(deploymentID, 200);
-  const wsRef = useRef<WebSocket | null>(null);
-  const pausedRef = useRef(false);
-  const deploymentRef = useRef<ApiDeployment | null>(null);
+  /** Latest deployment rows — updated every render so WS onclose never reads a stale [] from an old effect closure. */
+  const deploymentsRef = useRef<ApiDeployment[]>([]);
+  /** True after the first successful project+deployments fetch for this projectID. */
+  const deployListFetchedRef = useRef(false);
+  const lastFetchedProjectIdRef = useRef("");
 
   const deployment = useMemo(
     () => deployments.find((d) => d.id === deploymentID) || null,
     [deployments, deploymentID],
   );
 
-  useEffect(() => {
-    pausedRef.current = paused;
-  }, [paused]);
+  const stepsQ = useDeploymentStepsQuery(deploymentID, 200, deployment?.status);
+
+  deploymentsRef.current = deployments;
+
+  const fetchTail = useCallback(() => fetchDeploymentLogs(deploymentID, source), [deploymentID, source]);
+
+  const shouldReconnectCb = useCallback(() => {
+    const deps = deploymentsRef.current;
+    const dep = deps.find((d) => d.id === deploymentID) ?? null;
+    return shouldReconnectDeploymentLogs(dep, deps, deploymentID, deployListFetchedRef.current);
+  }, [deploymentID]);
+
+  const onReconnectTick = useCallback(async () => {
+    const fresh = await fetchProjectDeployments(projectID);
+    deploymentsRef.current = fresh;
+    setDeployments(fresh);
+  }, [projectID]);
+
+  const { lines, setLines, streamState, tailError } = useDeploymentLogStream({
+    deploymentId: deploymentID,
+    source,
+    active: panelTab === "logs",
+    paused,
+    fetchTail,
+    shouldReconnect: shouldReconnectCb,
+    onReconnectTick,
+  });
 
   useEffect(() => {
-    deploymentRef.current = deployment;
-  }, [deployment]);
-
-  useEffect(() => {
-    setProject(null);
-    setDeployments([]);
+    if (!projectID || !deploymentID) return;
+    const projectSwitched = projectID !== lastFetchedProjectIdRef.current;
+    if (projectSwitched) {
+      lastFetchedProjectIdRef.current = projectID;
+      setProject(null);
+      setDeployments([]);
+      deployListFetchedRef.current = false;
+    }
     let cancelled = false;
     (async () => {
       try {
         const [proj, deps] = await Promise.all([fetchProject(projectID), fetchProjectDeployments(projectID)]);
         if (!cancelled) {
+          deploymentsRef.current = deps;
+          deployListFetchedRef.current = true;
           setProject(proj);
           setDeployments(deps);
         }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "failed to load deployment");
+          deployListFetchedRef.current = true;
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [projectID]);
+  }, [projectID, deploymentID]);
+
+  const deploymentInFlight = useMemo(() => {
+    const u = deployment?.status?.toUpperCase();
+    return u === "QUEUED" || u === "BUILDING";
+  }, [deployment?.status]);
+
+  useEffect(() => {
+    if (!projectID || !deploymentID || !deploymentInFlight) return;
+    let cancelled = false;
+    const tick = window.setInterval(async () => {
+      try {
+        const [proj, deps] = await Promise.all([fetchProject(projectID), fetchProjectDeployments(projectID)]);
+        if (cancelled) return;
+        deploymentsRef.current = deps;
+        setProject(proj);
+        setDeployments(deps);
+      } catch {
+        // ignore transient errors during build
+      }
+    }, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(tick);
+    };
+  }, [projectID, deploymentID, deploymentInFlight]);
 
   useEffect(() => {
     if (project && project.id === projectID) {
       registerProject(project.id, project.name);
     }
   }, [project, projectID, registerProject]);
-
-  useEffect(() => {
-    if (panelTab !== "logs") {
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        setStreamState("loading tail");
-        const tail = await fetchDeploymentLogs(deploymentID, source);
-        if (!cancelled) {
-          setLines(tail);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "failed to load logs");
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [deploymentID, source, panelTab]);
-
-  useEffect(() => {
-    if (panelTab !== "logs") {
-      wsRef.current?.close();
-      wsRef.current = null;
-      return;
-    }
-    let cancelled = false;
-    let reconnectTimer: number | undefined;
-
-    function connect() {
-      if (cancelled) return;
-      wsRef.current?.close();
-      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(
-        `${protocol}://${window.location.host}/api/deployments/${deploymentID}/logs/live?source=${source}`,
-      );
-      wsRef.current = ws;
-      setStreamState("connecting");
-      ws.onopen = () => {
-        if (!cancelled) setStreamState("live");
-      };
-      ws.onerror = () => {
-        if (!cancelled) setStreamState("error");
-      };
-      ws.onclose = () => {
-        if (cancelled) return;
-        if (deploymentStatusInFlight(deploymentRef.current?.status)) {
-          setStreamState("reconnecting");
-          reconnectTimer = window.setTimeout(async () => {
-            if (cancelled) return;
-            try {
-              const deps = await fetchProjectDeployments(projectID);
-              if (!cancelled) {
-                setDeployments(deps);
-              }
-            } catch {
-              // ignore; connect() still runs so logs resume when server is back
-            }
-            connect();
-          }, 1500);
-          return;
-        }
-        setStreamState("ended");
-      };
-      ws.onmessage = (event) => {
-        if (!pausedRef.current) {
-          setLines((prev) => `${prev}${event.data}`);
-        }
-      };
-    }
-
-    connect();
-
-    return () => {
-      cancelled = true;
-      if (reconnectTimer !== undefined) {
-        window.clearTimeout(reconnectTimer);
-      }
-      wsRef.current?.close();
-      wsRef.current = null;
-    };
-  }, [deploymentID, source, panelTab, projectID]);
 
   async function copyAll() {
     try {
@@ -216,6 +199,11 @@ export function DeploymentPage() {
       </header>
 
       {error && <div className="border border-danger p-3 text-sm text-danger">{error}</div>}
+      {panelTab === "logs" && tailError && (
+        <div className="border border-warning p-3 text-sm text-warning">
+          Log tail could not be loaded ({tailError}). Live stream may still populate.
+        </div>
+      )}
 
       <Panel
         title={panelTab === "logs" ? "Live Logs" : "Deploy steps"}
@@ -315,7 +303,7 @@ export function DeploymentPage() {
                           <td className="py-2 pr-2">
                             <StatusPill status={s.status === "ok" ? "SUCCESS" : "FAILED"} size="sm" />
                           </td>
-                          <td className="py-2 pr-2 mono tabular-nums">{s.duration_ms}</td>
+                          <td className="py-2 pr-2 mono tabular-nums">{formatDurationMs(s.duration_ms)}</td>
                           <td className="max-w-[10rem] truncate py-2 pr-2 font-mono text-[10px] text-muted">{s.request_id || "—"}</td>
                           <td className="py-2 font-mono text-[10px] text-muted">{s.error_code || "—"}</td>
                         </tr>

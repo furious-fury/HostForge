@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -23,7 +24,6 @@ import (
 	"github.com/hostforge/hostforge/internal/auth"
 	"github.com/hostforge/hostforge/internal/config"
 	"github.com/hostforge/hostforge/internal/database"
-	"github.com/hostforge/hostforge/internal/docker"
 	"github.com/hostforge/hostforge/internal/hostmetrics"
 	"github.com/hostforge/hostforge/internal/logging"
 	logsapi "github.com/hostforge/hostforge/internal/logs"
@@ -482,6 +482,20 @@ func (rw *responseWriterStatus) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+func (rw *responseWriterStatus) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := rw.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response writer does not implement http.Hijacker")
+	}
+	return hj.Hijack()
+}
+
+func (rw *responseWriterStatus) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 func (s *server) withRequestContext(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rid := strings.TrimSpace(r.Header.Get("X-Request-ID"))
@@ -661,7 +675,7 @@ func (s *server) handleDeploymentLogsTail(w http.ResponseWriter, r *http.Request
 		tailBytes = logsapi.MaxTailBytes
 	}
 	tailLines := parseQueryInt(r, "tail_lines", 0)
-	content, err := logsapi.TailFile(logsPath, tailBytes, tailLines)
+	content, eof, err := logsapi.TailFileWithEOF(logsPath, tailBytes, tailLines)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "deployment_log_not_found"})
@@ -670,158 +684,24 @@ func (s *server) handleDeploymentLogsTail(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "read_deployment_log_failed"})
 		return
 	}
+	// JSON body carries eof when reverse proxies strip custom response headers (common in dev).
+	eofMeta := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("eof_meta")), "true") ||
+		strings.TrimSpace(r.URL.Query().Get("eof_meta")) == "1"
+	if eofMeta {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"eof":  eof,
+			"text": string(content),
+		})
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Log-EOF-Offset", strconv.FormatInt(eof, 10))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(content)
 }
 
 var logUpgrader = websocket.Upgrader{
 	CheckOrigin: func(_ *http.Request) bool { return true },
-}
-
-func (s *server) handleDeploymentLogsLive(w http.ResponseWriter, r *http.Request, deploymentID string) {
-	deployment, err := s.store.GetDeploymentByID(r.Context(), deploymentID)
-	if err != nil {
-		if errorsIsNoRows(err) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "deployment_not_found"})
-			return
-		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "deployment_lookup_failed"})
-		return
-	}
-	conn, err := logUpgrader.Upgrade(w, r, nil)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-	go func() {
-		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
-				cancel()
-				return
-			}
-		}
-	}()
-
-	sink := &wsLogSink{conn: conn}
-	startDeploymentLogKeepalive(ctx, sink, cancel)
-
-	source := strings.TrimSpace(r.URL.Query().Get("source"))
-	if source == "" {
-		source = defaultLogSource(deployment)
-	}
-	switch source {
-	case "build":
-		s.streamBuildLog(ctx, sink, deployment)
-	case "container":
-		s.streamContainerLog(ctx, sink, deploymentID)
-	default:
-		_ = sink.writeText([]byte("error: unsupported source"))
-	}
-}
-
-// wsLogSink serializes WebSocket text writes and control pings (gorilla/websocket is not safe for concurrent writers).
-type wsLogSink struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
-}
-
-func (w *wsLogSink) writeText(b []byte) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.conn.WriteMessage(websocket.TextMessage, b)
-}
-
-func (w *wsLogSink) ping() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	deadline := time.Now().Add(8 * time.Second)
-	return w.conn.WriteControl(websocket.PingMessage, nil, deadline)
-}
-
-func (w *wsLogSink) Write(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	if err := w.writeText(p); err != nil {
-		return 0, err
-	}
-	return len(p), nil
-}
-
-// startDeploymentLogKeepalive sends periodic WebSocket pings so reverse proxies and dev proxies
-// do not treat idle log periods (no new build output) as dead connections.
-func startDeploymentLogKeepalive(ctx context.Context, sink *wsLogSink, cancel context.CancelFunc) {
-	t := time.NewTicker(25 * time.Second)
-	go func() {
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if err := sink.ping(); err != nil {
-					cancel()
-					return
-				}
-			}
-		}
-	}()
-}
-
-func (s *server) streamBuildLog(ctx context.Context, sink *wsLogSink, deployment models.Deployment) {
-	if strings.TrimSpace(deployment.LogsPath) == "" {
-		_ = sink.writeText([]byte("error: deployment log path is empty"))
-		return
-	}
-	initial, err := logsapi.TailFile(deployment.LogsPath, logsapi.DefaultTailBytes, 0)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = sink.writeText([]byte("error: failed to tail deployment log"))
-		return
-	}
-	if len(initial) > 0 {
-		_ = sink.writeText(initial)
-	}
-	if err := logsapi.FollowFile(ctx, deployment.LogsPath, 500*time.Millisecond, func(chunk []byte) error {
-		if len(chunk) == 0 {
-			return nil
-		}
-		return sink.writeText(chunk)
-	}); err != nil && !errors.Is(err, context.Canceled) {
-		_ = sink.writeText([]byte("error: build log stream ended"))
-	}
-}
-
-func (s *server) streamContainerLog(ctx context.Context, sink *wsLogSink, deploymentID string) {
-	containerRec, err := s.store.GetContainerByDeploymentID(ctx, deploymentID)
-	if err != nil {
-		_ = sink.writeText([]byte("error: container record not found for deployment"))
-		return
-	}
-	cli, err := docker.NewClient(ctx)
-	if err != nil {
-		_ = sink.writeText([]byte("error: docker unavailable"))
-		return
-	}
-	defer cli.Close()
-	if err := docker.StreamContainerLogs(ctx, cli, containerRec.DockerContainerID, docker.LogStreamOptions{
-		Follow:     true,
-		Tail:       "200",
-		ShowStdout: true,
-		ShowStderr: true,
-	}, sink); err != nil && !errors.Is(err, context.Canceled) {
-		_ = sink.writeText([]byte("error: container log stream ended"))
-	}
-}
-
-func defaultLogSource(deployment models.Deployment) string {
-	if deployment.Status == models.DeploymentSuccess {
-		return "container"
-	}
-	return "build"
 }
 
 func findProjectByRepoAndBranch(ctx context.Context, store *repository.Store, canonicalRepoURL, rawRepoURL, branch string) (models.Project, error) {

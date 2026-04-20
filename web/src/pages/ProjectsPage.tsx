@@ -11,6 +11,7 @@ import { StatusPill } from "../components/StatusPill";
 import { useToast } from "../components/ToastProvider";
 import { formatRelative } from "../format";
 import { fleetKeys, useProjectsQuery } from "../hooks/fleetQueries";
+import { invalidateFleetProjectsAndDeployments } from "../hooks/mutationCache";
 import { useFormatLocale } from "../hooks/useUIPrefs";
 
 type Filter = "all" | "running" | "failed";
@@ -19,7 +20,7 @@ export function ProjectsPage() {
   const fmtLocale = useFormatLocale();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const projectsQ = useProjectsQuery();
+  const projectsQ = useProjectsQuery({ refetchWhileInFlight: true });
   const projects = projectsQ.data ?? [];
   const loading = projectsQ.isPending && projectsQ.data === undefined;
   const error = projectsQ.isError
@@ -56,13 +57,21 @@ export function ProjectsPage() {
 
   async function executeDelete(project: ApiProject) {
     setDeletingId(project.id);
+    const prev = queryClient.getQueryData<ApiProject[]>(fleetKeys.projects);
+    queryClient.setQueryData<ApiProject[]>(fleetKeys.projects, (old) =>
+      old ? old.filter((p) => p.id !== project.id) : old,
+    );
     try {
       await deleteProject(project.id);
-      await queryClient.invalidateQueries({ queryKey: fleetKeys.projects });
-      await queryClient.invalidateQueries({ queryKey: ["deployments", "list"] });
+      await invalidateFleetProjectsAndDeployments(queryClient);
       toast.success(`Deleted project "${project.name}".`);
       setDeleteTarget(null);
     } catch (err) {
+      if (prev !== undefined) {
+        queryClient.setQueryData(fleetKeys.projects, prev);
+      } else {
+        void queryClient.invalidateQueries({ queryKey: fleetKeys.projects });
+      }
       const msg = err instanceof Error ? err.message : "Delete failed.";
       toast.error(msg);
     } finally {

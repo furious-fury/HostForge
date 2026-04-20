@@ -10,6 +10,7 @@ import {
   useObservabilityRequestsQuery,
   useObservabilitySummaryQuery,
 } from "../hooks/observabilityQueries";
+import { formatDurationMs } from "../format";
 import { effectiveBuildLabel } from "../uiVersion";
 
 function pct(n: number, d: number): string {
@@ -79,9 +80,11 @@ export function ObservabilityPage() {
           tone={summary && summary.http_error_count > 0 ? "warning" : "default"}
         />
         <KpiTile
-          label="HTTP p50 / p95 ms"
+          label="HTTP p50 / p95"
           value={
-            summary ? `${summary.http_duration_p50_ms} / ${summary.http_duration_p95_ms}` : "—"
+            summary
+              ? `${formatDurationMs(summary.http_duration_p50_ms)} / ${formatDurationMs(summary.http_duration_p95_ms)}`
+              : "—"
           }
         />
         <KpiTile label="Deploys started (24h)" value={summary?.deploy_count ?? "—"} />
@@ -92,9 +95,11 @@ export function ObservabilityPage() {
           tone={summary && summary.deploy_failed_count > 0 ? "danger" : "default"}
         />
         <KpiTile
-          label="Deploy total p50 / p95 ms"
+          label="Deploy total p50 / p95"
           value={
-            summary ? `${summary.deploy_duration_p50_ms} / ${summary.deploy_duration_p95_ms}` : "—"
+            summary
+              ? `${formatDurationMs(summary.deploy_duration_p50_ms)} / ${formatDurationMs(summary.deploy_duration_p95_ms)}`
+              : "—"
           }
         />
       </div>
@@ -127,39 +132,54 @@ export function ObservabilityPage() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Panel title="Recent deploy timelines">
+          <p className="mb-3 text-xs text-muted">
+            One deploy per row: bar segments ≈ phase time (hover). Total ={" "}
+            <span className="mono text-text">deploy_total</span>.
+          </p>
           {stepQ.isPending ? <p className="text-sm text-muted">Loading steps…</p> : null}
           {stepQ.isError ? (
             <p className="text-sm text-danger">{stepQ.error instanceof Error ? stepQ.error.message : "load failed"}</p>
           ) : null}
-          <ul className="flex flex-col gap-4">
-            {deployGroups.map(({ id, steps, name }) => (
-              <li key={id} className="border border-border bg-surface p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <Link
-                    to={
-                      steps[0]?.project_id
-                        ? `/projects/${steps[0].project_id}/deployments/${id}`
-                        : "/deployments"
-                    }
-                    className="mono text-sm font-semibold hover:underline"
-                  >
-                    {name ? `${name} · ` : ""}
-                    {id.slice(0, 12)}…
-                  </Link>
-                  <span className="mono text-[10px] text-muted">{steps.find((s) => s.step === "deploy_total")?.duration_ms ?? "—"} ms total</span>
-                </div>
-                <div className="mt-2">
-                  <DeployStepTimeline steps={steps} />
-                </div>
-              </li>
-            ))}
-            {deployGroups.length === 0 && !stepQ.isPending ? (
-              <li className="text-sm text-muted">No deploy step samples yet. Run a deployment.</li>
-            ) : null}
-          </ul>
+          <div className="max-h-[min(28rem,55vh)] overflow-auto rounded border border-border bg-surface-alt/30 p-2">
+            <ul className="flex flex-col gap-4">
+              {deployGroups.map(({ id, steps, name }) => {
+                const totalMs = steps.find((s) => s.step === "deploy_total")?.duration_ms;
+                return (
+                  <li key={id} className="border border-border bg-surface p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Link
+                        to={
+                          steps[0]?.project_id
+                            ? `/projects/${steps[0].project_id}/deployments/${id}`
+                            : "/deployments"
+                        }
+                        className="mono text-sm font-semibold hover:underline"
+                      >
+                        {name ? `${name} · ` : ""}
+                        {id.slice(0, 12)}…
+                      </Link>
+                      <span className="mono text-[10px] text-muted" title={`${totalMs ?? "—"} ms`}>
+                        {totalMs != null ? `${formatDurationMs(totalMs)} total` : "—"}
+                      </span>
+                    </div>
+                    <div className="mt-2">
+                      <DeployStepTimeline steps={steps} />
+                    </div>
+                  </li>
+                );
+              })}
+              {deployGroups.length === 0 && !stepQ.isPending ? (
+                <li className="text-sm text-muted">No deploy step samples yet. Run a deployment.</li>
+              ) : null}
+            </ul>
+          </div>
         </Panel>
 
         <Panel title="Recent HTTP requests">
+          <p className="mb-3 text-xs text-muted">
+            Sampled API traffic (bounded SQLite). Correlate with logs via{" "}
+            <span className="mono text-text">request_id</span>.
+          </p>
           {reqQ.isPending ? <p className="text-sm text-muted">Loading…</p> : null}
           {reqQ.isError ? (
             <p className="text-sm text-danger">{reqQ.error instanceof Error ? reqQ.error.message : "load failed"}</p>

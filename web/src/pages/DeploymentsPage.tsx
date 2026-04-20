@@ -27,8 +27,11 @@ export function DeploymentsPage() {
     setListLimit(pageStep);
   }, [pageStep]);
 
-  const projectsQ = useProjectsQuery();
-  const deploysQ = useDeploymentsListQuery(listLimit, { keepPreviousWhileFetching: true });
+  const projectsQ = useProjectsQuery({ refetchWhileInFlight: true });
+  const deploysQ = useDeploymentsListQuery(listLimit, {
+    keepPreviousWhileFetching: true,
+    refetchWhileInFlight: true,
+  });
 
   const projects: ApiProject[] = projectsQ.data ?? [];
   const deployments: ApiDeployment[] = deploysQ.data ?? [];

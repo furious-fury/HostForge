@@ -49,12 +49,15 @@ export function useObservabilityDeployStepsQuery(limit = 200) {
   });
 }
 
-export function useDeploymentStepsQuery(deploymentID: string, limit = 200) {
+export function useDeploymentStepsQuery(deploymentID: string, limit = 200, deployStatus?: string) {
+  const u = (deployStatus || "").toUpperCase();
+  const inFlight = u === "QUEUED" || u === "BUILDING";
   return useQuery({
     queryKey: observabilityKeys.deploymentSteps(deploymentID, limit),
     queryFn: (): Promise<DeployStepRow[]> => fetchDeploymentSteps(deploymentID, limit),
     enabled: Boolean(deploymentID),
     staleTime,
     retry: 1,
+    refetchInterval: inFlight ? 2000 : false,
   });
 }

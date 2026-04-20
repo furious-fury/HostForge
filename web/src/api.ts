@@ -351,14 +351,45 @@ export async function stopProject(projectID: string): Promise<void> {
   await readJSON<Record<string, unknown>>(res);
 }
 
-export async function fetchDeploymentLogs(deploymentID: string, source: "build" | "container"): Promise<string> {
-  const params = source === "build" ? "" : "?tail_lines=200";
-  const res = await apiFetch(`/api/deployments/${deploymentID}/logs${params}`);
+/** HTTP tail of deployment logs plus `X-Log-EOF-Offset` for WebSocket resume (build source). */
+export type DeploymentLogTail = { text: string; eofOffset: number };
+
+export async function fetchDeploymentLogs(
+  deploymentID: string,
+  source: "build" | "container",
+): Promise<DeploymentLogTail> {
+  const qs = new URLSearchParams();
+  qs.set("eof_meta", "1");
+  if (source !== "build") {
+    qs.set("tail_lines", "200");
+  }
+  const res = await apiFetch(`/api/deployments/${deploymentID}/logs?${qs.toString()}`);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `logs request failed: ${res.status}`);
   }
-  return await res.text();
+  const rawBody = await res.text();
+  try {
+    const j = JSON.parse(rawBody) as { eof?: unknown; text?: unknown };
+    if (j && typeof j === "object" && typeof j.text === "string") {
+      let eofOffset = 0;
+      if (typeof j.eof === "number" && Number.isFinite(j.eof) && j.eof >= 0) {
+        eofOffset = j.eof;
+      }
+      return { text: j.text, eofOffset };
+    }
+  } catch {
+    /* fall through: legacy plain tail */
+  }
+  const rawEof = res.headers.get("X-Log-EOF-Offset");
+  let eofOffset = 0;
+  if (rawEof != null && rawEof !== "") {
+    const n = parseInt(rawEof, 10);
+    if (Number.isFinite(n) && n >= 0) {
+      eofOffset = n;
+    }
+  }
+  return { text: rawBody, eofOffset };
 }
 
 export async function createSession(token: string): Promise<void> {

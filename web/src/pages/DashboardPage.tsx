@@ -49,8 +49,8 @@ function seriesFromHistory(samples: HostSample[], pick: (s: HostSample) => numbe
 
 export function DashboardPage() {
   const fmtLocale = useFormatLocale();
-  const projectsQ = useProjectsQuery();
-  const deploysQ = useDeploymentsListQuery(30);
+  const projectsQ = useProjectsQuery({ refetchWhileInFlight: true });
+  const deploysQ = useDeploymentsListQuery(30, { refetchWhileInFlight: true });
   const systemQ = useSystemStatusQuery();
   const hostSnapQ = useHostSnapshot();
   const hostHistQ = useHostHistory(120);

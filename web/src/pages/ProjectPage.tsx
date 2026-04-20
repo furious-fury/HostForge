@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
@@ -27,11 +28,14 @@ import { EmptyState } from "../components/EmptyState";
 import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { formatDuration, formatRelative, shortHash } from "../format";
+import { fleetKeys } from "../hooks/fleetQueries";
+import { invalidateFleetProjectsAndDeployments } from "../hooks/mutationCache";
 import { useFormatLocale } from "../hooks/useUIPrefs";
 
 export function ProjectPage() {
   const fmtLocale = useFormatLocale();
   const toast = useToast();
+  const queryClient = useQueryClient();
   const { registerProject } = useProjectBreadcrumb();
   const { projectID = "" } = useParams();
   const navigate = useNavigate();
@@ -57,33 +61,55 @@ export function ProjectPage() {
   });
   const [deployBusy, setDeployBusy] = useState(false);
 
-  async function load() {
-    setLoading(true);
-    try {
-      const [projectData, deploymentData] = await Promise.all([
-        fetchProject(projectID),
-        fetchProjectDeployments(projectID),
-      ]);
-      setProject(projectData);
-      setDeployments(deploymentData);
-      setDeployForm({
-        runtime: projectData.deploy?.runtime || "auto",
-        install_cmd: projectData.deploy?.install_cmd || "",
-        build_cmd: projectData.deploy?.build_cmd || "",
-        start_cmd: projectData.deploy?.start_cmd || "",
-      });
-      setError("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "failed to load project");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const load = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const silent = opts?.silent ?? false;
+      if (!projectID) return;
+      if (!silent) setLoading(true);
+      try {
+        const [projectData, deploymentData] = await Promise.all([
+          fetchProject(projectID),
+          fetchProjectDeployments(projectID),
+        ]);
+        setProject(projectData);
+        setDeployments(deploymentData);
+        setDeployForm({
+          runtime: projectData.deploy?.runtime || "auto",
+          install_cmd: projectData.deploy?.install_cmd || "",
+          build_cmd: projectData.deploy?.build_cmd || "",
+          start_cmd: projectData.deploy?.start_cmd || "",
+        });
+        setError("");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "failed to load project");
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [projectID],
+  );
 
   useEffect(() => {
     if (!projectID) return;
     void load();
-  }, [projectID]);
+  }, [projectID, load]);
+
+  const deploymentsInFlight = useMemo(
+    () =>
+      deployments.some((d) => {
+        const s = d.status?.toUpperCase();
+        return s === "QUEUED" || s === "BUILDING";
+      }),
+    [deployments],
+  );
+
+  useEffect(() => {
+    if (!projectID || !deploymentsInFlight) return;
+    const id = window.setInterval(() => {
+      void load({ silent: true });
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [projectID, deploymentsInFlight, load]);
 
   const registrarDnsNeedsAttention = useMemo(() => {
     const list = project?.domains;
@@ -133,13 +159,23 @@ export function ProjectPage() {
   async function confirmDeleteProject() {
     setDeleteBusy(true);
     setError("");
+    const prevProjects = queryClient.getQueryData<ApiProject[]>(fleetKeys.projects);
+    queryClient.setQueryData<ApiProject[]>(fleetKeys.projects, (old) =>
+      old ? old.filter((p) => p.id !== projectID) : old,
+    );
     try {
       await deleteProject(projectID);
+      await invalidateFleetProjectsAndDeployments(queryClient);
       const name = project?.name || "Project";
       setDeleteDialogOpen(false);
       toast.success(`Deleted project "${name}".`);
       navigate("/projects", { replace: true });
     } catch (err) {
+      if (prevProjects !== undefined) {
+        queryClient.setQueryData(fleetKeys.projects, prevProjects);
+      } else {
+        void queryClient.invalidateQueries({ queryKey: fleetKeys.projects });
+      }
       const msg = err instanceof Error ? err.message : "Delete failed.";
       toast.error(msg);
     } finally {
@@ -152,7 +188,8 @@ export function ProjectPage() {
     setError("");
     try {
       await fn();
-      await load();
+      await invalidateFleetProjectsAndDeployments(queryClient);
+      await load({ silent: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : `${label} failed`);
     } finally {
@@ -203,7 +240,7 @@ export function ProjectPage() {
             toast.success(`Removed domain ${domainDeleteTarget.domain_name}.`);
             setDomainDeleteOpen(false);
             setDomainDeleteTarget(null);
-            await load();
+            await load({ silent: true });
           } catch (err) {
             toast.error(err instanceof Error ? err.message : "Remove domain failed.");
           }
@@ -298,7 +335,14 @@ export function ProjectPage() {
           <Button
             variant="primary"
             disabled={!!actionBusy}
-            onClick={() => runControl("deploy", async () => void (await deployProject(projectID)))}
+            onClick={() =>
+              runControl("deploy", async () => {
+                const out = await deployProject(projectID, { async: true });
+                if (out.error) {
+                  throw new Error(out.error);
+                }
+              })
+            }
           >
             {actionBusy === "deploy" ? "Deploying…" : "Redeploy"}
           </Button>
@@ -477,7 +521,7 @@ export function ProjectPage() {
                 } else {
                   toast.success("Domain added.");
                 }
-                await load();
+                await load({ silent: true });
               } catch (err) {
                 toast.error(err instanceof Error ? err.message : "Add domain failed.");
               } finally {
@@ -558,7 +602,7 @@ export function ProjectPage() {
                                 }
                                 setEditDomainId(null);
                                 setEditDomainValue("");
-                                await load();
+                                await load({ silent: true });
                               } catch (err) {
                                 toast.error(err instanceof Error ? err.message : "Update failed.");
                               } finally {

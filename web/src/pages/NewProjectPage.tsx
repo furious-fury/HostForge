@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ApiDeployment,
@@ -14,7 +14,8 @@ import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { Stepper } from "../components/Stepper";
 import { Terminal } from "../components/Terminal";
-import { fleetKeys } from "../hooks/fleetQueries";
+import { invalidateFleetProjectsAndDeployments } from "../hooks/mutationCache";
+import { useDeploymentLogStream } from "../hooks/useDeploymentLogStream";
 import { useUIPrefs } from "../hooks/useUIPrefs";
 
 const STEPS = [
@@ -99,7 +100,7 @@ export function NewProjectPage() {
             }
           : {}),
       });
-      void queryClient.invalidateQueries({ queryKey: fleetKeys.projects });
+      void invalidateFleetProjectsAndDeployments(queryClient);
       setProjectID(project.id);
       setPhase("deploying");
       setMessage("Build accepted. Streaming live logs.");
@@ -135,8 +136,7 @@ export function NewProjectPage() {
         if (found) {
           setDeployment(found);
           if (found.status === "SUCCESS") {
-            void queryClient.invalidateQueries({ queryKey: fleetKeys.projects });
-            void queryClient.invalidateQueries({ queryKey: ["deployments", "list"] });
+            void invalidateFleetProjectsAndDeployments(queryClient);
             setPhase("success");
             setMessage("Deployment finished.");
           } else if (found.status === "FAILED") {
@@ -418,91 +418,22 @@ function InlineDeploymentLogs({
   onExpand?: () => void;
 }) {
   const { prefs } = useUIPrefs();
-  const [lines, setLines] = useState("");
   const [paused, setPaused] = useState(() => !prefs.logAutoScroll);
-  const [streamState, setStreamState] = useState("connecting");
   const [copied, setCopied] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
-  const pausedRef = useRef(false);
   const streamActiveRef = useRef(streamActive);
+  streamActiveRef.current = streamActive;
 
-  useEffect(() => {
-    pausedRef.current = paused;
-  }, [paused]);
+  const fetchTail = useCallback(() => fetchDeploymentLogs(deploymentID, "build"), [deploymentID]);
+  const shouldReconnectCb = useCallback(() => streamActiveRef.current, []);
 
-  useEffect(() => {
-    streamActiveRef.current = streamActive;
-  }, [streamActive]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setStreamState("loading tail");
-        const tail = await fetchDeploymentLogs(deploymentID, "build");
-        if (!cancelled) {
-          setLines(tail);
-        }
-      } catch {
-        // tail failure is non-fatal; the live stream below will start filling in
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [deploymentID]);
-
-  useEffect(() => {
-    if (!streamActive) {
-      wsRef.current?.close();
-      wsRef.current = null;
-      return;
-    }
-    let cancelled = false;
-    let reconnectTimer: number | undefined;
-
-    function connect() {
-      if (cancelled) return;
-      wsRef.current?.close();
-      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(
-        `${protocol}://${window.location.host}/api/deployments/${deploymentID}/logs/live?source=build`,
-      );
-      wsRef.current = ws;
-      setStreamState("connecting");
-      ws.onopen = () => {
-        if (!cancelled) setStreamState("live");
-      };
-      ws.onerror = () => {
-        if (!cancelled) setStreamState("error");
-      };
-      ws.onclose = () => {
-        if (cancelled) return;
-        if (streamActiveRef.current) {
-          setStreamState("reconnecting");
-          reconnectTimer = window.setTimeout(connect, 1500);
-          return;
-        }
-        setStreamState("ended");
-      };
-      ws.onmessage = (event) => {
-        if (!pausedRef.current) {
-          setLines((prev) => `${prev}${event.data}`);
-        }
-      };
-    }
-
-    connect();
-
-    return () => {
-      cancelled = true;
-      if (reconnectTimer !== undefined) {
-        window.clearTimeout(reconnectTimer);
-      }
-      wsRef.current?.close();
-      wsRef.current = null;
-    };
-  }, [deploymentID, streamActive]);
+  const { lines, setLines, streamState } = useDeploymentLogStream({
+    deploymentId: deploymentID,
+    source: "build",
+    active: streamActive,
+    paused,
+    fetchTail,
+    shouldReconnect: shouldReconnectCb,
+  });
 
   async function copyAll() {
     try {

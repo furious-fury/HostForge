@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { DeployStepRow } from "../api";
+import { formatDurationMs } from "../format";
 
 export function DeployStepTimeline({ steps }: { steps: DeployStepRow[] }) {
   const { filtered, total } = useMemo(() => {
@@ -23,7 +24,9 @@ export function DeployStepTimeline({ steps }: { steps: DeployStepRow[] }) {
             key={`${s.id}-${s.step}`}
             style={{ width: `${w}%` }}
             className={`${bg} shrink-0 border-r border-border/40 last:border-r-0`}
-            title={`${s.step} · ${s.duration_ms}ms · ${s.status}${s.error_code ? ` · ${s.error_code}` : ""}`}
+            title={`${s.step} · ${formatDurationMs(s.duration_ms)} (${s.duration_ms} ms) · ${s.status}${
+              s.error_code ? ` · ${s.error_code}` : ""
+            }`}
           />
         );
       })}

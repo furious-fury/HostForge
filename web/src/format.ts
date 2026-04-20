@@ -47,6 +47,46 @@ export function resolveFormatLocale(pref: "en-US" | "system"): string {
   return "en-US";
 }
 
+/**
+ * Format a duration in milliseconds for UI (deploy totals, tooltips).
+ * Sub-second values stay in ms; under one minute uses seconds (one decimal when helpful);
+ * then minutes/seconds, then hours/minutes.
+ */
+export function formatDurationMs(ms: number | null | undefined): string {
+  if (ms == null || Number.isNaN(ms)) {
+    return "—";
+  }
+  const n = Math.round(ms);
+  if (n < 0) {
+    return "—";
+  }
+  if (n < 1000) {
+    return `${n} ms`;
+  }
+
+  const totalSec = Math.floor(n / 1000);
+  const subSecMs = n % 1000;
+
+  if (totalSec < 60) {
+    if (subSecMs === 0) {
+      return `${totalSec}s`;
+    }
+    const dec = (n / 1000).toFixed(1);
+    return dec.endsWith(".0") ? `${totalSec}s` : `${dec}s`;
+  }
+
+  if (totalSec < 3600) {
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return s === 0 ? `${m}m` : `${m}m ${s}s`;
+  }
+
+  const h = Math.floor(totalSec / 3600);
+  const rem = totalSec % 3600;
+  const m = Math.floor(rem / 60);
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
 export function formatDuration(startRaw?: string | null, endRaw?: string | null): string {
   if (!startRaw) {
     return "—";
