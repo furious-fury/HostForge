@@ -58,7 +58,7 @@ export type ApiDeployment = {
   image_ref: string;
   worktree: string;
   error_message: string;
-  /** Stable slug from nixpacks plan (e.g. node, node_vite, node_next, go). */
+  /** Stable slug from nixpacks plan: lowercased NIXPACKS_METADATA (e.g. java, haskell, c#) or refined node_* / staticfile. */
   stack_kind?: string;
   stack_label?: string;
   created_at: string;

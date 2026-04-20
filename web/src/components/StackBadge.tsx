@@ -1,24 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
-/** Nixpacks-derived stack slug from the server (`stack_kind`). */
-export type StackKindSlug =
-  | "node"
-  | "node_spa"
-  | "node_next"
-  | "node_vite"
-  | "node_remix"
-  | "node_nuxt"
-  | "node_svelte"
-  | "node_astro"
-  | "node_cra"
-  | "go"
-  | "python"
-  | "ruby"
-  | "php"
-  | "rust"
-  | "deno"
-  | "unknown"
-  | "";
+/** Nixpacks-derived stack slug from the server (`stack_kind`); open set (matches NIXPACKS_METADATA, e.g. `java`, `c#`, `node_vite`). */
+export type StackKindSlug = string;
 
 /** Base URL for `public/stack-icons/*` (Vite `BASE_URL` ends with `/`). */
 function stackIconsBase(): string {
@@ -27,10 +10,25 @@ function stackIconsBase(): string {
   return `${prefix}stack-icons/`;
 }
 
+/** One path segment under `stack-icons/` (basename only; encodes `#` etc. for `src`). */
+function stackIconAssetUrl(base: string, basename: string, ext: "png" | "svg"): string {
+  return `${base}${encodeURIComponent(basename)}.${ext}`;
+}
+
+/** Legacy rows: `stack_kind` was `unknown` but `stack_label` still reflects the language (e.g. `Java`). */
+function legacyIconBasenamesFromLabel(stackLabel: string): string[] {
+  const raw = stackLabel.trim();
+  if (!raw) return [];
+  const head = raw.split("·")[0]?.trim() ?? raw;
+  const slug = head.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (slug.length < 2 || slug === "unknown") return [];
+  return [slug];
+}
+
 /**
  * Ordered list of image URLs to try under `web/public/stack-icons/`.
  * PNG first (common for bundled icons), then SVG per basename.
- * Built-in basename aliases (optional files): golang→go, next→node_next, react→node_cra, vite→node_vite, vue→node_nuxt, html5→Staticfile (unknown + label).
+ * Built-in basename aliases (optional files): golang→go, next→node_next, react→node_cra, vite→node_vite, vue→node_nuxt, html5→Staticfile.
  * Always ends with default.*, node.*, then the inline glyph.
  */
 function stackIconCandidates(kind: string, stackLabel: string): string[] {
@@ -49,17 +47,24 @@ function stackIconCandidates(kind: string, stackLabel: string): string[] {
   let basenames: string[];
   if (aliasBasenames[k]) {
     basenames = aliasBasenames[k]!;
-  } else if (k === "unknown" && lab.includes("staticfile")) {
-    basenames = ["html5", "unknown"];
+  } else if ((k === "unknown" && lab.includes("staticfile")) || k === "staticfile") {
+    basenames = ["html5", "staticfile", "unknown"];
+  } else if (k === "unknown") {
+    basenames = ["unknown", ...legacyIconBasenamesFromLabel(stackLabel)];
   } else {
     basenames = [k];
   }
 
   const urls: string[] = [];
   for (const name of basenames) {
-    urls.push(`${b}${name}.png`, `${b}${name}.svg`);
+    urls.push(stackIconAssetUrl(b, name, "png"), stackIconAssetUrl(b, name, "svg"));
   }
-  urls.push(`${b}default.png`, `${b}default.svg`, `${b}node.png`, `${b}node.svg`);
+  urls.push(
+    stackIconAssetUrl(b, "default", "png"),
+    stackIconAssetUrl(b, "default", "svg"),
+    stackIconAssetUrl(b, "node", "png"),
+    stackIconAssetUrl(b, "node", "svg"),
+  );
   return urls;
 }
 

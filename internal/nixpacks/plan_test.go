@@ -58,11 +58,19 @@ func TestSummarizePlanJSON_inferFromNixPkgs(t *testing.T) {
 	}
 }
 
-func TestSummarizePlanJSON_unknownMeta(t *testing.T) {
+func TestSummarizePlanJSON_genericMetaStackKind(t *testing.T) {
 	raw := []byte(`{ "variables": { "NIXPACKS_METADATA": "haskell" }, "phases": {} }`)
 	k, l := SummarizePlanJSON(raw)
-	if k != "unknown" || l != "Haskell" {
-		t.Fatalf("want unknown/Haskell, got %q / %q", k, l)
+	if k != "haskell" || l != "Haskell" {
+		t.Fatalf("want haskell/Haskell, got %q / %q", k, l)
+	}
+}
+
+func TestSummarizePlanJSON_staticfile(t *testing.T) {
+	raw := []byte(`{ "variables": { "NIXPACKS_METADATA": "staticfile" }, "phases": {} }`)
+	k, l := SummarizePlanJSON(raw)
+	if k != "staticfile" || l != "Staticfile" {
+		t.Fatalf("want staticfile/Staticfile, got %q / %q", k, l)
 	}
 }
 

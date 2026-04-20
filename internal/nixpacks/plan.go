@@ -90,8 +90,11 @@ func SummarizePlanWithWorktree(workDir string, raw []byte) (kind string, label s
 		return "rust", "Rust"
 	case "deno":
 		return "deno", "Deno"
+	case "staticfile":
+		return "staticfile", "Staticfile"
 	default:
-		return "unknown", titleMeta(meta)
+		// stack_kind matches NIXPACKS_METADATA (lowercased) so UI icons can use `<kind>.png`.
+		return meta, titleMeta(meta)
 	}
 }
 
