@@ -37,6 +37,9 @@ export type ApiProject = {
   deploy: ApiDeployConfig;
   created_at: string;
   updated_at: string;
+  /** Mirrors latest deployment Nixpacks stack (when set). */
+  stack_kind?: string;
+  stack_label?: string;
   latest_deployment?: ApiDeployment;
   domains?: ApiDomain[];
   dns_guidance?: DnsGuidance;
@@ -52,6 +55,9 @@ export type ApiDeployment = {
   image_ref: string;
   worktree: string;
   error_message: string;
+  /** Stable slug from nixpacks plan (e.g. node, node_vite, node_next, go). */
+  stack_kind?: string;
+  stack_label?: string;
   created_at: string;
   updated_at: string;
   container?: ApiContainer;
@@ -140,6 +146,14 @@ export type CreateProjectRequest = {
     build_cmd?: string;
     start_cmd?: string;
   };
+  env?: { key: string; value: string }[];
+};
+
+export type ApiProjectEnvVar = {
+  id: string;
+  key: string;
+  value_last4: string;
+  updated_at: string;
 };
 
 export type RepositoryBranches = {
@@ -300,6 +314,42 @@ export async function createProject(input: CreateProjectRequest): Promise<ApiPro
   });
   const body = await readJSON<{ project: ApiProject }>(res);
   return body.project;
+}
+
+export async function listProjectEnv(projectID: string): Promise<ApiProjectEnvVar[]> {
+  const res = await apiFetch(`/api/projects/${encodeURIComponent(projectID)}/env`);
+  const body = await readJSON<{ env_vars?: ApiProjectEnvVar[] }>(res);
+  return body.env_vars || [];
+}
+
+export async function upsertProjectEnv(projectID: string, key: string, value: string): Promise<ApiProjectEnvVar> {
+  const res = await apiFetch(`/api/projects/${encodeURIComponent(projectID)}/env`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, value }),
+  });
+  const body = await readJSON<{ env_var: ApiProjectEnvVar }>(res);
+  return body.env_var;
+}
+
+export async function updateProjectEnv(projectID: string, envID: string, value: string): Promise<ApiProjectEnvVar> {
+  const res = await apiFetch(
+    `/api/projects/${encodeURIComponent(projectID)}/env/${encodeURIComponent(envID)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    },
+  );
+  const body = await readJSON<{ env_var: ApiProjectEnvVar }>(res);
+  return body.env_var;
+}
+
+export async function deleteProjectEnv(projectID: string, envID: string): Promise<void> {
+  const res = await apiFetch(`/api/projects/${encodeURIComponent(projectID)}/env/${encodeURIComponent(envID)}`, {
+    method: "DELETE",
+  });
+  await readJSON(res);
 }
 
 export async function updateProjectDeploy(projectID: string, deploy: ApiDeployConfig): Promise<ApiProject> {

@@ -112,60 +112,60 @@ func (s *server) buildSettingsPayload(r *http.Request) map[string]any {
 	}
 
 	paths := map[string]any{
-		"data_dir":             cfg.DataDir,
-		"data_dir_env":         config.DataDirEnv,
-		"logs_dir":             logsDir,
-		"logs_dir_env":         config.LogsDirEnv,
-		"db_path":              dbPath,
-		"db_size_bytes":        dbSize,
-		"logs_dir_size_bytes":  logsSize,
+		"data_dir":            cfg.DataDir,
+		"data_dir_env":        config.DataDirEnv,
+		"logs_dir":            logsDir,
+		"logs_dir_env":        config.LogsDirEnv,
+		"db_path":             dbPath,
+		"db_size_bytes":       dbSize,
+		"logs_dir_size_bytes": logsSize,
 	}
 
 	network := map[string]any{
-		"listen":            cfg.ListenAddr,
-		"listen_env":        config.ListenEnv,
-		"host_port":         cfg.HostPort,
-		"host_port_env":     config.HostPortEnv,
-		"port_start":        cfg.PortStart,
-		"port_start_env":    config.PortStartEnv,
-		"port_end":          cfg.PortEnd,
-		"port_end_env":      config.PortEndEnv,
-		"container_port":    cfg.ContainerPort,
+		"listen":             cfg.ListenAddr,
+		"listen_env":         config.ListenEnv,
+		"host_port":          cfg.HostPort,
+		"host_port_env":      config.HostPortEnv,
+		"port_start":         cfg.PortStart,
+		"port_start_env":     config.PortStartEnv,
+		"port_end":           cfg.PortEnd,
+		"port_end_env":       config.PortEndEnv,
+		"container_port":     cfg.ContainerPort,
 		"container_port_env": config.ContainerPortEnv,
 	}
 
 	health := map[string]any{
-		"path":                 cfg.HealthPath,
-		"path_env":            config.HealthPathEnv,
-		"timeout_ms":          cfg.HealthTimeoutMS,
-		"timeout_ms_env":      config.HealthTimeoutMSEnv,
-		"retries":             cfg.HealthRetries,
-		"retries_env":         config.HealthRetriesEnv,
-		"interval_ms":         cfg.HealthIntervalMS,
-		"interval_ms_env":     config.HealthIntervalMSEnv,
-		"expected_min":        cfg.HealthExpectedMin,
-		"expected_min_env":    config.HealthExpectedMinEnv,
-		"expected_max":        cfg.HealthExpectedMax,
-		"expected_max_env":    config.HealthExpectedMaxEnv,
+		"path":             cfg.HealthPath,
+		"path_env":         config.HealthPathEnv,
+		"timeout_ms":       cfg.HealthTimeoutMS,
+		"timeout_ms_env":   config.HealthTimeoutMSEnv,
+		"retries":          cfg.HealthRetries,
+		"retries_env":      config.HealthRetriesEnv,
+		"interval_ms":      cfg.HealthIntervalMS,
+		"interval_ms_env":  config.HealthIntervalMSEnv,
+		"expected_min":     cfg.HealthExpectedMin,
+		"expected_min_env": config.HealthExpectedMinEnv,
+		"expected_max":     cfg.HealthExpectedMax,
+		"expected_max_env": config.HealthExpectedMaxEnv,
 	}
 
 	caddyBlock := map[string]any{
-		"bin":                        cfg.CaddyBin,
-		"bin_env":                    config.CaddyBinEnv,
-		"generated_path":             cfg.CaddyGeneratedPath,
-		"generated_path_env":         config.CaddyGeneratedPathEnv,
-		"root_config":                cfg.CaddyRootConfig,
-		"root_config_env":            config.CaddyRootConfigEnv,
-		"sync_caddy":                 cfg.SyncCaddy,
-		"sync_caddy_env":             config.SyncCaddyEnv,
-		"domain_sync_after_mutate":   cfg.DomainSyncAfterMutate,
+		"bin":                          cfg.CaddyBin,
+		"bin_env":                      config.CaddyBinEnv,
+		"generated_path":               cfg.CaddyGeneratedPath,
+		"generated_path_env":           config.CaddyGeneratedPathEnv,
+		"root_config":                  cfg.CaddyRootConfig,
+		"root_config_env":              config.CaddyRootConfigEnv,
+		"sync_caddy":                   cfg.SyncCaddy,
+		"sync_caddy_env":               config.SyncCaddyEnv,
+		"domain_sync_after_mutate":     cfg.DomainSyncAfterMutate,
 		"domain_sync_after_mutate_env": config.DomainSyncAfterMutateEnv,
-		"cert_poll_interval_sec":     cfg.CaddyCertPollIntervalSec,
-		"cert_poll_interval_sec_env": config.CaddyCertPollIntervalSecEnv,
-		"admin_url":                  cfg.CaddyAdminURL,
-		"admin_url_env":              config.CaddyAdminURLEnv,
-		"storage_root":               cfg.CaddyStorageRoot,
-		"storage_root_env":           config.CaddyStorageRootEnv,
+		"cert_poll_interval_sec":       cfg.CaddyCertPollIntervalSec,
+		"cert_poll_interval_sec_env":   config.CaddyCertPollIntervalSecEnv,
+		"admin_url":                    cfg.CaddyAdminURL,
+		"admin_url_env":                config.CaddyAdminURLEnv,
+		"storage_root":                 cfg.CaddyStorageRoot,
+		"storage_root_env":             config.CaddyStorageRootEnv,
 	}
 
 	webhooks := map[string]any{
@@ -182,32 +182,32 @@ func (s *server) buildSettingsPayload(r *http.Request) map[string]any {
 	}
 
 	dns := map[string]any{
-		"server_ipv4":            cfg.DNSServerIPv4,
-		"server_ipv4_env":      config.DNSServerIPv4Env,
-		"server_ipv6":            cfg.DNSServerIPv6,
-		"server_ipv6_env":      config.DNSServerIPv6Env,
-		"detect_url":             cfg.DNSDetectURL,
-		"detect_url_env":         config.DNSDetectURLEnv,
-		"detect_ipv6_url":        cfg.DNSDetectIPv6URL,
-		"detect_ipv6_url_env":    config.DNSDetectIPv6URLEnv,
-		"detect_timeout_ms":      cfg.DNSDetectTimeoutMS,
-		"detect_timeout_ms_env":  config.DNSDetectTimeoutMSEnv,
-		"detected_ipv4":          ipv4,
-		"detected_ipv4_source":   v4src,
-		"detected_ipv4_warning":  v4warn,
+		"server_ipv4":           cfg.DNSServerIPv4,
+		"server_ipv4_env":       config.DNSServerIPv4Env,
+		"server_ipv6":           cfg.DNSServerIPv6,
+		"server_ipv6_env":       config.DNSServerIPv6Env,
+		"detect_url":            cfg.DNSDetectURL,
+		"detect_url_env":        config.DNSDetectURLEnv,
+		"detect_ipv6_url":       cfg.DNSDetectIPv6URL,
+		"detect_ipv6_url_env":   config.DNSDetectIPv6URLEnv,
+		"detect_timeout_ms":     cfg.DNSDetectTimeoutMS,
+		"detect_timeout_ms_env": config.DNSDetectTimeoutMSEnv,
+		"detected_ipv4":         ipv4,
+		"detected_ipv4_source":  v4src,
+		"detected_ipv4_warning": v4warn,
 	}
 
 	session := map[string]any{
-		"cookie_name":           cfg.SessionCookieName,
-		"cookie_name_env":       config.SessionCookieNameEnv,
-		"ttl_minutes":           cfg.SessionTTLMinutes,
-		"ttl_minutes_env":       config.SessionTTLMinutesEnv,
-		"cookie_secure":         cfg.SessionCookieSecure,
-		"cookie_secure_env":     config.SessionCookieSecureEnv,
-		"session_secret_set":  strings.TrimSpace(cfg.SessionSecret) != "",
-		"session_secret_env":    config.SessionSecretEnv,
-		"api_token_set":         strings.TrimSpace(cfg.APIToken) != "",
-		"api_token_env":         config.APITokenEnv,
+		"cookie_name":        cfg.SessionCookieName,
+		"cookie_name_env":    config.SessionCookieNameEnv,
+		"ttl_minutes":        cfg.SessionTTLMinutes,
+		"ttl_minutes_env":    config.SessionTTLMinutesEnv,
+		"cookie_secure":      cfg.SessionCookieSecure,
+		"cookie_secure_env":  config.SessionCookieSecureEnv,
+		"session_secret_set": strings.TrimSpace(cfg.SessionSecret) != "",
+		"session_secret_env": config.SessionSecretEnv,
+		"api_token_set":      strings.TrimSpace(cfg.APIToken) != "",
+		"api_token_env":      config.APITokenEnv,
 	}
 
 	return map[string]any{
@@ -264,11 +264,11 @@ func (s *server) handleSettingsActionCaddyValidate(w http.ResponseWriter, r *htt
 	ms := time.Since(t0).Milliseconds()
 	ok := err == nil
 	resp := map[string]any{
-		"ok":       ok,
-		"stdout":   strings.TrimSpace(stdout),
-		"stderr":   strings.TrimSpace(stderr),
-		"took_ms":  ms,
-		"root":     root,
+		"ok":      ok,
+		"stdout":  strings.TrimSpace(stdout),
+		"stderr":  strings.TrimSpace(stderr),
+		"took_ms": ms,
+		"root":    root,
 	}
 	if err != nil {
 		resp["error"] = err.Error()
@@ -294,7 +294,7 @@ func (s *server) handleSettingsActionCaddySync(w http.ResponseWriter, r *http.Re
 		out.Error = publicAPIError(err, "caddy_sync_failed")
 		s.requestLog(r).Warn("settings caddy sync failed", "error", err, "duration_ms", time.Since(t0).Milliseconds())
 		writeJSON(w, http.StatusOK, map[string]any{
-			"caddy_sync": out,
+			"caddy_sync":  out,
 			"duration_ms": time.Since(t0).Milliseconds(),
 		})
 		return

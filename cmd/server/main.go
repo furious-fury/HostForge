@@ -23,6 +23,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hostforge/hostforge/internal/auth"
 	"github.com/hostforge/hostforge/internal/config"
+	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
 	"github.com/hostforge/hostforge/internal/database"
 	"github.com/hostforge/hostforge/internal/hostmetrics"
 	"github.com/hostforge/hostforge/internal/logging"
@@ -139,12 +140,23 @@ func runServer(log *slog.Logger, args []string) int {
 	hostSampler := hostmetrics.NewSampler(hostmetrics.IntervalFromEnv(5000), hostmetrics.CapacityFromEnv(360), hostReader)
 	hostSampler.Start(context.Background())
 
+	var envSealer *envcrypt.Sealer
+	if k := strings.TrimSpace(os.Getenv(config.EnvEncryptionKeyEnv)); k != "" {
+		sealer, err := envcrypt.NewFromBase64Key(k)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %s: %v\n", config.EnvEncryptionKeyEnv, err)
+			return 1
+		}
+		envSealer = sealer
+	}
+
 	handler := &server{
 		log:            log,
 		cfg:            cfg,
 		store:          store,
 		webhookLimiter: webhookLimiter,
 		hostSampler:    hostSampler,
+		envSealer:      envSealer,
 	}
 
 	mux := http.NewServeMux()
@@ -186,6 +198,7 @@ type server struct {
 	webhookLimiter *fixedWindowLimiter
 	hostSampler    *hostmetrics.Sampler
 	hostSnapCache  hostSnapshotCache
+	envSealer      *envcrypt.Sealer
 }
 
 type githubPushPayload struct {
@@ -382,7 +395,7 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.WebhookAsync {
 		go func(job services.DeployJob) {
 			bg := obs.WithStore(context.Background(), s.store)
-			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job)
+			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer)
 			if execErr != nil {
 				deployLog.Error("async deployment failed", "error", execErr)
 			}
@@ -397,7 +410,7 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deployWall := time.Now()
-	result, err := services.ExecuteDeploy(r.Context(), deployLog, s.cfg, s.store, job)
+	result, err := services.ExecuteDeploy(r.Context(), deployLog, s.cfg, s.store, job, s.envSealer)
 	if err != nil {
 		deployLog.Error("synchronous deployment failed", "error", err, "public_code", publicAPIError(err, "deployment_failed"), "duration_ms", time.Since(deployWall).Milliseconds())
 		writeJSON(w, http.StatusOK, map[string]string{
@@ -510,7 +523,7 @@ func (s *server) withRequestContext(next http.HandlerFunc) http.HandlerFunc {
 		next(rw, r)
 		dur := time.Since(start).Milliseconds()
 		s.log.Info("http_request", "request_id", rid, "method", r.Method, "path", r.URL.Path, "status", rw.status, "duration_ms", dur)
-		obs.RecordHTTPRequest(r.Context(), s.log, repository.HTTPRequestRecord{
+		obs.RecordHTTPRequest(r.Context(), s.log, models.HTTPRequestRecord{
 			RequestID:  rid,
 			Method:     r.Method,
 			Path:       r.URL.Path,

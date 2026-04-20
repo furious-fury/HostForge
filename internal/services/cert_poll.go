@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hostforge/hostforge/internal/config"
+	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/obs"
 	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
@@ -94,7 +95,7 @@ func recordCertPollObs(ctx context.Context, log *slog.Logger, started time.Time,
 	if pollErr != nil {
 		code = "cert_poll_failed"
 	}
-	obs.RecordDeployStep(ctx, log, repository.DeployStepRecord{
+	obs.RecordDeployStep(ctx, log, models.DeployStepRecord{
 		DeploymentID: "",
 		ProjectID:    "",
 		RequestID:    "",

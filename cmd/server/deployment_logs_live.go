@@ -326,12 +326,12 @@ func (s *server) streamBuildLogJSON(ctx context.Context, log *slog.Logger, sink 
 	}
 
 	_ = sink.writeJSON(map[string]any{
-		"t":       deploylogs.TypeHello,
-		"v":       deploylogs.ProtocolVersion,
-		"source":  "build",
-		"resume":  true,
-		"eof":     eof,
-		"cursor":  cursor,
+		"t":             deploylogs.TypeHello,
+		"v":             deploylogs.ProtocolVersion,
+		"source":        "build",
+		"resume":        true,
+		"eof":           eof,
+		"cursor":        cursor,
 		"deployment_id": deployment.ID,
 	})
 
@@ -482,12 +482,12 @@ func (s *server) streamContainerLogJSON(ctx context.Context, log *slog.Logger, s
 	defer cli.Close()
 
 	_ = sink.writeJSON(map[string]any{
-		"t":              deploylogs.TypeHello,
-		"v":              deploylogs.ProtocolVersion,
-		"source":         "container",
-		"resume":         false,
-		"deployment_id":  deploymentID,
-		"container_id":   containerRec.DockerContainerID,
+		"t":             deploylogs.TypeHello,
+		"v":             deploylogs.ProtocolVersion,
+		"source":        "container",
+		"resume":        false,
+		"deployment_id": deploymentID,
+		"container_id":  containerRec.DockerContainerID,
 	})
 
 	out := &containerJSONWriter{sink: sink}

@@ -7,35 +7,14 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/hostforge/hostforge/internal/models"
 )
 
 const (
 	observabilityMaxRows    = 5000
 	observabilityTrimBatch = 1000
 )
-
-// DeployStepRecord is one persisted deploy or system observability span.
-type DeployStepRecord struct {
-	DeploymentID string
-	ProjectID    string
-	RequestID    string
-	Step         string
-	Status       string // ok | failed
-	DurationMS   int64
-	ErrorCode    string
-	StartedAt    time.Time
-	EndedAt      time.Time
-}
-
-// HTTPRequestRecord is one sampled HTTP request line for the observability UI.
-type HTTPRequestRecord struct {
-	RequestID  string
-	Method     string
-	Path       string
-	Status     int
-	DurationMS int64
-	StartedAt  time.Time
-}
 
 // DeployStepRow is a row returned for API/UI.
 type DeployStepRow struct {
@@ -86,7 +65,7 @@ func formatObsTime(t time.Time) string {
 }
 
 // InsertDeployStep appends a deploy step span and trims old rows if over cap.
-func (s *Store) InsertDeployStep(ctx context.Context, in DeployStepRecord) error {
+func (s *Store) InsertDeployStep(ctx context.Context, in models.DeployStepRecord) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO deploy_steps (deployment_id, project_id, request_id, step, status, duration_ms, error_code, started_at, ended_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -107,7 +86,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 }
 
 // InsertHTTPRequest records one HTTP request sample and trims if over cap.
-func (s *Store) InsertHTTPRequest(ctx context.Context, in HTTPRequestRecord) error {
+func (s *Store) InsertHTTPRequest(ctx context.Context, in models.HTTPRequestRecord) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO http_requests (request_id, method, path, status, duration_ms, started_at)
 VALUES (?, ?, ?, ?, ?, ?)`,

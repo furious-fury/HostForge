@@ -13,6 +13,7 @@ import { Button, ButtonLink } from "../components/Button";
 import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { Stepper } from "../components/Stepper";
+import { EnvVarsEditor, type EnvDraftPair } from "../components/EnvVarsEditor";
 import { Terminal } from "../components/Terminal";
 import { invalidateFleetProjectsAndDeployments } from "../hooks/mutationCache";
 import { useDeploymentLogStream } from "../hooks/useDeploymentLogStream";
@@ -25,6 +26,29 @@ const STEPS = [
 ];
 
 type Phase = "form" | "deploying" | "success" | "failure";
+
+function formatElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  }
+  return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+/** Ticks once per second while `active` so elapsed time updates without tying to log traffic. */
+function useElapsedSince(anchorMs: number | null, active: boolean): number {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!active || anchorMs == null) return;
+    const id = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [active, anchorMs]);
+  if (!active || anchorMs == null) return 0;
+  return Math.max(0, Date.now() - anchorMs);
+}
 
 export function NewProjectPage() {
   const navigate = useNavigate();
@@ -48,6 +72,9 @@ export function NewProjectPage() {
   const [deployInstallCmd, setDeployInstallCmd] = useState("");
   const [deployBuildCmd, setDeployBuildCmd] = useState("");
   const [deployStartCmd, setDeployStartCmd] = useState("");
+  const [envDraft, setEnvDraft] = useState<EnvDraftPair[]>([]);
+  /** Wall-clock anchor when the user starts this deploy (independent of log chunks). */
+  const [deployStartedAtMs, setDeployStartedAtMs] = useState<number | null>(null);
 
   // After success, use an index past the last step so the stepper shows all steps completed (not “stuck” on Result).
   const stepIndex =
@@ -85,6 +112,9 @@ export function NewProjectPage() {
         deployInstallCmd.trim() ||
         deployBuildCmd.trim() ||
         deployStartCmd.trim();
+      const envPayload = envDraft
+        .map((e) => ({ key: e.key.trim(), value: e.value }))
+        .filter((e) => e.key !== "" && e.value !== "");
       const project = await createProject({
         repo_url: repoURL.trim(),
         branch: branch.trim(),
@@ -99,9 +129,11 @@ export function NewProjectPage() {
               },
             }
           : {}),
+        ...(envPayload.length > 0 ? { env: envPayload } : {}),
       });
       void invalidateFleetProjectsAndDeployments(queryClient);
       setProjectID(project.id);
+      setDeployStartedAtMs(Date.now());
       setPhase("deploying");
       setMessage("Build accepted. Streaming live logs.");
       const dep = await deployProject(project.id, { async: true });
@@ -194,13 +226,16 @@ export function NewProjectPage() {
     return () => window.clearTimeout(timer);
   }, [repoURL, branchTouched]);
 
+  const buildElapsedMs = useElapsedSince(deployStartedAtMs, phase === "deploying");
+
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
       <header>
         <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">New Project</div>
         <h1 className="text-2xl font-semibold tracking-tight">Deploy from GitHub</h1>
         <p className="mt-1 text-sm text-muted">
-          Step-driven flow with immediate state transitions and live logs. Env-var configuration is intentionally deferred in this phase.
+          Step-driven flow with immediate state transitions and live logs. Optional environment variables are applied at
+          container runtime after you deploy.
         </p>
       </header>
 
@@ -318,10 +353,15 @@ export function NewProjectPage() {
                 </Field>
               </div>
             </div>
-            <div className="flex items-center justify-between border-t border-border pt-4">
-              <div className="text-xs text-muted">
-                Env vars and advanced configuration are set on the server (see README).
+            <details className="rounded border border-border bg-surface-alt/40 p-4">
+              <summary className="cursor-pointer mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
+                Environment variables (optional)
+              </summary>
+              <div className="mt-4">
+                <EnvVarsEditor mode="local" value={envDraft} onChange={setEnvDraft} />
               </div>
+            </details>
+            <div className="flex items-center justify-end border-t border-border pt-4">
               <Button variant="primary" type="submit" disabled={submitting}>
                 {submitting ? "Deploying…" : "Continue and Deploy"}
               </Button>
@@ -336,15 +376,25 @@ export function NewProjectPage() {
           <Panel
             title={phase === "deploying" ? "Step 2 · Deploying" : "Step 3 · Result"}
             actions={
-              <StatusPill
-                status={
-                  phase === "success"
-                    ? "SUCCESS"
-                    : phase === "failure"
-                    ? "FAILED"
-                    : (deployment?.status || "BUILDING")
-                }
-              />
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {phase === "deploying" && deployStartedAtMs != null && (
+                  <span
+                    className="mono text-[11px] font-semibold tabular-nums uppercase tracking-wider text-muted"
+                    title="Time since this deploy started (updates even when logs are quiet)"
+                  >
+                    {formatElapsed(buildElapsedMs)}
+                  </span>
+                )}
+                <StatusPill
+                  status={
+                    phase === "success"
+                      ? "SUCCESS"
+                      : phase === "failure"
+                      ? "FAILED"
+                      : (deployment?.status || "BUILDING")
+                  }
+                />
+              </div>
             }
           >
             <div className="flex flex-col gap-3">
@@ -368,7 +418,14 @@ export function NewProjectPage() {
                   </ButtonLink>
                 )}
                 {phase === "failure" && (
-                  <Button variant="ghost" size="sm" onClick={() => setPhase("form")}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setPhase("form");
+                      setDeployStartedAtMs(null);
+                    }}
+                  >
                     Try again
                   </Button>
                 )}
@@ -382,6 +439,7 @@ export function NewProjectPage() {
               streamActive={phase === "deploying"}
               collapsed={!buildLogsExpanded}
               onExpand={() => setBuildLogsExpanded(true)}
+              elapsedMs={phase === "deploying" && deployStartedAtMs != null ? buildElapsedMs : undefined}
             />
           ) : (
             <Panel title="Build Logs" noBody>
@@ -410,12 +468,15 @@ function InlineDeploymentLogs({
   streamActive,
   collapsed,
   onExpand,
+  elapsedMs,
 }: {
   deploymentID: string;
   /** While true, the WebSocket will reconnect if the proxy or network drops the connection. */
   streamActive: boolean;
   collapsed?: boolean;
   onExpand?: () => void;
+  /** Wall-clock elapsed for this deploy; ticks even when the log stream is idle. */
+  elapsedMs?: number;
 }) {
   const { prefs } = useUIPrefs();
   const [paused, setPaused] = useState(() => !prefs.logAutoScroll);
@@ -466,23 +527,33 @@ function InlineDeploymentLogs({
     <Panel
       title="Build Logs"
       actions={
-        <span className="mono inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider">
-          <span
-            aria-hidden
-            className={
-              streamState === "live"
-                ? "text-success"
-                : streamState === "error"
-                  ? "text-danger"
-                  : streamState === "ended"
-                    ? "text-muted"
-                    : "text-warning"
-            }
-          >
-            ●
+        <span className="mono inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[10px] font-semibold uppercase tracking-wider">
+          {elapsedMs !== undefined && (
+            <span
+              className="tabular-nums text-muted"
+              title="Time since this deploy started (updates even when logs are quiet)"
+            >
+              {formatElapsed(elapsedMs)}
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1">
+            <span
+              aria-hidden
+              className={
+                streamState === "live"
+                  ? "text-success"
+                  : streamState === "error"
+                    ? "text-danger"
+                    : streamState === "ended"
+                      ? "text-muted"
+                      : "text-warning"
+              }
+            >
+              ●
+            </span>
+            <span className="text-muted">Stream</span>
+            <span className="text-text">{streamLabel}</span>
           </span>
-          <span className="text-muted">Stream</span>
-          <span className="text-text">{streamLabel}</span>
         </span>
       }
       noBody

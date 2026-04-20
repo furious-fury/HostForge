@@ -27,6 +27,22 @@ const (
 	DeployRuntimeBun  = "bun"
 )
 
+// ProjectEnvVar is metadata for one encrypted env entry (no plaintext).
+type ProjectEnvVar struct {
+	ID         string
+	ProjectID  string
+	Key        string
+	ValueLast4 string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// ProjectEnvSealed holds key + ciphertext for deploy-time decryption.
+type ProjectEnvSealed struct {
+	Key     string
+	ValueCT []byte
+}
+
 // Project is a Git source (repo + branch) that deployments belong to.
 type Project struct {
 	ID      string
@@ -52,8 +68,12 @@ type Deployment struct {
 	ImageRef     string // Docker image reference built for this attempt
 	Worktree     string // on-disk clone path for this deploy
 	ErrorMessage string // set when Status is DeploymentFailed
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// StackKind is a stable slug from nixpacks plan (e.g. node, node_vite, node_next, go) for UI icons; empty if not captured.
+	StackKind string
+	// StackLabel is a short human summary (e.g. "Node · SPA"); empty if not captured.
+	StackLabel string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // Container records a running Docker instance for a successful deployment.
@@ -97,4 +117,27 @@ func (d Domain) CertCheckedAt() time.Time {
 type DomainRoute struct {
 	Domain
 	HostPort int
+}
+
+// DeployStepRecord is one persisted deploy or system observability span (SQLite observability UI).
+type DeployStepRecord struct {
+	DeploymentID string
+	ProjectID    string
+	RequestID    string
+	Step         string
+	Status       string // ok | failed
+	DurationMS   int64
+	ErrorCode    string
+	StartedAt    time.Time
+	EndedAt      time.Time
+}
+
+// HTTPRequestRecord is one sampled HTTP request line for the observability UI.
+type HTTPRequestRecord struct {
+	RequestID  string
+	Method     string
+	Path       string
+	Status     int
+	DurationMS int64
+	StartedAt  time.Time
 }

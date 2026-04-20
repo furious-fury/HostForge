@@ -5,27 +5,35 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/hostforge/hostforge/internal/models"
 )
+
+// ObservabilityWriter is the subset of persistence used for best-effort UI samples.
+// Implemented by *repository.Store without this package importing repository (avoids
+// gopls/import cycles and keeps obs usable from the persistence layer).
+type ObservabilityWriter interface {
+	InsertDeployStep(ctx context.Context, in models.DeployStepRecord) error
+	InsertHTTPRequest(ctx context.Context, in models.HTTPRequestRecord) error
+}
 
 type storeKey struct{}
 
-// WithStore returns ctx that carries the repository Store for best-effort observability inserts.
-func WithStore(ctx context.Context, store *repository.Store) context.Context {
+// WithStore returns ctx that carries an ObservabilityWriter for best-effort observability inserts.
+func WithStore(ctx context.Context, store ObservabilityWriter) context.Context {
 	if store == nil {
 		return ctx
 	}
 	return context.WithValue(ctx, storeKey{}, store)
 }
 
-// StoreFrom returns the store attached by WithStore, or nil.
-func StoreFrom(ctx context.Context) *repository.Store {
-	v, _ := ctx.Value(storeKey{}).(*repository.Store)
+// StoreFrom returns the writer attached by WithStore, or nil.
+func StoreFrom(ctx context.Context) ObservabilityWriter {
+	v, _ := ctx.Value(storeKey{}).(ObservabilityWriter)
 	return v
 }
 
 // RecordDeployStep persists a deploy or system span; failures are logged and ignored.
-func RecordDeployStep(ctx context.Context, log *slog.Logger, in repository.DeployStepRecord) {
+func RecordDeployStep(ctx context.Context, log *slog.Logger, in models.DeployStepRecord) {
 	st := StoreFrom(ctx)
 	if st == nil {
 		return
@@ -36,7 +44,7 @@ func RecordDeployStep(ctx context.Context, log *slog.Logger, in repository.Deplo
 }
 
 // RecordHTTPRequest persists an HTTP sample; failures are logged and ignored.
-func RecordHTTPRequest(ctx context.Context, log *slog.Logger, in repository.HTTPRequestRecord) {
+func RecordHTTPRequest(ctx context.Context, log *slog.Logger, in models.HTTPRequestRecord) {
 	st := StoreFrom(ctx)
 	if st == nil {
 		return

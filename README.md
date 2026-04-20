@@ -127,6 +127,14 @@ Some Bun + frontend repos trigger Nixpacks’ **Node** provider with **`nodejs_1
 
 **Debugging:** from the printed worktree path, run **`nixpacks plan .`** and inspect the setup/install/build/start phases. Compare with the **`hostforge: ===== generated worktree nixpacks.toml`** section in the deployment build log.
 
+### Stack labels (UI)
+
+After the worktree **`nixpacks.toml`** step on each deploy, HostForge runs **`nixpacks plan . -f json`** and persists **`stack_kind`** (a stable slug such as `node`, `node_vite`, `node_next`, `node_spa`, or `go`) and **`stack_label`** (short human text, e.g. **Node · Vite**) on that **deployment** row. Node apps are refined using **`package.json`** in the clone (Next, Vite, Remix, CRA, …) plus plan phase hints (e.g. **`.next/cache`**). The JSON API exposes them on each deployment and mirrors them onto the project’s **`latest_deployment`** (and top-level **`stack_kind`** / **`stack_label`**) for fleet list views. Rows created before this feature, or deploys where **`plan`** fails (e.g. **`nixpacks`** not on `PATH`), keep empty stack fields until a successful redeploy captures a plan.
+
+Older deployments with empty **`stack_kind`** / **`stack_label`** pick up values on the next successful deploy (the server runs **`nixpacks plan`** during the pipeline). HostForge does **not** ship a bulk backfill in this repository—avoiding checked-in tools that clone repos and write to your DB keeps the default tree safer to publish.
+
+**Stack icons (UI):** optional files under **`web/public/stack-icons/`**. For each stack, the UI tries a small basename list (**`.png` then `.svg`** per name), then **`default`**, then **`node`**, then a built-in SVG glyph. Shipped **`default.svg`** is the generic placeholder; add **`node.png`** as a broad Node/default image if you like. **Aliases:** **`go`** → `golang`, **`node_next`** → `next`, **`node_cra`** → `react`, **`node_vite`** → `vite`, **`node_nuxt`** → `vue`. For **Staticfile** plans ( **`stack_kind` `unknown`** and label **Staticfile**), **`html5`** is tried first. You can still add literal **`{stack_kind}.png`** for any slug (e.g. **`node_remix.png`**). Use square artwork (raster icons are shown at **32×32** CSS pixels; source assets can be larger, e.g. 48×48).
+
 ### Operator validation ([`task_list.md`](./task_list.md) — Detailed backlog §1)
 
 Use **[`docs/operator-validation-phase1.md`](./docs/operator-validation-phase1.md)** for staged proof of Docker (**1.1**), public HTTPS + restarts (**1.2**), and zero-downtime cutover (**1.3**). For **1.1** you can also run **`./scripts/operator-validation-phase1.sh`** (full automation) or **`hostforge validate docker`** / **`preflight`** for quick checks. Item **1.1** is recorded **PASS** in the runbook (2026-04-19, WSL2 + Docker Engine); **1.2** / **1.3** need a VPS with real DNS + Caddy—complete the runbook checklists and paste evidence in that file, then tick the matching exit rows in `task_list.md`.
@@ -206,6 +214,7 @@ The **UI** (project page) and **`hostforge domain add` / `edit`** output print *
 | `HOSTFORGE_SESSION_COOKIE_NAME` | Session cookie name (default: `hostforge_session`) |
 | `HOSTFORGE_SESSION_TTL_MINUTES` | Session lifetime (default: `720`) |
 | `HOSTFORGE_SESSION_COOKIE_SECURE` | If `true`, set `Secure` on session cookies (use behind HTTPS) |
+| `HOSTFORGE_ENV_ENCRYPTION_KEY` | **Optional but required for UI env management:** standard **base64** encoding of **32 raw bytes** (AES-256), e.g. `openssl rand -base64 32`. Used to encrypt per-project environment variable **values** at rest in SQLite. If unset, **`GET/POST/PUT/DELETE /api/projects/:id/env`** returns **`503`** with `env_encryption_key_missing`, and deploys **skip** injecting stored project env (deploy still works). **If you lose this key, stored values cannot be decrypted** — rotate by re-entering vars in the UI after setting a new key. |
 | `HOSTFORGE_LOGS_DIR` | Optional override for deployment build logs directory (default: `<data-dir>/logs`) |
 | `HOSTFORGE_DNS_SERVER_IPV4` | Optional: fixed public IPv4 shown in DNS guidance (skips auto-detect when set) |
 | `HOSTFORGE_DNS_SERVER_IPV6` | Optional: fixed public IPv6 for AAAA suggestions |
@@ -222,6 +231,13 @@ The **UI** (project page) and **`hostforge domain add` / `edit`** output print *
 TLS is handled by **Caddy automatic HTTPS** (typically Let’s Encrypt). Certificate storage and renewal are **Caddy’s responsibility** on disk (see upstream Caddy docs for data dirs and [staging CA](https://caddyserver.com/docs/caddyfile/options#acme-ca) for testing). HostForge records domain `ssl_status` in SQLite from **validate/reload** success or failure, not by parsing ACME events.
 
 **Optional cert hints (detailed backlog §2.1):** when `HOSTFORGE_CADDY_CERT_POLL_INTERVAL_SEC` is set, the server also stores operator-facing **`last_cert_message`** (e.g. leaf expiry from Caddy’s cert files) and **`cert_checked_at`**. This does **not** replace Caddy’s ACME engine or `ssl_status` (route/snippet sync); it is a best-effort mirror for the dashboard. See [docs/caddy-cert-poll.md](./docs/caddy-cert-poll.md).
+
+### Per-project environment variables
+
+- **Runtime only:** variables are passed to **`docker run`** as extra `KEY=value` pairs (with `PORT` always set by HostForge). They are **not** injected into the Nixpacks build environment; build-time secrets (e.g. some `NEXT_PUBLIC_*` patterns) are out of scope for this feature.
+- **API:** `GET /api/projects/:id/env` lists `{ id, key, value_last4, updated_at }` (no plaintext). `POST` upserts by key; `PUT /api/projects/:id/env/:envID` replaces value; `DELETE` removes a row. Keys must match `^[A-Z][A-Z0-9_]*$` after normalization; **`PORT`** is rejected; max **100** vars per project; max **8 KiB** per value.
+- **UI:** New Project wizard and Project page editors require the encryption key to be set; otherwise the UI explains the `503` / missing-key state.
+- **Redeploy:** after changing env vars in the UI, **redeploy** (or restart with container recreate) so a new process reads the updated map.
 
 ### Routing model
 

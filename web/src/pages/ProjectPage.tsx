@@ -22,10 +22,12 @@ import {
 import { projectAccessLinks } from "../accessUrls";
 import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
 import { Button } from "../components/Button";
+import { EnvVarsEditor } from "../components/EnvVarsEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/ToastProvider";
 import { EmptyState } from "../components/EmptyState";
 import { Panel } from "../components/Panel";
+import { StackBadge } from "../components/StackBadge";
 import { StatusPill } from "../components/StatusPill";
 import { formatDuration, formatRelative, shortHash } from "../format";
 import { fleetKeys } from "../hooks/fleetQueries";
@@ -60,6 +62,7 @@ export function ProjectPage() {
     start_cmd: "",
   });
   const [deployBusy, setDeployBusy] = useState(false);
+  const [envNeedsRedeploy, setEnvNeedsRedeploy] = useState(false);
 
   const load = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -93,6 +96,17 @@ export function ProjectPage() {
     if (!projectID) return;
     void load();
   }, [projectID, load]);
+
+  useEffect(() => {
+    if (!projectID || typeof window === "undefined") return;
+    setEnvNeedsRedeploy(window.localStorage.getItem(`hostforge:env-pending:${projectID}`) === "1");
+  }, [projectID]);
+
+  const markEnvPending = useCallback(() => {
+    if (!projectID || typeof window === "undefined") return;
+    window.localStorage.setItem(`hostforge:env-pending:${projectID}`, "1");
+    setEnvNeedsRedeploy(true);
+  }, [projectID]);
 
   const deploymentsInFlight = useMemo(
     () =>
@@ -188,6 +202,10 @@ export function ProjectPage() {
     setError("");
     try {
       await fn();
+      if (label === "deploy" && projectID && typeof window !== "undefined") {
+        window.localStorage.removeItem(`hostforge:env-pending:${projectID}`);
+        setEnvNeedsRedeploy(false);
+      }
       await invalidateFleetProjectsAndDeployments(queryClient);
       await load({ silent: true });
     } catch (err) {
@@ -204,6 +222,16 @@ export function ProjectPage() {
     (project?.domains || []).length === 0
       ? "none configured"
       : (project?.domains || []).map((d) => d.domain_name).join(", ");
+
+  const displayStack = useMemo(() => {
+    const ok = deployments.find((d) => d.status?.toUpperCase() === "SUCCESS" && (d.stack_kind || d.stack_label));
+    if (ok) return { kind: ok.stack_kind, label: ok.stack_label };
+    const ld = project?.latest_deployment;
+    if (ld && (ld.stack_kind || ld.stack_label)) {
+      return { kind: ld.stack_kind, label: ld.stack_label };
+    }
+    return null;
+  }, [deployments, project?.latest_deployment]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -290,7 +318,12 @@ export function ProjectPage() {
               {project?.repo_url || ""}
             </a>
           </div>
-          <StatusPill status={latest?.status || "UNKNOWN"} />
+          <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
+            {displayStack ? (
+              <StackBadge stackKind={displayStack.kind} stackLabel={displayStack.label} className="max-w-[12rem]" />
+            ) : null}
+            <StatusPill status={latest?.status || "UNKNOWN"} />
+          </div>
         </div>
         <dl className="grid grid-cols-2 gap-px bg-border md:grid-cols-3">
           <Stat label="Branch" value={project?.branch || "main"} />
@@ -329,6 +362,30 @@ export function ProjectPage() {
           </p>
         </div>
       </header>
+
+      {envNeedsRedeploy && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border border-warning/50 bg-warning/10 p-4 text-sm text-text">
+          <p className="min-w-0 flex-1">
+            Environment variables were changed. <span className="font-semibold">Redeploy</span> to apply them to the
+            running container.
+          </p>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!!actionBusy}
+            onClick={() =>
+              runControl("deploy", async () => {
+                const out = await deployProject(projectID, { async: true });
+                if (out.error) {
+                  throw new Error(out.error);
+                }
+              })
+            }
+          >
+            Redeploy now
+          </Button>
+        </div>
+      )}
 
       <Panel title="Controls">
         <div className="flex flex-wrap gap-2">
@@ -464,6 +521,14 @@ export function ProjectPage() {
             {deployBusy ? "Saving…" : "Save deploy settings"}
           </Button>
         </div>
+      </Panel>
+
+      <Panel title="Environment variables">
+        <p className="mb-3 text-xs text-muted">
+          Values are encrypted on the server and only injected at <span className="font-medium text-text">container runtime</span>{" "}
+          (not during the image build). After changing variables, redeploy so the new process picks them up.
+        </p>
+        <EnvVarsEditor mode="remote" projectID={projectID} onChange={markEnvPending} />
       </Panel>
 
       <Panel
@@ -685,11 +750,12 @@ export function ProjectPage() {
           <table className="w-full table-fixed text-sm">
             <thead>
               <tr className="mono border-b border-border text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
-                <th className="px-4 py-2 w-[28%]">Deployment</th>
-                <th className="px-4 py-2 w-[18%]">Commit</th>
-                <th className="px-4 py-2 w-[16%]">Status</th>
-                <th className="px-4 py-2 w-[18%]">Started</th>
-                <th className="px-4 py-2 w-[20%]">Duration</th>
+                <th className="px-4 py-2 w-[24%]">Deployment</th>
+                <th className="px-4 py-2 w-[14%]">Commit</th>
+                <th className="px-4 py-2 w-[14%]">Stack</th>
+                <th className="px-4 py-2 w-[14%]">Status</th>
+                <th className="px-4 py-2 w-[16%]">Started</th>
+                <th className="px-4 py-2 w-[18%]">Duration</th>
               </tr>
             </thead>
             <tbody>
@@ -699,16 +765,21 @@ export function ProjectPage() {
                   className="border-b border-border/60 cursor-pointer hover:bg-surface-alt"
                   onClick={() => navigate(`/projects/${projectID}/deployments/${deployment.id}`)}
                 >
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 align-middle">
                     <div className="mono text-xs text-text">{shortHash(deployment.id, 12)}</div>
                     {deployment.error_message && (
                       <div className="mt-1 text-xs text-danger">{deployment.error_message}</div>
                     )}
                   </td>
-                  <td className="px-4 py-3 mono text-xs text-text">{shortHash(deployment.commit_hash, 7)}</td>
-                  <td className="px-4 py-3"><StatusPill status={deployment.status} size="sm" /></td>
-                  <td className="px-4 py-3 text-xs text-muted">{formatRelative(deployment.created_at, new Date(), fmtLocale)}</td>
-                  <td className="px-4 py-3 mono text-xs text-text">
+                  <td className="px-4 py-3 align-middle mono text-xs text-text">{shortHash(deployment.commit_hash, 7)}</td>
+                  <td className="px-4 py-3 align-middle">
+                    <StackBadge stackKind={deployment.stack_kind} stackLabel={deployment.stack_label} compact />
+                  </td>
+                  <td className="px-4 py-3 align-middle">
+                    <StatusPill status={deployment.status} size="sm" />
+                  </td>
+                  <td className="px-4 py-3 align-middle text-xs text-muted">{formatRelative(deployment.created_at, new Date(), fmtLocale)}</td>
+                  <td className="px-4 py-3 align-middle mono text-xs text-text">
                     {formatDuration(deployment.created_at, deployment.updated_at)}
                   </td>
                 </tr>

@@ -4,6 +4,7 @@ import { ApiDeployment, ApiProject } from "../api";
 import { Button, ButtonLink } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { Panel } from "../components/Panel";
+import { StackBadge } from "../components/StackBadge";
 import { StatusPill } from "../components/StatusPill";
 import { formatDuration, formatRelative, shortHash } from "../format";
 import { useDeploymentsListQuery, useProjectsQuery } from "../hooks/fleetQueries";
@@ -191,11 +192,12 @@ export function DeploymentsPage() {
             <table className="w-full min-w-[720px] table-fixed text-sm">
               <thead>
                 <tr className="mono border-b border-border text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
-                  <th className="px-4 py-2 w-[22%]">Project</th>
-                  <th className="px-4 py-2 w-[14%]">Deployment</th>
-                  <th className="px-4 py-2 w-[14%]">Commit</th>
-                  <th className="px-4 py-2 w-[14%]">Status</th>
-                  <th className="px-4 py-2 w-[18%]">Started</th>
+                  <th className="px-4 py-2 w-[20%]">Project</th>
+                  <th className="px-4 py-2 w-[12%]">Deployment</th>
+                  <th className="px-4 py-2 w-[12%]">Commit</th>
+                  <th className="px-4 py-2 w-[10%]">Stack</th>
+                  <th className="px-4 py-2 w-[12%]">Status</th>
+                  <th className="px-4 py-2 w-[16%]">Started</th>
                   <th className="px-4 py-2 w-[18%]">Duration</th>
                 </tr>
               </thead>
@@ -205,13 +207,13 @@ export function DeploymentsPage() {
                   const projectName = proj?.name || shortHash(d.project_id, 8);
                   return (
                     <tr key={d.id} className="border-b border-border/60 hover:bg-surface-alt">
-                      <td className="px-4 py-3 truncate">
+                      <td className="px-4 py-3 align-middle truncate">
                         <Link to={`/projects/${d.project_id}`} className="font-semibold text-text hover:underline">
                           {projectName}
                         </Link>
                         {proj?.repo_url && <div className="mono truncate text-[11px] text-muted">{proj.repo_url}</div>}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 align-middle">
                         <Link
                           to={`/projects/${d.project_id}/deployments/${d.id}`}
                           className="mono text-xs text-info hover:underline"
@@ -219,14 +221,17 @@ export function DeploymentsPage() {
                           {shortHash(d.id, 10)}
                         </Link>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 align-middle">
                         <span className="mono text-xs text-text">{shortHash(d.commit_hash, 7)}</span>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 align-middle">
+                        <StackBadge stackKind={d.stack_kind} stackLabel={d.stack_label} compact />
+                      </td>
+                      <td className="px-4 py-3 align-middle">
                         <StatusPill status={d.status} size="sm" />
                       </td>
-                      <td className="px-4 py-3 text-xs text-muted">{formatRelative(d.created_at, new Date(), fmtLocale)}</td>
-                      <td className="px-4 py-3 mono text-xs text-text">{formatDuration(d.created_at, d.updated_at)}</td>
+                      <td className="px-4 py-3 align-middle text-xs text-muted">{formatRelative(d.created_at, new Date(), fmtLocale)}</td>
+                      <td className="px-4 py-3 align-middle mono text-xs text-text">{formatDuration(d.created_at, d.updated_at)}</td>
                     </tr>
                   );
                 })}

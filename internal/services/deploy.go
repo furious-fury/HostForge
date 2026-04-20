@@ -11,11 +11,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/hostforge/hostforge/internal/caddy"
 	"github.com/hostforge/hostforge/internal/config"
+	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
 	"github.com/hostforge/hostforge/internal/docker"
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/models"
@@ -64,6 +66,33 @@ type RollbackResult struct {
 	ContainerID      string
 	HostPort         int
 	URL              string
+}
+
+// buildDockerEnvFromProject decrypts stored env and returns KEY=value strings for Docker (excluding PORT).
+func buildDockerEnvFromProject(ctx context.Context, log *slog.Logger, store *repository.Store, projectID string, sealer *envcrypt.Sealer) ([]string, error) {
+	rows, err := store.ListProjectEnvSealed(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	if sealer == nil {
+		return nil, ErrCode("env_encryption_key_missing", fmt.Errorf("project has stored env vars but encryption key is not configured"))
+	}
+	keys := make([]string, 0, len(rows))
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		pt, err := sealer.Open(row.ValueCT)
+		if err != nil {
+			return nil, ErrCode("env_decrypt_failed", fmt.Errorf("%s: %w", row.Key, err))
+		}
+		keys = append(keys, row.Key)
+		out = append(out, row.Key+"="+string(pt))
+	}
+	sort.Strings(keys)
+	log.Info("deploy step", "step", "container_env_inject", "env_count", len(keys), "env_keys", strings.Join(keys, ","))
+	return out, nil
 }
 
 // PrepareDeploy creates a queued deployment row and returns execution metadata.
@@ -134,7 +163,7 @@ func PrepareDeploy(ctx context.Context, cfg *config.Config, store *repository.St
 }
 
 func recordDeployObs(ctx context.Context, log *slog.Logger, job DeployJob, step, status string, started time.Time, durMs int64, errCode string) {
-	obs.RecordDeployStep(ctx, log, repository.DeployStepRecord{
+	obs.RecordDeployStep(ctx, log, models.DeployStepRecord{
 		DeploymentID: job.Deployment.ID,
 		ProjectID:    job.Project.ID,
 		RequestID:    reqctx.RequestID(ctx),
@@ -148,7 +177,7 @@ func recordDeployObs(ctx context.Context, log *slog.Logger, job DeployJob, step,
 }
 
 // ExecuteDeploy runs clone/build/run/health/cutover for a prepared deployment.
-func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob) (result DeployResult, err error) {
+func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob, sealer *envcrypt.Sealer) (result DeployResult, err error) {
 	deployStart := time.Now()
 	log = log.With("project_id", job.Project.ID, "deployment_id", job.Deployment.ID)
 	defer func() {
@@ -162,7 +191,7 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 				code = "deploy_failed"
 			}
 		}
-		obs.RecordDeployStep(ctx, log, repository.DeployStepRecord{
+		obs.RecordDeployStep(ctx, log, models.DeployStepRecord{
 			DeploymentID: job.Deployment.ID,
 			ProjectID:    job.Project.ID,
 			RequestID:    reqctx.RequestID(ctx),
@@ -246,6 +275,22 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		log.Info("deploy step", "step", "nixpacks_toml_skipped", "reason", "auto_no_overrides")
 	}
 
+	tPlan := time.Now()
+	if raw, err := nixpacks.PlanJSON(ctx, job.Worktree); err != nil {
+		log.Warn("deploy step", "step", "nixpacks_plan", "status", "skipped", "error", err)
+		_, _ = fmt.Fprintf(combinedOut, "hostforge: nixpacks plan skipped: %v\n", err)
+	} else {
+		kind, label := nixpacks.SummarizePlanWithWorktree(job.Worktree, raw)
+		if err := store.UpdateDeploymentStack(ctx, job.Deployment.ID, kind, label); err != nil {
+			log.Warn("deploy step", "step", "deployment_stack_persist", "status", "failed", "error", err)
+		} else {
+			log.Info("deploy step", "step", "nixpacks_plan", "duration_ms", time.Since(tPlan).Milliseconds(), "stack_kind", kind, "stack_label", label)
+			if kind != "" || label != "" {
+				_, _ = fmt.Fprintf(combinedOut, "hostforge: detected stack kind=%q label=%q\n", kind, label)
+			}
+		}
+	}
+
 	reservedPorts, err := store.ListAllocatedHostPorts(ctx, "")
 	if err != nil {
 		e := ErrCode("reserved_ports_lookup_failed", err)
@@ -275,12 +320,19 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	log.Info("deploy step", "step", "nixpacks_build_end", "status", "ok", "duration_ms", msNix)
 	recordDeployObs(ctx, log, job, "nixpacks_build", "ok", t1, msNix, "")
 
+	extraEnv, err := buildDockerEnvFromProject(ctx, log, store, job.Project.ID, sealer)
+	if err != nil {
+		markFailed(err)
+		return DeployResult{}, err
+	}
+
 	tRun := time.Now()
 	containerID, err := docker.RunContainer(ctx, dockerClient, docker.RunOptions{
 		ImageRef:      job.ImageRef,
 		ContainerName: job.ContainerName,
 		ContainerPort: cfg.ContainerPort,
 		HostPort:      hostPortValue,
+		Env:           extraEnv,
 	})
 	if err != nil {
 		e := ErrCode("run_container_failed", err)
@@ -380,12 +432,12 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 }
 
 // Deploy runs a deployment end-to-end from persisted acceptance to cutover.
-func Deploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, in DeployPrepareInput) (DeployResult, error) {
+func Deploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, in DeployPrepareInput, sealer *envcrypt.Sealer) (DeployResult, error) {
 	job, err := PrepareDeploy(ctx, cfg, store, in)
 	if err != nil {
 		return DeployResult{}, err
 	}
-	return ExecuteDeploy(ctx, log, cfg, store, job)
+	return ExecuteDeploy(ctx, log, cfg, store, job, sealer)
 }
 
 // SyncCaddyRoutes regenerates HostForge-managed routes and updates ssl_status per outcome.
@@ -443,7 +495,7 @@ func SyncCaddyRoutes(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 // fresh container from the previous deployment image, marks the current deployment FAILED so
 // route resolution picks the previous deployment, syncs Caddy, then removes the superseded
 // active container.
-func RollbackProject(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, project models.Project) (RollbackResult, error) {
+func RollbackProject(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, project models.Project, sealer *envcrypt.Sealer) (RollbackResult, error) {
 	activeDeployment, err := store.GetLatestSuccessfulDeploymentByProjectID(ctx, project.ID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -486,11 +538,16 @@ func RollbackProject(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 		ShortID(previousDeployment.ID),
 		time.Now().UTC().Format("20060102t150405"),
 	)
+	extraEnv, err := buildDockerEnvFromProject(ctx, log, store, project.ID, sealer)
+	if err != nil {
+		return RollbackResult{}, err
+	}
 	rollbackContainerID, err := docker.RunContainer(ctx, dockerClient, docker.RunOptions{
 		ImageRef:      previousDeployment.ImageRef,
 		ContainerName: containerName,
 		ContainerPort: cfg.ContainerPort,
 		HostPort:      hostPortValue,
+		Env:           extraEnv,
 	})
 	if err != nil {
 		return RollbackResult{}, ErrCode("rollback_run_container_failed", err)
@@ -565,7 +622,7 @@ type RestartResult struct {
 // host port is now claimed by a different container (or the in-place restart fails
 // because the port is no longer available), the container is recreated from the same
 // deployment image on a freshly picked port and the database row is updated.
-func RestartProject(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, project models.Project) (RestartResult, error) {
+func RestartProject(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, project models.Project, sealer *envcrypt.Sealer) (RestartResult, error) {
 	deployment, err := store.GetLatestSuccessfulDeploymentByProjectID(ctx, project.ID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -638,11 +695,16 @@ func RestartProject(ctx context.Context, log *slog.Logger, cfg *config.Config, s
 		ShortID(deployment.ID),
 		time.Now().UTC().Format("20060102t150405"),
 	)
+	extraEnv, err := buildDockerEnvFromProject(ctx, log, store, project.ID, sealer)
+	if err != nil {
+		return RestartResult{}, err
+	}
 	newContainerID, err := docker.RunContainer(ctx, cli, docker.RunOptions{
 		ImageRef:      deployment.ImageRef,
 		ContainerName: containerName,
 		ContainerPort: internalPort,
 		HostPort:      newPort,
+		Env:           extraEnv,
 	})
 	if err != nil {
 		return RestartResult{}, ErrCode("restart_run_container_failed", err)

@@ -1,5 +1,9 @@
 /bin/
 /dist/
+
+# Optional operator-only bulk tools (clone + DB); keep local if you need them—do not commit.
+cmd/backfill-deploy-stack/
+scripts/backfill-deployment-stack.sh
 /.hostforge/
 *.db
 .env

@@ -36,6 +36,8 @@ type RunOptions struct {
 	ContainerName string
 	ContainerPort int
 	HostPort      int
+	// Env is extra KEY=value pairs (runtime). PORT is always set from ContainerPort and wins over any duplicate here.
+	Env []string
 }
 
 // RunContainer creates and starts a container with host->container port mapping.
@@ -60,13 +62,27 @@ func RunContainer(ctx context.Context, cli *client.Client, opts RunOptions) (str
 		}},
 	}
 
+	portEnv := fmt.Sprintf("PORT=%d", opts.ContainerPort)
+	env := []string{portEnv}
+	for _, e := range opts.Env {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		// Never let callers override the bound app port.
+		if strings.HasPrefix(strings.ToUpper(e), "PORT=") {
+			continue
+		}
+		env = append(env, e)
+	}
+
 	resp, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config: &container.Config{
 			Image:        opts.ImageRef,
 			ExposedPorts: exposed,
 			// PORT matches common PaaS conventions (e.g. Heroku); app must listen on this port
 			// for the host→container port mapping to receive traffic.
-			Env: []string{fmt.Sprintf("PORT=%d", opts.ContainerPort)},
+			Env: env,
 		},
 		HostConfig: &container.HostConfig{
 			PortBindings: bindings,

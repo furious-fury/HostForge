@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hostforge/hostforge/internal/database"
+	"github.com/hostforge/hostforge/internal/models"
 
 	_ "modernc.org/sqlite"
 )
@@ -35,7 +36,7 @@ func TestInsertDeployStepAndListByDeployment(t *testing.T) {
 	_, store := openTestDB(t)
 	start := time.Now().UTC().Add(-2 * time.Minute)
 	end := start.Add(5 * time.Second)
-	if err := store.InsertDeployStep(ctx, DeployStepRecord{
+	if err := store.InsertDeployStep(ctx, models.DeployStepRecord{
 		DeploymentID: "dep-a",
 		ProjectID:    "proj-1",
 		RequestID:    "req-1",
@@ -65,7 +66,7 @@ func TestSummarizeObservabilityHTTPPercentiles(t *testing.T) {
 	_, store := openTestDB(t)
 	base := time.Now().UTC().Add(-1 * time.Hour)
 	for i, ms := range []int64{10, 20, 30, 40, 100} {
-		if err := store.InsertHTTPRequest(ctx, HTTPRequestRecord{
+		if err := store.InsertHTTPRequest(ctx, models.HTTPRequestRecord{
 			RequestID:  fmt.Sprintf("r%d", i),
 			Method:     "GET",
 			Path:       "/api/x",

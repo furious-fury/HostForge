@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiDeployment, ApiProject, fetchDeploymentLogs, fetchProject, fetchProjectDeployments } from "../api";
@@ -7,6 +8,7 @@ import { useDeploymentLogStream } from "../hooks/useDeploymentLogStream";
 import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
 import { Button, ButtonLink } from "../components/Button";
 import { Panel } from "../components/Panel";
+import { StackBadge } from "../components/StackBadge";
 import { StatusPill } from "../components/StatusPill";
 import { Terminal } from "../components/Terminal";
 import { formatDuration, formatDurationMs, formatRelative, shortHash } from "../format";
@@ -190,9 +192,10 @@ export function DeploymentPage() {
             <StatusPill status={deployment?.status || "UNKNOWN"} />
           </div>
         </div>
-        <dl className="grid grid-cols-2 gap-px bg-border md:grid-cols-4">
+        <dl className="grid grid-cols-2 gap-px bg-border md:grid-cols-3 lg:grid-cols-5">
           <Stat label="Commit" value={shortHash(deployment?.commit_hash || "", 12)} mono />
           <Stat label="Image" value={deployment?.image_ref || "—"} mono />
+          <Stat label="Stack" value={stackStatValue(deployment)} />
           <Stat label="Started" value={formatRelative(deployment?.created_at, new Date(), fmtLocale)} />
           <Stat label="Duration" value={formatDuration(deployment?.created_at, deployment?.updated_at)} mono />
         </dl>
@@ -351,7 +354,12 @@ function SourceTab({
   );
 }
 
-function Stat({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function stackStatValue(deployment: ApiDeployment | null): ReactNode {
+  if (!deployment?.stack_kind && !deployment?.stack_label) return "—";
+  return <StackBadge stackKind={deployment.stack_kind} stackLabel={deployment.stack_label} />;
+}
+
+function Stat({ label, value, mono = false }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
     <div className="bg-surface px-4 py-3">
       <dt className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">{label}</dt>

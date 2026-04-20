@@ -219,8 +219,8 @@ func (s *Store) CreateDeployment(ctx context.Context, in CreateDeploymentInput) 
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO deployments(id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO deployments(id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, stack_kind, stack_label, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID,
 		d.ProjectID,
 		d.Status,
@@ -228,6 +228,8 @@ func (s *Store) CreateDeployment(ctx context.Context, in CreateDeploymentInput) 
 		d.LogsPath,
 		d.ImageRef,
 		d.Worktree,
+		"",
+		"",
 		"",
 		d.CreatedAt.Format(time.RFC3339),
 		d.UpdatedAt.Format(time.RFC3339),
@@ -270,13 +272,29 @@ func (s *Store) UpdateDeploymentLogsPath(ctx context.Context, deploymentID, logs
 	return nil
 }
 
+// UpdateDeploymentStack sets stack_kind and stack_label from nixpacks plan summary (deploy pipeline).
+func (s *Store) UpdateDeploymentStack(ctx context.Context, deploymentID, stackKind, stackLabel string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE deployments SET stack_kind = ?, stack_label = ?, updated_at = ? WHERE id = ?`,
+		strings.TrimSpace(stackKind),
+		strings.TrimSpace(stackLabel),
+		time.Now().UTC().Format(time.RFC3339),
+		strings.TrimSpace(deploymentID),
+	)
+	if err != nil {
+		return fmt.Errorf("update deployment stack: %w", err)
+	}
+	return nil
+}
+
 // GetLatestSuccessfulDeploymentByProjectID returns the newest SUCCESS deployment for a project.
 func (s *Store) GetLatestSuccessfulDeploymentByProjectID(ctx context.Context, projectID string) (models.Deployment, error) {
 	var d models.Deployment
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, stack_kind, stack_label, created_at, updated_at
 		 FROM deployments
 		 WHERE project_id = ? AND status = ?
 		 ORDER BY created_at DESC
@@ -292,6 +310,8 @@ func (s *Store) GetLatestSuccessfulDeploymentByProjectID(ctx context.Context, pr
 		&d.ImageRef,
 		&d.Worktree,
 		&d.ErrorMessage,
+		&d.StackKind,
+		&d.StackLabel,
 		&createdAt,
 		&updatedAt,
 	)
@@ -309,7 +329,7 @@ func (s *Store) GetPreviousSuccessfulDeploymentByProjectID(ctx context.Context, 
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, stack_kind, stack_label, created_at, updated_at
 		 FROM deployments
 		 WHERE project_id = ? AND status = ?
 		 ORDER BY created_at DESC
@@ -325,6 +345,8 @@ func (s *Store) GetPreviousSuccessfulDeploymentByProjectID(ctx context.Context, 
 		&d.ImageRef,
 		&d.Worktree,
 		&d.ErrorMessage,
+		&d.StackKind,
+		&d.StackLabel,
 		&createdAt,
 		&updatedAt,
 	)
@@ -342,7 +364,7 @@ func (s *Store) GetDeploymentByID(ctx context.Context, deploymentID string) (mod
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, stack_kind, stack_label, created_at, updated_at
 		 FROM deployments
 		 WHERE id = ?`,
 		strings.TrimSpace(deploymentID),
@@ -355,6 +377,8 @@ func (s *Store) GetDeploymentByID(ctx context.Context, deploymentID string) (mod
 		&d.ImageRef,
 		&d.Worktree,
 		&d.ErrorMessage,
+		&d.StackKind,
+		&d.StackLabel,
 		&createdAt,
 		&updatedAt,
 	)
@@ -603,7 +627,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]models.Project, error) {
 func (s *Store) ListDeployments(ctx context.Context) ([]models.Deployment, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, stack_kind, stack_label, created_at, updated_at
 		 FROM deployments ORDER BY created_at DESC`,
 	)
 	if err != nil {
@@ -624,6 +648,8 @@ func (s *Store) ListDeployments(ctx context.Context) ([]models.Deployment, error
 			&d.ImageRef,
 			&d.Worktree,
 			&d.ErrorMessage,
+			&d.StackKind,
+			&d.StackLabel,
 			&createdAt,
 			&updatedAt,
 		); err != nil {
@@ -644,7 +670,7 @@ func (s *Store) ListDeploymentsRecent(ctx context.Context, limit int) ([]models.
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, stack_kind, stack_label, created_at, updated_at
 		 FROM deployments ORDER BY created_at DESC LIMIT ?`,
 		lim,
 	)
@@ -666,6 +692,55 @@ func (s *Store) ListDeploymentsRecent(ctx context.Context, limit int) ([]models.
 			&d.ImageRef,
 			&d.Worktree,
 			&d.ErrorMessage,
+			&d.StackKind,
+			&d.StackLabel,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan deployment: %w", err)
+		}
+		d.CreatedAt = parseTime(createdAt)
+		d.UpdatedAt = parseTime(updatedAt)
+		items = append(items, d)
+	}
+	return items, rows.Err()
+}
+
+// ListDeploymentsWithEmptyStack returns deployments that have no nixpacks stack summary yet (stack_kind and stack_label both empty).
+// Newest first. lim caps rows (default 500 when caller passes <=0).
+func (s *Store) ListDeploymentsWithEmptyStack(ctx context.Context, lim int) ([]models.Deployment, error) {
+	if lim <= 0 || lim > 5000 {
+		lim = 500
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, stack_kind, stack_label, created_at, updated_at
+		 FROM deployments
+		 WHERE stack_kind = '' AND stack_label = ''
+		 ORDER BY created_at DESC
+		 LIMIT ?`,
+		lim,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list deployments with empty stack: %w", err)
+	}
+	defer rows.Close()
+
+	var items []models.Deployment
+	for rows.Next() {
+		var d models.Deployment
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&d.ID,
+			&d.ProjectID,
+			&d.Status,
+			&d.CommitHash,
+			&d.LogsPath,
+			&d.ImageRef,
+			&d.Worktree,
+			&d.ErrorMessage,
+			&d.StackKind,
+			&d.StackLabel,
 			&createdAt,
 			&updatedAt,
 		); err != nil {
@@ -741,7 +816,7 @@ func (s *Store) ListDeploymentsByProjectID(ctx context.Context, projectID string
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, created_at, updated_at
+		`SELECT id, project_id, status, commit_hash, logs_path, image_ref, worktree, error_message, stack_kind, stack_label, created_at, updated_at
 		 FROM deployments
 		 WHERE project_id = ?
 		 ORDER BY created_at DESC
@@ -767,6 +842,8 @@ func (s *Store) ListDeploymentsByProjectID(ctx context.Context, projectID string
 			&d.ImageRef,
 			&d.Worktree,
 			&d.ErrorMessage,
+			&d.StackKind,
+			&d.StackLabel,
 			&createdAt,
 			&updatedAt,
 		); err != nil {

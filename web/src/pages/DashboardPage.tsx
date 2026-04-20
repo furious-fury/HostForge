@@ -8,6 +8,7 @@ import { EmptyState } from "../components/EmptyState";
 import { KpiTile } from "../components/KpiTile";
 import { Panel } from "../components/Panel";
 import { Sparkline } from "../components/Sparkline";
+import { StackBadge } from "../components/StackBadge";
 import { StatusPill } from "../components/StatusPill";
 import { formatBitsPerSec, formatBytes, formatPct } from "../format/bytes";
 import { formatDuration, formatRelative, shortHash } from "../format";
@@ -267,10 +268,11 @@ export function DashboardPage() {
             <table className="w-full table-fixed text-sm">
               <thead>
                 <tr className="mono border-b border-border text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
-                  <th className="px-4 py-2 w-[28%]">Project</th>
-                  <th className="px-4 py-2 w-[18%]">Commit</th>
-                  <th className="px-4 py-2 w-[18%]">Status</th>
-                  <th className="px-4 py-2 w-[18%]">Started</th>
+                  <th className="px-4 py-2 w-[24%]">Project</th>
+                  <th className="px-4 py-2 w-[10%]">Stack</th>
+                  <th className="px-4 py-2 w-[16%]">Commit</th>
+                  <th className="px-4 py-2 w-[16%]">Status</th>
+                  <th className="px-4 py-2 w-[16%]">Started</th>
                   <th className="px-4 py-2 w-[18%]">Duration</th>
                 </tr>
               </thead>
@@ -280,7 +282,7 @@ export function DashboardPage() {
                   const projectName = proj?.name || shortHash(d.project_id, 8);
                   return (
                     <tr key={d.id} className="border-b border-border/60 hover:bg-surface-alt">
-                      <td className="px-4 py-3 truncate">
+                      <td className="px-4 py-3 align-middle truncate">
                         <Link
                           to={`/projects/${d.project_id}/deployments/${d.id}`}
                           className="font-semibold text-text hover:underline"
@@ -289,14 +291,17 @@ export function DashboardPage() {
                         </Link>
                         {proj?.repo_url && <div className="mono truncate text-[11px] text-muted">{proj.repo_url}</div>}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 align-middle">
+                        <StackBadge stackKind={d.stack_kind} stackLabel={d.stack_label} compact />
+                      </td>
+                      <td className="px-4 py-3 align-middle">
                         <span className="mono text-xs text-text">{shortHash(d.commit_hash, 7)}</span>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 align-middle">
                         <StatusPill status={d.status} size="sm" />
                       </td>
-                      <td className="px-4 py-3 text-xs text-muted">{formatRelative(d.created_at, new Date(), fmtLocale)}</td>
-                      <td className="px-4 py-3 mono text-xs text-text">{formatDuration(d.created_at, d.updated_at)}</td>
+                      <td className="px-4 py-3 align-middle text-xs text-muted">{formatRelative(d.created_at, new Date(), fmtLocale)}</td>
+                      <td className="px-4 py-3 align-middle mono text-xs text-text">{formatDuration(d.created_at, d.updated_at)}</td>
                     </tr>
                   );
                 })}

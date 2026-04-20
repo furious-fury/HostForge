@@ -7,6 +7,7 @@ import { Button, ButtonLink } from "../components/Button";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyState } from "../components/EmptyState";
 import { Panel } from "../components/Panel";
+import { StackBadge } from "../components/StackBadge";
 import { StatusPill } from "../components/StatusPill";
 import { useToast } from "../components/ToastProvider";
 import { formatRelative } from "../format";
@@ -163,7 +164,7 @@ export function ProjectsPage() {
             <table className="w-full min-w-[720px] table-fixed border-collapse text-left text-sm">
               <thead>
                 <tr className="mono border-b border-border bg-surface-alt text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
-                  <th className="px-4 py-3 w-[30%]">Project</th>
+                  <th className="px-4 py-3 w-[28%]">Project</th>
                   <th className="px-4 py-3 w-[10%]">Branch</th>
                   <th className="px-4 py-3 w-[14%]">Last deploy</th>
                   <th className="px-4 py-3 w-[22%]">Reach</th>
@@ -174,23 +175,33 @@ export function ProjectsPage() {
               <tbody>
                 {filtered.map((project) => (
                   <tr key={project.id} className="border-b border-border hover:bg-surface-alt">
-                    <td className="px-4 py-3 align-top">
-                      <Link to={`/projects/${project.id}`} className="block font-semibold text-text hover:underline">
-                        {project.name}
-                      </Link>
-                      <div className="mono mt-0.5 truncate text-[11px] text-muted">{project.repo_url}</div>
+                    <td className="px-4 py-3 align-middle">
+                      <div className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1">
+                          <Link to={`/projects/${project.id}`} className="block font-semibold text-text hover:underline">
+                            {project.name}
+                          </Link>
+                          <div className="mono mt-0.5 truncate text-[11px] text-muted">{project.repo_url}</div>
+                        </div>
+                        <StackBadge
+                          stackKind={project.stack_kind || project.latest_deployment?.stack_kind}
+                          stackLabel={project.stack_label || project.latest_deployment?.stack_label}
+                          compact
+                          className="shrink-0"
+                        />
+                      </div>
                     </td>
-                    <td className="px-4 py-3 align-top font-mono text-xs text-text">{project.branch || "main"}</td>
-                    <td className="px-4 py-3 align-top text-xs text-text">
+                    <td className="px-4 py-3 align-middle font-mono text-xs text-text">{project.branch || "main"}</td>
+                    <td className="px-4 py-3 align-middle text-xs text-text">
                       {formatRelative(project.latest_deployment?.created_at, new Date(), fmtLocale)}
                     </td>
-                    <td className="px-4 py-3 align-top">
+                    <td className="px-4 py-3 align-middle">
                       <div className="mono break-all text-xs text-text">{projectReachSummary(project)}</div>
                     </td>
-                    <td className="px-4 py-3 align-top">
+                    <td className="px-4 py-3 align-middle">
                       <StatusPill status={project.latest_deployment?.status || "UNKNOWN"} size="sm" />
                     </td>
-                    <td className="px-4 py-3 align-top text-right">
+                    <td className="px-4 py-3 align-middle text-right">
                       <Button
                         variant="danger"
                         size="sm"

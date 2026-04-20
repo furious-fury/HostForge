@@ -33,6 +33,10 @@ type createProjectRequest struct {
 	Branch      string           `json:"branch"`
 	ProjectName string           `json:"project_name"`
 	Deploy      *apiDeployConfig `json:"deploy,omitempty"`
+	Env         []struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	} `json:"env,omitempty"`
 }
 
 type patchProjectRequest struct {
@@ -50,13 +54,16 @@ type deploymentActionResponse struct {
 }
 
 type apiProject struct {
-	ID               string           `json:"id"`
-	Name             string           `json:"name"`
-	RepoURL          string           `json:"repo_url"`
-	Branch           string           `json:"branch"`
-	Deploy           apiDeployConfig  `json:"deploy"`
-	CreatedAt        string           `json:"created_at"`
-	UpdatedAt        string           `json:"updated_at"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	RepoURL   string          `json:"repo_url"`
+	Branch    string          `json:"branch"`
+	Deploy    apiDeployConfig `json:"deploy"`
+	CreatedAt string          `json:"created_at"`
+	UpdatedAt string          `json:"updated_at"`
+	// StackKind and StackLabel mirror the latest deployment row when present (convenience for list UIs).
+	StackKind        string           `json:"stack_kind,omitempty"`
+	StackLabel       string           `json:"stack_label,omitempty"`
 	LatestDeployment *apiDeployment   `json:"latest_deployment,omitempty"`
 	Domains          []apiDomain      `json:"domains,omitempty"`
 	DNSGuidance      *dnsops.Guidance `json:"dns_guidance,omitempty"`
@@ -72,6 +79,8 @@ type apiDeployment struct {
 	ImageRef     string        `json:"image_ref"`
 	Worktree     string        `json:"worktree"`
 	ErrorMessage string        `json:"error_message"`
+	StackKind    string        `json:"stack_kind,omitempty"`
+	StackLabel   string        `json:"stack_label,omitempty"`
 	CreatedAt    string        `json:"created_at"`
 	UpdatedAt    string        `json:"updated_at"`
 	Container    *apiContainer `json:"container,omitempty"`
@@ -86,6 +95,13 @@ type apiContainer struct {
 	Status            string `json:"status"`
 	CreatedAt         string `json:"created_at"`
 	UpdatedAt         string `json:"updated_at"`
+}
+
+type apiProjectEnvVar struct {
+	ID         string `json:"id"`
+	Key        string `json:"key"`
+	ValueLast4 string `json:"value_last4"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 type apiDomain struct {
@@ -247,10 +263,29 @@ func (s *server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 		deployIn.DeployStartCmd = st
 	}
 
-	project, err := s.store.CreateProject(r.Context(), deployIn)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "create_project_failed"})
-		return
+	filteredEnv := filterProjectEnvPairs(req.Env)
+	var project models.Project
+	var createErr error
+	if len(filteredEnv) == 0 {
+		project, createErr = s.store.CreateProject(r.Context(), deployIn)
+		if createErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "create_project_failed"})
+			return
+		}
+	} else {
+		if !s.requireEnvSealer(w) {
+			return
+		}
+		sealed, errCode := sealProjectEnvBatch(s.envSealer, filteredEnv)
+		if errCode != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": errCode})
+			return
+		}
+		project, createErr = s.store.CreateProjectWithSealedEnv(r.Context(), deployIn, sealed)
+		if createErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "create_project_failed"})
+			return
+		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"status":  "created",
@@ -280,6 +315,36 @@ func (s *server) handleProjectRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	case "env":
+		if len(parts) == 2 {
+			switch r.Method {
+			case http.MethodGet:
+				s.handleProjectEnvList(w, r, projectID)
+			case http.MethodPost:
+				s.handleProjectEnvPost(w, r, projectID)
+			default:
+				writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+			}
+			return
+		}
+		if len(parts) == 3 {
+			envID := strings.TrimSpace(parts[2])
+			if envID == "" {
+				http.NotFound(w, r)
+				return
+			}
+			switch r.Method {
+			case http.MethodPut:
+				s.handleProjectEnvPut(w, r, projectID, envID)
+			case http.MethodDelete:
+				s.handleProjectEnvDelete(w, r, projectID, envID)
+			default:
+				writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+			}
+			return
+		}
+		http.NotFound(w, r)
+		return
 	case "domains":
 		if len(parts) == 2 {
 			switch r.Method {
@@ -641,7 +706,7 @@ func (s *server) handleProjectDeployAction(w http.ResponseWriter, r *http.Reques
 	if asyncRequested {
 		go func(job services.DeployJob) {
 			bg := obs.WithStore(context.Background(), s.store)
-			if _, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job); execErr != nil {
+			if _, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer); execErr != nil {
 				deployLog.Error("async deployment failed", "error", execErr)
 			}
 		}(job)
@@ -654,7 +719,7 @@ func (s *server) handleProjectDeployAction(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	tExec := time.Now()
-	result, err := services.ExecuteDeploy(r.Context(), deployLog, s.cfg, s.store, job)
+	result, err := services.ExecuteDeploy(r.Context(), deployLog, s.cfg, s.store, job, s.envSealer)
 	if err != nil {
 		deployLog.Error("execute deploy failed", "error", err, "public_code", publicAPIError(err, "deploy_failed"), "duration_ms", time.Since(tExec).Milliseconds())
 		writeJSON(w, http.StatusOK, deploymentActionResponse{
@@ -687,7 +752,7 @@ func (s *server) handleProjectRestartAction(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "project_lookup_failed"})
 		return
 	}
-	result, err := services.RestartProject(r.Context(), s.requestLog(r).With("project_id", projectID), s.cfg, s.store, project)
+	result, err := services.RestartProject(r.Context(), s.requestLog(r).With("project_id", projectID), s.cfg, s.store, project, s.envSealer)
 	if err != nil {
 		code := publicAPIError(err, "restart_failed")
 		status := http.StatusBadGateway
@@ -749,7 +814,7 @@ func (s *server) handleProjectRollbackAction(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "project_lookup_failed"})
 		return
 	}
-	result, err := services.RollbackProject(r.Context(), s.requestLog(r).With("project_id", projectID), s.cfg, s.store, project)
+	result, err := services.RollbackProject(r.Context(), s.requestLog(r).With("project_id", projectID), s.cfg, s.store, project, s.envSealer)
 	if err != nil {
 		code := publicAPIError(err, "rollback_failed")
 		status := http.StatusBadRequest
@@ -825,6 +890,8 @@ func (s *server) attachProjectSummary(ctx context.Context, out *apiProject, full
 		return nil
 	}
 	latest := deploymentToAPI(deployments[0])
+	out.StackKind = latest.StackKind
+	out.StackLabel = latest.StackLabel
 	if containerRec, err := s.store.GetContainerByDeploymentID(ctx, deployments[0].ID); err == nil {
 		c := containerToAPI(containerRec)
 		latest.Container = &c
@@ -893,6 +960,8 @@ func deploymentToAPI(d models.Deployment) apiDeployment {
 		ImageRef:     d.ImageRef,
 		Worktree:     d.Worktree,
 		ErrorMessage: d.ErrorMessage,
+		StackKind:    d.StackKind,
+		StackLabel:   d.StackLabel,
 		CreatedAt:    formatTime(d.CreatedAt),
 		UpdatedAt:    formatTime(d.UpdatedAt),
 	}

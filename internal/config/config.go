@@ -165,6 +165,10 @@ const (
 	CaddyAdminURLEnv = "HOSTFORGE_CADDY_ADMIN"
 	// CaddyStorageRootEnv points at Caddy's on-disk storage root for certificate file scans.
 	CaddyStorageRootEnv = "HOSTFORGE_CADDY_STORAGE_ROOT"
+	// EnvEncryptionKeyEnv is an optional base64-encoded 32-byte AES-256 key used to encrypt
+	// per-project environment variable values at rest (see README). When unset, env CRUD
+	// API returns 503 and deploy skips injecting project env (unless ciphertext rows exist).
+	EnvEncryptionKeyEnv = "HOSTFORGE_ENV_ENCRYPTION_KEY"
 )
 
 // DefaultDataDir returns the default data directory (./.hostforge).

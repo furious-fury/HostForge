@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/hostforge/hostforge/internal/config"
+	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
 	"github.com/hostforge/hostforge/internal/dnsops"
 	"github.com/hostforge/hostforge/internal/database"
 	"github.com/hostforge/hostforge/internal/git"
@@ -179,6 +180,15 @@ func runDeploy(log *slog.Logger, args []string) int {
 	}
 	defer db.Close()
 	store := repository.New(db)
+	var envSealer *envcrypt.Sealer
+	if k := strings.TrimSpace(os.Getenv(config.EnvEncryptionKeyEnv)); k != "" {
+		sealer, err := envcrypt.NewFromBase64Key(k)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %s: %v\n", config.EnvEncryptionKeyEnv, err)
+			return 1
+		}
+		envSealer = sealer
+	}
 	resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch))
 	project, err := store.EnsureProject(ctx, repoURL, resolvedBranch)
 	if err != nil {
@@ -189,7 +199,7 @@ func runDeploy(log *slog.Logger, args []string) int {
 		Project: project,
 		RepoURL: repoURL,
 		Branch:  resolvedBranch,
-	})
+	}, envSealer)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: deploy: %v\n", err)
 		return 1
