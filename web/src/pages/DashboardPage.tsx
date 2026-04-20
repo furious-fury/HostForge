@@ -307,10 +307,8 @@ export function DashboardPage() {
 
         <Panel title="System">
           <p className="mb-3 text-[11px] leading-snug text-muted">
-            Live checks from this HostForge server (Docker ping, <span className="mono">caddy validate</span>, local :80
-            /:443 accept, webhook GET returns 405). Stable <span className="mono">error_code</span> values are for support
-            and docs; request correlation and step durations stay in server logs (<span className="mono">http_request</span>,{" "}
-            <span className="mono">deploy step</span>, etc.).
+            Health checks for this server, updated live. Codes are meant for support and docs; use server logs for timing
+            and request tracing.
           </p>
           <ul className="flex flex-col divide-y divide-border">
             {systemStatus?.checks?.map((c) => (

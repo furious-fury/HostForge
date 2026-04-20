@@ -2,6 +2,7 @@ import { ReactNode, useCallback, useEffect, useState } from "react";
 import { ProjectBreadcrumbProvider } from "../ProjectBreadcrumbContext";
 import { resolveEffectiveTheme, useUIPrefs, type ThemePreference } from "../hooks/useUIPrefs";
 import { applyTheme } from "../theme";
+import { CommandPalette } from "./CommandPalette";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 
@@ -13,6 +14,7 @@ type ShellProps = {
 export function Shell({ children, onLogout }: ShellProps) {
   const { prefs, setPrefs } = useUIPrefs();
   const [, bump] = useState(0);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   useEffect(() => {
     if (prefs.theme !== "system") {
@@ -36,6 +38,17 @@ export function Shell({ children, onLogout }: ShellProps) {
     setPrefs({ theme: order[(idx + 1) % order.length] });
   }, [prefs.theme, setPrefs]);
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key !== "k" && e.key !== "K") return;
+      e.preventDefault();
+      setCommandPaletteOpen((open) => !open);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   return (
     <ProjectBreadcrumbProvider>
       <div className="grid h-screen grid-cols-[16rem_1fr] grid-rows-[3.5rem_1fr] bg-bg text-text">
@@ -45,8 +58,10 @@ export function Shell({ children, onLogout }: ShellProps) {
           effectiveTheme={effective}
           onThemeCycle={onThemeCycle}
           onLogout={onLogout}
+          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         />
         <main className="overflow-y-auto bg-bg p-6">{children}</main>
+        <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
       </div>
     </ProjectBreadcrumbProvider>
   );

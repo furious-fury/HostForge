@@ -1,3 +1,4 @@
+import { useCallback, useMemo, useRef } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import type { ThemePreference } from "../hooks/useUIPrefs";
 import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
@@ -9,6 +10,7 @@ type TopbarProps = {
   effectiveTheme: "light" | "dark";
   onThemeCycle: () => void;
   onLogout: () => void;
+  onOpenCommandPalette: () => void;
 };
 
 type Crumb = { label: string; to?: string };
@@ -65,8 +67,30 @@ function titleize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-export function Topbar({ themePreference, effectiveTheme, onThemeCycle, onLogout }: TopbarProps) {
+function useModKeyLabel(): string {
+  return useMemo(() => {
+    if (typeof navigator === "undefined") return "Ctrl";
+    return /Mac|iPhone|iPod|iPad/i.test(navigator.userAgent) ? "⌘" : "Ctrl";
+  }, []);
+}
+
+export function Topbar({
+  themePreference,
+  effectiveTheme,
+  onThemeCycle,
+  onLogout,
+  onOpenCommandPalette,
+}: TopbarProps) {
   const crumbs = useBreadcrumbs();
+  const modKey = useModKeyLabel();
+  const searchFieldRef = useRef<HTMLInputElement>(null);
+
+  const openPalette = useCallback(() => {
+    onOpenCommandPalette();
+    requestAnimationFrame(() => {
+      searchFieldRef.current?.blur();
+    });
+  }, [onOpenCommandPalette]);
 
   return (
     <header className="flex h-14 items-center justify-between border-b border-border bg-surface px-6">
@@ -103,13 +127,23 @@ export function Topbar({ themePreference, effectiveTheme, onThemeCycle, onLogout
             ⌕
           </span>
           <input
+            ref={searchFieldRef}
             type="text"
-            placeholder="Search projects, deployments, domains"
-            className="mono w-full border border-border bg-surface-alt px-3 py-2 pl-7 text-xs text-text placeholder:text-muted focus:border-border-strong focus:outline-none"
-            aria-label="Search"
+            readOnly
+            placeholder="Search projects and deployments"
+            className="mono w-full cursor-pointer border border-border bg-surface-alt px-3 py-2 pl-7 text-xs text-text placeholder:text-muted focus:border-border-strong focus:outline-none"
+            aria-label="Open command palette"
+            aria-haspopup="dialog"
+            onClick={openPalette}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                openPalette();
+              }
+            }}
           />
           <span className="mono pointer-events-none absolute right-3 border border-border px-1.5 py-0.5 text-[10px] uppercase text-muted">
-            ⌘K
+            {modKey}K
           </span>
         </label>
       </div>
