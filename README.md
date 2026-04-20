@@ -55,6 +55,7 @@ From a repository clone on the build host (**Go** required):
 - **Server (`cmd/server`):** REST + embedded UI (`web/dist`), GitHub **`push`** webhooks, cookie-backed UI login, SQLite persistence, bounded **observability** rows (`deploy_steps`, `http_requests`) with **`/observability`** and per-deployment **Steps**.
 - **Caddy:** generated snippet, **`caddy validate`** / **`caddy reload`** when configured; health-gated zero-downtime cutover before switching routes.
 - **UI (`web/`):** projects, deployments (REST + WebSocket logs), domains with DNS hints and registrar refresh, dashboard **System** panel (`GET /api/system/status`) plus **Host** KPIs (`GET /api/system/host/snapshot` / `history`), **Settings** page (`GET /api/settings` + POST actions under `/api/settings/actions/…`), TanStack Query on fleet pages. **`GET /api/projects`** defaults to a fast list (no per-domain live registrar lookups); use **`?dns=1`** for full DNS checks in one response. **`GET /api/deployments?limit=N`** uses SQL `LIMIT` and batched container rows. System status checks run **in parallel** with a **5s** cached snapshot. Host metrics are **Linux-only** (in-memory ~30 min ring by default).
+- **Marketing / docs site (`site/`):** separate Vite + React static build (landing + prerendered docs, raw `.md` and `llms.txt` for agents). See [`site/README.md`](./site/README.md).
 
 **Operators:** DNS **A/AAAA** must point at the host where **Caddy** serves **80/443**; firewall / cloud SG must allow inbound **80/443**. Residential WAN IPs change—use a VPS, static IP, or DDNS for stable webhooks. Planning docs: `task_list.md`, PRD — this README describes the **current** tree.
 
@@ -456,7 +457,7 @@ Routes:
 ### Theming
 
 - Colors are exposed as CSS variables (`--hf-bg`, `--hf-surface`, `--hf-border`, `--hf-primary`, …) defined in `web/src/index.css`, and consumed via Tailwind semantic tokens (`bg-bg`, `bg-surface`, `border-border`, `text-primary`, …) declared in `web/tailwind.config.js`.
-- On first load the app reads `prefers-color-scheme` and applies dark or light. The header toggle (`ThemeToggle`) flips themes and persists the choice in `localStorage` (`hf-theme`); once set, the user choice overrides system preference. Without a stored choice, system changes are followed live.
+- Theme is **light** or **dark** only, stored in **`localStorage`** as **`hf-prefs`** (field **`theme`**; legacy **`hf-theme`** is still read if **`hf-prefs`** is absent). Any stored **`system`** value is treated as **dark**. An inline script in **`web/index.html`** sets **`data-theme`** and the **`dark`** class before React paints. The header **`ThemeToggle`** cycles light/dark; when supported, **`document.startViewTransition`** wraps the DOM update (see **`web/src/components/Shell.tsx`**).
 - Both palettes preserve the same component structure: only color vars change. The `* { border-radius: 0 !important; }` rule keeps the brutalist no-radius look in either mode.
 
 ### Authentication (UI)

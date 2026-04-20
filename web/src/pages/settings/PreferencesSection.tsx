@@ -31,7 +31,6 @@ export function PreferencesSection() {
           >
             <option value="dark">Dark</option>
             <option value="light">Light</option>
-            <option value="system">System</option>
           </select>
         </SettingsRow>
       </Panel>

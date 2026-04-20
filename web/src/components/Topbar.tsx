@@ -6,8 +6,7 @@ import { Button } from "./Button";
 import { ThemeToggle } from "./ThemeToggle";
 
 type TopbarProps = {
-  themePreference: ThemePreference;
-  effectiveTheme: "light" | "dark";
+  theme: ThemePreference;
   onThemeCycle: () => void;
   onLogout: () => void;
   onOpenCommandPalette: () => void;
@@ -74,13 +73,7 @@ function useModKeyLabel(): string {
   }, []);
 }
 
-export function Topbar({
-  themePreference,
-  effectiveTheme,
-  onThemeCycle,
-  onLogout,
-  onOpenCommandPalette,
-}: TopbarProps) {
+export function Topbar({ theme, onThemeCycle, onLogout, onOpenCommandPalette }: TopbarProps) {
   const crumbs = useBreadcrumbs();
   const modKey = useModKeyLabel();
   const searchFieldRef = useRef<HTMLInputElement>(null);
@@ -149,7 +142,7 @@ export function Topbar({
       </div>
 
       <div className="flex items-center gap-2">
-        <ThemeToggle preference={themePreference} effective={effectiveTheme} onCycle={onThemeCycle} />
+        <ThemeToggle preference={theme} onCycle={onThemeCycle} />
         <Button variant="ghost" size="sm" onClick={onLogout}>
           Logout
         </Button>

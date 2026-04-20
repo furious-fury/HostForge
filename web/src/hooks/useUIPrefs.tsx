@@ -15,7 +15,7 @@ const LEGACY_THEME_KEY = "hf-theme";
 /** Dispatched on same-tab pref writes so multiple subscribers refresh. */
 export const PREFS_CHANGED_EVENT = "hf-prefs-changed";
 
-export type ThemePreference = "light" | "dark" | "system";
+export type ThemePreference = "light" | "dark";
 export type LandingPath = "/" | "/projects" | "/deployments";
 export type DeploymentsPageSize = 25 | 50 | 100 | 200;
 export type UIPrefs = {
@@ -28,7 +28,7 @@ export type UIPrefs = {
 };
 
 export const DEFAULT_UI_PREFS: UIPrefs = {
-  theme: "system",
+  theme: "dark",
   defaultLanding: "/",
   deploymentsPageSize: 50,
   logAutoScroll: true,
@@ -39,10 +39,16 @@ function isDeploymentsPageSize(n: number): n is DeploymentsPageSize {
   return n === 25 || n === 50 || n === 100 || n === 200;
 }
 
+function normalizeTheme(v: unknown): ThemePreference {
+  if (v === "light") return "light";
+  if (v === "dark") return "dark";
+  return "dark";
+}
+
 function normalizePartial(raw: Record<string, unknown>): Partial<UIPrefs> {
   const out: Partial<UIPrefs> = {};
-  if (raw.theme === "light" || raw.theme === "dark" || raw.theme === "system") {
-    out.theme = raw.theme;
+  if (raw.theme !== undefined) {
+    out.theme = normalizeTheme(raw.theme);
   }
   if (raw.defaultLanding === "/" || raw.defaultLanding === "/projects" || raw.defaultLanding === "/deployments") {
     out.defaultLanding = raw.defaultLanding;
@@ -71,7 +77,7 @@ function readPartialFromStorage(): Partial<UIPrefs> {
     }
     const legacy = window.localStorage.getItem(LEGACY_THEME_KEY);
     if (legacy === "light" || legacy === "dark") {
-      return { theme: legacy };
+      return { theme: normalizeTheme(legacy) };
     }
   } catch {
     return {};
@@ -81,16 +87,6 @@ function readPartialFromStorage(): Partial<UIPrefs> {
 
 export function loadUIPrefs(): UIPrefs {
   return { ...DEFAULT_UI_PREFS, ...readPartialFromStorage() };
-}
-
-export function resolveEffectiveTheme(prefs: UIPrefs): "light" | "dark" {
-  if (prefs.theme !== "system") {
-    return prefs.theme;
-  }
-  if (typeof window === "undefined" || !window.matchMedia) {
-    return "dark";
-  }
-  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
 type UIPrefsContextValue = {

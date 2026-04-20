@@ -1,6 +1,6 @@
-import { ReactNode, useCallback, useEffect, useState } from "react";
+import { ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ProjectBreadcrumbProvider } from "../ProjectBreadcrumbContext";
-import { resolveEffectiveTheme, useUIPrefs, type ThemePreference } from "../hooks/useUIPrefs";
+import { useUIPrefs } from "../hooks/useUIPrefs";
 import { applyTheme } from "../theme";
 import { CommandPalette } from "./CommandPalette";
 import { Sidebar } from "./Sidebar";
@@ -11,31 +11,32 @@ type ShellProps = {
   onLogout: () => void;
 };
 
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 export function Shell({ children, onLogout }: ShellProps) {
   const { prefs, setPrefs } = useUIPrefs();
-  const [, bump] = useState(0);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const themeLayoutRan = useRef(false);
 
-  useEffect(() => {
-    if (prefs.theme !== "system") {
+  useLayoutEffect(() => {
+    const mode = prefs.theme;
+    const run = () => applyTheme(mode);
+    if (!themeLayoutRan.current) {
+      themeLayoutRan.current = true;
+      run();
       return;
     }
-    const mq = window.matchMedia("(prefers-color-scheme: light)");
-    const fn = () => bump((x) => x + 1);
-    mq.addEventListener("change", fn);
-    return () => mq.removeEventListener("change", fn);
+    if (prefersReducedMotion() || typeof document.startViewTransition !== "function") {
+      run();
+      return;
+    }
+    document.startViewTransition(run);
   }, [prefs.theme]);
 
-  const effective = resolveEffectiveTheme(prefs);
-
-  useEffect(() => {
-    applyTheme(effective);
-  }, [effective]);
-
   const onThemeCycle = useCallback(() => {
-    const order: ThemePreference[] = ["dark", "light", "system"];
-    const idx = order.indexOf(prefs.theme);
-    setPrefs({ theme: order[(idx + 1) % order.length] });
+    setPrefs({ theme: prefs.theme === "dark" ? "light" : "dark" });
   }, [prefs.theme, setPrefs]);
 
   useEffect(() => {
@@ -54,8 +55,7 @@ export function Shell({ children, onLogout }: ShellProps) {
       <div className="grid h-screen grid-cols-[16rem_1fr] grid-rows-[3.5rem_1fr] bg-bg text-text">
         <Sidebar />
         <Topbar
-          themePreference={prefs.theme}
-          effectiveTheme={effective}
+          theme={prefs.theme}
           onThemeCycle={onThemeCycle}
           onLogout={onLogout}
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
