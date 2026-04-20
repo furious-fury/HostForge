@@ -13,8 +13,10 @@ import (
 
 // PlanJSON runs `nixpacks plan . -f json` in workDir and returns stdout (JSON).
 func PlanJSON(ctx context.Context, workDir string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "nixpacks", "plan", ".", "-f", "json")
+	planArgs := append([]string{"plan", ".", "-f", "json"}, defaultNixpacksFlags()...)
+	cmd := exec.CommandContext(ctx, "nixpacks", planArgs...)
 	cmd.Dir = workDir
+	cmd.Env = nixpacksEnv()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
