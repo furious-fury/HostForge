@@ -215,7 +215,7 @@ The **UI** (project page) and **`hostforge domain add` / `edit`** output print *
 | `HOSTFORGE_SESSION_COOKIE_NAME` | Session cookie name (default: `hostforge_session`) |
 | `HOSTFORGE_SESSION_TTL_MINUTES` | Session lifetime (default: `720`) |
 | `HOSTFORGE_SESSION_COOKIE_SECURE` | If `true`, set `Secure` on session cookies (use behind HTTPS) |
-| `HOSTFORGE_ENV_ENCRYPTION_KEY` | **Optional but required for UI env management:** standard **base64** encoding of **32 raw bytes** (AES-256), e.g. `openssl rand -base64 32`. Used to encrypt per-project environment variable **values** at rest in SQLite. If unset, **`GET/POST/PUT/DELETE /api/projects/:id/env`** returns **`503`** with `env_encryption_key_missing`, and deploys **skip** injecting stored project env (deploy still works). **If you lose this key, stored values cannot be decrypted** — rotate by re-entering vars in the UI after setting a new key. |
+| `HOSTFORGE_ENV_ENCRYPTION_KEY` | **Optional but required for encrypted project secrets in UI:** standard **base64** encoding of **32 raw bytes** (AES-256), e.g. `openssl rand -base64 32`. Seals per-project environment-variable values, per-project GitHub PATs and SSH deploy keys, and the singleton **GitHub App private key + webhook secret** at rest in SQLite. If unset, env, git-auth, SSH-key, and GitHub App endpoints return **`503`** (`env_encryption_key_missing`), and deploy cannot use stored encrypted project secrets. **If you lose this key, stored values cannot be decrypted** — set a new key and re-enter project secrets/reconnect the GitHub App. |
 | `HOSTFORGE_LOGS_DIR` | Optional override for deployment build logs directory (default: `<data-dir>/logs`) |
 | `HOSTFORGE_DNS_SERVER_IPV4` | Optional: fixed public IPv4 shown in DNS guidance (skips auto-detect when set) |
 | `HOSTFORGE_DNS_SERVER_IPV6` | Optional: fixed public IPv6 for AAAA suggestions |
@@ -239,6 +239,31 @@ TLS is handled by **Caddy automatic HTTPS** (typically Let’s Encrypt). Certifi
 - **API:** `GET /api/projects/:id/env` lists `{ id, key, value_last4, updated_at }` (no plaintext). `POST` upserts by key; `PUT /api/projects/:id/env/:envID` replaces value; `DELETE` removes a row. Keys must match `^[A-Z][A-Z0-9_]*$` after normalization; **`PORT`** is rejected; max **100** vars per project; max **8 KiB** per value.
 - **UI:** New Project wizard and Project page editors require the encryption key to be set; otherwise the UI explains the `503` / missing-key state.
 - **Redeploy:** after changing env vars in the UI, **redeploy** (or restart with container recreate) so a new process reads the updated map.
+
+### Private GitHub repositories
+
+HostForge supports three authentication methods for cloning private repositories. At clone/pull time the server picks the first one that is configured for a project, in this order: **GitHub App installation → Personal Access Token → SSH deploy key → (public)**. The server and CLI share the same resolver (`internal/git/authresolver`), so `hostforge deploy` from the host uses the same credential model as the UI. All secrets are sealed at rest with `HOSTFORGE_ENV_ENCRYPTION_KEY` (AES-256-GCM via `internal/crypto/envcrypt`).
+
+**1. GitHub App (recommended).** One App per server, many installations.
+
+- **Connect:** `Settings → GitHub App → Connect GitHub App`. The UI builds a manifest, POSTs it to GitHub, and GitHub redirects back to `Settings` with a one-time `code`. HostForge exchanges it for the App ID, client secret, **private key**, and **webhook secret**, then seals all three.
+- **Install on accounts:** open the *Install on another account* deep link (`https://github.com/apps/{slug}/installations/new`) once per user/org whose repos you want to deploy. The App's `installation` webhook keeps `github_app_installations` in sync; hit **Sync from GitHub** to backfill manually.
+- **Deploy:** in **New Project** pick the GitHub App tab, choose an installation, pick a repo, and go. The server mints a short-lived installation access token for each clone or pull (cached in-memory, never logged, never returned by the API).
+- **Rotation:** rotate the App private key in GitHub (*App settings → Private keys*), then reconnect via the UI to reseal. Rotating `HOSTFORGE_ENV_ENCRYPTION_KEY` requires reconnecting the App and re-saving PATs/SSH keys because old ciphertext can no longer be decrypted.
+- **API:** `GET/DELETE /api/github/app`, `POST /api/github/app/manifest`, `POST /api/github/app/exchange`, `GET /api/github/installations`, `POST /api/github/installations/sync`, `GET /api/github/installations/{id}/repositories`.
+
+**2. Personal Access Token (per-project).** Paste a classic or fine-grained PAT on the project page.
+
+- **API:** `PUT /api/projects/:id/git-auth` stores ciphertext; `GET` returns metadata only (`provider`, `token_last4`, `updated_at`); `DELETE` removes it. The token is decrypted in-memory during clone/pull only and sent as HTTPS Basic auth (`x-access-token:<token>`) **only to `github.com` remotes**.
+
+**3. SSH deploy key (per-project).** HostForge generates an ed25519 keypair for a project, shows the public key once, and seals the private key.
+
+- **API:** `GET/POST/DELETE /api/projects/:id/ssh-key`. `POST` returns the public key + fingerprint. Add the public key under *Repo → Settings → Deploy keys* (read-only is fine). The private key is never returned after creation; regenerate to roll it.
+- **Use when:** the App flow is unavailable (e.g. the repo lives on a GitHub Enterprise instance you haven't wired up yet) or you prefer a per-repo SSH key over a PAT.
+
+**Webhooks.** `POST /hooks/github` accepts both secrets: HostForge verifies against the App's sealed webhook secret first and falls back to `HOSTFORGE_WEBHOOK_SECRET`. This lets existing org-level webhooks keep working while you migrate. `installation` and `installation_repositories` events update the local installations table in real time.
+
+**Failure modes.** If a project has stored credentials but `HOSTFORGE_ENV_ENCRYPTION_KEY` is missing or mismatched, clone/pull operations fail with `auth_failed`. Installation-token mint failures surface as `installation_token_mint_failed` and are logged with the installation ID only — never with token fragments.
 
 ### Routing model
 
@@ -435,7 +460,7 @@ Vite proxy config (`web/vite.config.ts` and `web/vite.config.js`) forwards:
   3. Live deployment view with WebSocket logs
   4. Success/failure states with follow-up actions
 - Project page includes **Build & runtime (Nixpacks)** to edit the same `deploy` fields and save via `PATCH` (redeploy to rebuild with the new worktree `nixpacks.toml`).
-- Per-project environment-variable editing in the UI remains future scope; use the API/CLI patterns you have today.
+- Project page includes per-project editors for encrypted environment variables and private GitHub token credentials.
 
 ### UI structure (post-redesign)
 

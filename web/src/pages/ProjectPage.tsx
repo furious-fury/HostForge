@@ -4,20 +4,32 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   ApiDeployment,
   ApiDomain,
+  ApiGitHubInstallation,
+  ApiProjectGitAuth,
   ApiProject,
+  ApiProjectSSHKey,
   createProjectDomain,
+  deleteProjectGitAuth,
+  deleteProjectSSHKey,
   deleteProject,
   deleteProjectDomain,
   deployProject,
   DnsGuidance,
   DnsGuidanceRecord,
+  fetchGitHubInstallations,
+  fetchProjectGitAuth,
   fetchProject,
   fetchProjectDeployments,
+  fetchProjectSSHKey,
+  generateProjectSSHKey,
+  ProjectGitSource,
   restartProject,
   rollbackProject,
   stopProject,
   updateProjectDeploy,
   updateProjectDomain,
+  updateProjectGitSource,
+  upsertProjectGitAuth,
 } from "../api";
 import { projectAccessLinks } from "../accessUrls";
 import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
@@ -63,6 +75,16 @@ export function ProjectPage() {
   });
   const [deployBusy, setDeployBusy] = useState(false);
   const [envNeedsRedeploy, setEnvNeedsRedeploy] = useState(false);
+  const [gitAuth, setGitAuth] = useState<ApiProjectGitAuth | null>(null);
+  const [gitAuthError, setGitAuthError] = useState("");
+  const [gitAuthBusy, setGitAuthBusy] = useState("");
+  const [gitAuthTokenInput, setGitAuthTokenInput] = useState("");
+  const [credsTab, setCredsTab] = useState<ProjectGitSource>("url");
+  const [sshKey, setSshKey] = useState<ApiProjectSSHKey | null>(null);
+  const [sshKeyError, setSshKeyError] = useState("");
+  const [sshKeyBusy, setSshKeyBusy] = useState("");
+  const [installations, setInstallations] = useState<ApiGitHubInstallation[]>([]);
+  const [sourceBusy, setSourceBusy] = useState(false);
 
   const load = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -96,6 +118,65 @@ export function ProjectPage() {
     if (!projectID) return;
     void load();
   }, [projectID, load]);
+
+  useEffect(() => {
+    if (!projectID) return;
+    let cancelled = false;
+    setGitAuthError("");
+    setGitAuth(null);
+    void fetchProjectGitAuth(projectID)
+      .then((data) => {
+        if (cancelled) return;
+        setGitAuth(data);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setGitAuthError(err instanceof Error ? err.message : "failed to load git auth");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectID]);
+
+  useEffect(() => {
+    if (!projectID) return;
+    let cancelled = false;
+    setSshKey(null);
+    setSshKeyError("");
+    void fetchProjectSSHKey(projectID)
+      .then((data) => {
+        if (cancelled) return;
+        setSshKey(data);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setSshKeyError(err instanceof Error ? err.message : "failed to load ssh key");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectID]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchGitHubInstallations()
+      .then((list) => {
+        if (!cancelled) setInstallations(list);
+      })
+      .catch(() => {
+        if (!cancelled) setInstallations([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Pick a reasonable default tab from the project's configured source.
+  useEffect(() => {
+    if (!project) return;
+    const src = (project.git_source as ProjectGitSource | undefined) || "url";
+    setCredsTab(src);
+  }, [project?.git_source]);
 
   useEffect(() => {
     if (!projectID || typeof window === "undefined") return;
@@ -529,6 +610,146 @@ export function ProjectPage() {
           (not during the image build). After changing variables, redeploy so the new process picks them up.
         </p>
         <EnvVarsEditor mode="remote" projectID={projectID} onChange={markEnvPending} />
+      </Panel>
+
+      <Panel title="Private repository credentials">
+        <p className="mb-3 text-xs text-muted">
+          Pick one authentication method per project. HostForge tries them in this order at clone/pull time: GitHub
+          App installation → Personal Access Token → SSH deploy key → public.
+        </p>
+        {gitAuthError ? (
+          <div className="mb-3 border border-danger/50 bg-danger/5 px-3 py-2 text-xs text-danger">
+            Could not load credential state: {gitAuthError}
+          </div>
+        ) : null}
+
+        <div role="tablist" aria-label="Credential method" className="mb-3 flex flex-wrap gap-1 border-b border-border">
+          <CredsTabButton
+            id="github_app"
+            label="GitHub App"
+            active={credsTab === "github_app"}
+            onClick={() => setCredsTab("github_app")}
+          />
+          <CredsTabButton
+            id="url"
+            label="Personal Access Token"
+            active={credsTab === "url"}
+            onClick={() => setCredsTab("url")}
+          />
+          <CredsTabButton
+            id="ssh"
+            label="SSH Deploy Key"
+            active={credsTab === "ssh"}
+            onClick={() => setCredsTab("ssh")}
+          />
+        </div>
+
+        {credsTab === "github_app" && (
+          <GitHubAppCredsPanel
+            project={project}
+            installations={installations}
+            busy={sourceBusy}
+            onLink={async (installationID) => {
+              if (!projectID) return;
+              setSourceBusy(true);
+              try {
+                await updateProjectGitSource(projectID, "github_app", installationID);
+                toast.success("Linked this project to the selected GitHub App installation.");
+                await load({ silent: true });
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "could not link installation");
+              } finally {
+                setSourceBusy(false);
+              }
+            }}
+            onClear={async () => {
+              if (!projectID) return;
+              setSourceBusy(true);
+              try {
+                await updateProjectGitSource(projectID, "url");
+                toast.success("Cleared GitHub App link for this project.");
+                await load({ silent: true });
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "could not clear installation");
+              } finally {
+                setSourceBusy(false);
+              }
+            }}
+          />
+        )}
+
+        {credsTab === "url" && (
+          <PATPanel
+            gitAuth={gitAuth}
+            tokenInput={gitAuthTokenInput}
+            setTokenInput={setGitAuthTokenInput}
+            busy={gitAuthBusy}
+            disabled={loading || !project}
+            fmtLocale={fmtLocale}
+            onSave={async () => {
+              if (!projectID) return;
+              setGitAuthBusy("save");
+              try {
+                const updated = await upsertProjectGitAuth(projectID, gitAuthTokenInput.trim(), "github");
+                setGitAuth(updated);
+                setGitAuthTokenInput("");
+                toast.success(gitAuth?.configured ? "GitHub token rotated." : "GitHub token saved.");
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "Could not save git auth.");
+              } finally {
+                setGitAuthBusy("");
+              }
+            }}
+            onDelete={async () => {
+              if (!projectID) return;
+              setGitAuthBusy("delete");
+              try {
+                await deleteProjectGitAuth(projectID);
+                setGitAuth({ configured: false, provider: "github" });
+                toast.success("Removed project git credential.");
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "Could not remove git auth.");
+              } finally {
+                setGitAuthBusy("");
+              }
+            }}
+          />
+        )}
+
+        {credsTab === "ssh" && (
+          <SSHPanel
+            sshKey={sshKey}
+            error={sshKeyError}
+            busy={sshKeyBusy}
+            disabled={loading || !project}
+            onGenerate={async () => {
+              if (!projectID) return;
+              setSshKeyBusy("generate");
+              try {
+                const updated = await generateProjectSSHKey(projectID);
+                setSshKey(updated);
+                toast.success("Generated a new SSH deploy key for this project.");
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "could not generate ssh key");
+              } finally {
+                setSshKeyBusy("");
+              }
+            }}
+            onDelete={async () => {
+              if (!projectID) return;
+              setSshKeyBusy("delete");
+              try {
+                await deleteProjectSSHKey(projectID);
+                setSshKey({ configured: false });
+                toast.success("Removed project SSH deploy key.");
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "could not remove ssh key");
+              } finally {
+                setSshKeyBusy("");
+              }
+            }}
+          />
+        )}
       </Panel>
 
       <Panel
@@ -1156,6 +1377,294 @@ function DnsHintsBlock({
           {text}
         </pre>
       </details>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CredsTabButton({
+  id,
+  label,
+  active,
+  onClick,
+}: {
+  id: string;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      id={`creds-tab-${id}`}
+      aria-selected={active}
+      onClick={onClick}
+      className={[
+        "-mb-px border-b-2 px-3 py-2 text-sm transition-colors",
+        active
+          ? "border-primary font-semibold text-text"
+          : "border-transparent text-muted hover:text-text",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
+
+function GitHubAppCredsPanel({
+  project,
+  installations,
+  busy,
+  onLink,
+  onClear,
+}: {
+  project: ApiProject | null;
+  installations: ApiGitHubInstallation[];
+  busy: boolean;
+  onLink: (installationID: number) => void | Promise<void>;
+  onClear: () => void | Promise<void>;
+}) {
+  const linkedID = project?.github_installation_id || 0;
+  const linked = installations.find((i) => i.installation_id === linkedID) || null;
+  const [selected, setSelected] = useState<number>(
+    linkedID > 0 ? linkedID : installations[0]?.installation_id || 0,
+  );
+  useEffect(() => {
+    if (linkedID > 0) setSelected(linkedID);
+    else if (installations[0]) setSelected(installations[0].installation_id);
+  }, [linkedID, installations]);
+
+  if (installations.length === 0) {
+    return (
+      <div className="rounded border border-border bg-surface-alt/40 p-4 text-sm">
+        <p className="text-muted">
+          No GitHub App installations are available. Connect the server App and install it on the owning account or
+          organization first.
+        </p>
+        <div className="mt-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              window.location.href = "/settings?tab=github-app";
+            }}
+          >
+            Open GitHub App settings
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const usingApp = project?.git_source === "github_app" && linkedID > 0;
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-xs text-muted">
+        {usingApp && linked ? (
+          <>
+            <span className="text-text">Linked to</span>{" "}
+            <span className="font-medium text-text">{linked.account_login}</span>{" "}
+            <span className="mono text-[11px]">(installation #{linked.installation_id})</span>
+          </>
+        ) : (
+          <>This project is not currently authenticating via a GitHub App installation.</>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          className="mono border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+          value={selected}
+          onChange={(e) => setSelected(parseInt(e.target.value, 10) || 0)}
+          disabled={busy}
+        >
+          {installations.map((i) => (
+            <option key={i.installation_id} value={i.installation_id}>
+              {i.account_login} (id {i.installation_id})
+            </option>
+          ))}
+        </select>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy || !selected || selected === linkedID}
+          onClick={() => void onLink(selected)}
+        >
+          {busy ? "Saving…" : usingApp ? "Change installation" : "Use this installation"}
+        </Button>
+        {usingApp && (
+          <Button variant="danger" size="sm" disabled={busy} onClick={() => void onClear()}>
+            {busy ? "Clearing…" : "Clear App link"}
+          </Button>
+        )}
+      </div>
+      <p className="text-xs text-muted">
+        When linked, HostForge mints a short-lived installation token for each clone or pull; nothing leaves the
+        server except the token in the HTTPS Basic header.
+      </p>
+    </div>
+  );
+}
+
+function PATPanel({
+  gitAuth,
+  tokenInput,
+  setTokenInput,
+  busy,
+  disabled,
+  fmtLocale,
+  onSave,
+  onDelete,
+}: {
+  gitAuth: ApiProjectGitAuth | null;
+  tokenInput: string;
+  setTokenInput: (v: string) => void;
+  busy: string;
+  disabled: boolean;
+  fmtLocale: string;
+  onSave: () => void | Promise<void>;
+  onDelete: () => void | Promise<void>;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-xs text-muted">
+        {gitAuth?.configured ? (
+          <>
+            <span className="text-text">Configured</span> for{" "}
+            <span className="font-medium text-text">{gitAuth.provider || "github"}</span> token ending in{" "}
+            <span className="mono text-text">••••{gitAuth.token_last4 || ""}</span>
+            {gitAuth.updated_at ? (
+              <>
+                {" "}
+                · updated{" "}
+                <span className="text-text">{formatRelative(gitAuth.updated_at, new Date(), fmtLocale)}</span>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <>No Personal Access Token stored for this project.</>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="password"
+          value={tokenInput}
+          onChange={(e) => setTokenInput(e.target.value)}
+          placeholder={gitAuth?.configured ? "Paste new GitHub token to rotate" : "Paste GitHub token"}
+          className="mono min-w-[280px] flex-1 border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+          disabled={disabled || busy !== ""}
+        />
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={disabled || busy !== "" || tokenInput.trim() === ""}
+          onClick={() => void onSave()}
+        >
+          {busy === "save" ? "Saving…" : gitAuth?.configured ? "Rotate token" : "Save token"}
+        </Button>
+        <Button
+          variant="danger"
+          size="sm"
+          disabled={disabled || busy !== "" || !gitAuth?.configured}
+          onClick={() => void onDelete()}
+        >
+          {busy === "delete" ? "Removing…" : "Remove token"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function SSHPanel({
+  sshKey,
+  error,
+  busy,
+  disabled,
+  onGenerate,
+  onDelete,
+}: {
+  sshKey: ApiProjectSSHKey | null;
+  error: string;
+  busy: string;
+  disabled: boolean;
+  onGenerate: () => void | Promise<void>;
+  onDelete: () => void | Promise<void>;
+}) {
+  const [copied, setCopied] = useState(false);
+  async function copyPublicKey() {
+    if (!sshKey?.public_key) return;
+    try {
+      await navigator.clipboard.writeText(sshKey.public_key);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {error && (
+        <div className="border border-danger/50 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>
+      )}
+      <p className="text-xs text-muted">
+        HostForge can generate a per-project ed25519 deploy key. Add the public key to the repository under{" "}
+        <span className="mono">Settings → Deploy keys</span> (read-only is sufficient). The private key is sealed with
+        the server's encryption key and never leaves the server.
+      </p>
+      {sshKey?.configured && sshKey.public_key ? (
+        <div className="flex flex-col gap-2">
+          <label className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Public key</label>
+          <textarea
+            readOnly
+            rows={3}
+            value={sshKey.public_key}
+            className="mono w-full border border-border bg-surface-alt px-3 py-2 text-xs text-text focus:border-border-strong focus:outline-none"
+          />
+          <div className="mono flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted">
+            {sshKey.fingerprint && (
+              <span>
+                fingerprint <span className="text-text">{sshKey.fingerprint}</span>
+              </span>
+            )}
+            {sshKey.created_at && (
+              <span>
+                created <span className="text-text">{sshKey.created_at}</span>
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={() => void copyPublicKey()}>
+              {copied ? "Copied" : "Copy public key"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={disabled || busy !== ""}
+              onClick={() => void onGenerate()}
+            >
+              {busy === "generate" ? "Regenerating…" : "Regenerate"}
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={disabled || busy !== ""}
+              onClick={() => void onDelete()}
+            >
+              {busy === "delete" ? "Removing…" : "Remove SSH key"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={disabled || busy !== ""}
+            onClick={() => void onGenerate()}
+          >
+            {busy === "generate" ? "Generating…" : "Generate SSH deploy key"}
+          </Button>
         </div>
       )}
     </div>

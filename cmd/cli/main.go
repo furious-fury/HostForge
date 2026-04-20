@@ -15,8 +15,8 @@ import (
 
 	"github.com/hostforge/hostforge/internal/config"
 	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
-	"github.com/hostforge/hostforge/internal/dnsops"
 	"github.com/hostforge/hostforge/internal/database"
+	"github.com/hostforge/hostforge/internal/dnsops"
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/logging"
 	"github.com/hostforge/hostforge/internal/repository"
@@ -189,7 +189,7 @@ func runDeploy(log *slog.Logger, args []string) int {
 		}
 		envSealer = sealer
 	}
-	resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch))
+	resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch), git.AuthOptions{})
 	project, err := store.EnsureProject(ctx, repoURL, resolvedBranch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: project state: %v\n", err)
@@ -199,7 +199,7 @@ func runDeploy(log *slog.Logger, args []string) int {
 		Project: project,
 		RepoURL: repoURL,
 		Branch:  resolvedBranch,
-	}, envSealer)
+	}, envSealer, cliGitAuthResolver(ctx, store, envSealer))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: deploy: %v\n", err)
 		return 1
@@ -273,7 +273,7 @@ func runDomainAdd(log *slog.Logger, args []string) int {
 	defer db.Close()
 	store := repository.New(db)
 
-	resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch))
+	resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch), git.AuthOptions{})
 	project, err := store.EnsureProject(ctx, repoURL, resolvedBranch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: project state: %v\n", err)
@@ -356,7 +356,7 @@ func runDomainRemove(log *slog.Logger, args []string) int {
 			fmt.Fprintf(os.Stderr, "error: invalid repo URL: %v\n", err)
 			return 2
 		}
-		resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch))
+		resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch), git.AuthOptions{})
 		project, err := store.EnsureProject(ctx, repoURL, resolvedBranch)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: project state: %v\n", err)

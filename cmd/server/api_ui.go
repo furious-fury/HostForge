@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,11 +30,13 @@ type apiDeployConfig struct {
 }
 
 type createProjectRequest struct {
-	RepoURL     string           `json:"repo_url"`
-	Branch      string           `json:"branch"`
-	ProjectName string           `json:"project_name"`
-	Deploy      *apiDeployConfig `json:"deploy,omitempty"`
-	Env         []struct {
+	RepoURL              string           `json:"repo_url"`
+	Branch               string           `json:"branch"`
+	ProjectName          string           `json:"project_name"`
+	GitSource            string           `json:"git_source,omitempty"`
+	GitHubInstallationID int64            `json:"github_installation_id,omitempty"`
+	Deploy               *apiDeployConfig `json:"deploy,omitempty"`
+	Env                  []struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`
 	} `json:"env,omitempty"`
@@ -54,13 +57,15 @@ type deploymentActionResponse struct {
 }
 
 type apiProject struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	RepoURL   string          `json:"repo_url"`
-	Branch    string          `json:"branch"`
-	Deploy    apiDeployConfig `json:"deploy"`
-	CreatedAt string          `json:"created_at"`
-	UpdatedAt string          `json:"updated_at"`
+	ID                   string          `json:"id"`
+	Name                 string          `json:"name"`
+	RepoURL              string          `json:"repo_url"`
+	Branch               string          `json:"branch"`
+	GitSource            string          `json:"git_source,omitempty"`
+	GitHubInstallationID int64           `json:"github_installation_id,omitempty"`
+	Deploy               apiDeployConfig `json:"deploy"`
+	CreatedAt            string          `json:"created_at"`
+	UpdatedAt            string          `json:"updated_at"`
 	// StackKind and StackLabel mirror the latest deployment row when present (convenience for list UIs).
 	StackKind        string           `json:"stack_kind,omitempty"`
 	StackLabel       string           `json:"stack_label,omitempty"`
@@ -102,6 +107,13 @@ type apiProjectEnvVar struct {
 	Key        string `json:"key"`
 	ValueLast4 string `json:"value_last4"`
 	UpdatedAt  string `json:"updated_at"`
+}
+
+type apiProjectGitAuth struct {
+	Configured bool   `json:"configured"`
+	Provider   string `json:"provider,omitempty"`
+	TokenLast4 string `json:"token_last4,omitempty"`
+	UpdatedAt  string `json:"updated_at,omitempty"`
 }
 
 type apiDomain struct {
@@ -173,12 +185,42 @@ func (s *server) handleRepositoryBranches(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_repository_clone_url"})
 		return
 	}
-	branches, inferredDefault, err := git.ListRemoteBranches(r.Context(), repoURL)
+	gitAuth := git.AuthOptions{}
+	if projectID := strings.TrimSpace(r.URL.Query().Get("project_id")); projectID != "" {
+		project, err := s.store.GetProjectByID(r.Context(), projectID)
+		if err != nil {
+			if errorsIsNoRows(err) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "project_not_found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "project_lookup_failed"})
+			return
+		}
+		opts, err := s.resolveGitAuthForProject(r.Context(), project)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "git_auth_prepare_failed"})
+			return
+		}
+		gitAuth = opts
+	} else if raw := strings.TrimSpace(r.URL.Query().Get("installation_id")); raw != "" {
+		installationID, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || installationID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_installation_id"})
+			return
+		}
+		opts, err := s.resolveGitAuthForInstallation(r.Context(), installationID)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "installation_token_mint_failed"})
+			return
+		}
+		gitAuth = opts
+	}
+	branches, inferredDefault, err := git.ListRemoteBranches(r.Context(), repoURL, gitAuth)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "list_remote_branches_failed"})
 		return
 	}
-	defaultBranch := git.ResolveBranch(r.Context(), repoURL, "")
+	defaultBranch := git.ResolveBranch(r.Context(), repoURL, "", gitAuth)
 	writeJSON(w, http.StatusOK, repositoryBranchesResponse{
 		Status:        "ok",
 		RepoURL:       repoURL,
@@ -224,8 +266,42 @@ func (s *server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_repository_clone_url"})
 		return
 	}
+	gitSource := strings.TrimSpace(req.GitSource)
+	if gitSource == "" {
+		gitSource = models.GitSourceURL
+	}
+	switch gitSource {
+	case models.GitSourceURL, models.GitSourceGitHubApp, models.GitSourceSSH:
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_git_source"})
+		return
+	}
+	installationID := req.GitHubInstallationID
+	if gitSource == models.GitSourceGitHubApp {
+		if installationID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "github_installation_id_required"})
+			return
+		}
+		if _, err := s.store.GetGitHubInstallation(r.Context(), installationID); err != nil {
+			if errorsIsNoRows(err) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "installation_not_found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "installation_lookup_failed"})
+			return
+		}
+	} else {
+		installationID = 0
+	}
+
+	branchAuth := git.AuthOptions{}
+	if installationID > 0 {
+		if opts, err := s.resolveGitAuthForInstallation(r.Context(), installationID); err == nil {
+			branchAuth = opts
+		}
+	}
 	branch := strings.TrimSpace(req.Branch)
-	branch = git.ResolveBranch(r.Context(), repoURL, branch)
+	branch = git.ResolveBranch(r.Context(), repoURL, branch, branchAuth)
 	name := strings.TrimSpace(req.ProjectName)
 	if name == "" {
 		name = inferProjectName(repoURL)
@@ -243,13 +319,15 @@ func (s *server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deployIn := repository.CreateProjectInput{
-		Name:             name,
-		RepoURL:          repoURL,
-		Branch:           branch,
-		DeployRuntime:    models.DeployRuntimeAuto,
-		DeployInstallCmd: "",
-		DeployBuildCmd:   "",
-		DeployStartCmd:   "",
+		Name:                 name,
+		RepoURL:              repoURL,
+		Branch:               branch,
+		DeployRuntime:        models.DeployRuntimeAuto,
+		DeployInstallCmd:     "",
+		DeployBuildCmd:       "",
+		DeployStartCmd:       "",
+		GitSource:            gitSource,
+		GitHubInstallationID: installationID,
 	}
 	if req.Deploy != nil {
 		rt, i, b, st, errCode := services.ValidateDeployFields(req.Deploy.Runtime, req.Deploy.InstallCmd, req.Deploy.BuildCmd, req.Deploy.StartCmd)
@@ -315,6 +393,50 @@ func (s *server) handleProjectRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	case "git-auth":
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			s.handleProjectGitAuthGet(w, r, projectID)
+		case http.MethodPut:
+			s.handleProjectGitAuthPut(w, r, projectID)
+		case http.MethodDelete:
+			s.handleProjectGitAuthDelete(w, r, projectID)
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+		}
+		return
+	case "ssh-key":
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			s.handleProjectSSHKeyGet(w, r, projectID)
+		case http.MethodPost:
+			s.handleProjectSSHKeyGenerate(w, r, projectID)
+		case http.MethodDelete:
+			s.handleProjectSSHKeyDelete(w, r, projectID)
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+		}
+		return
+	case "git-source":
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodPut:
+			s.handleProjectGitSourcePut(w, r, projectID)
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+		}
+		return
 	case "env":
 		if len(parts) == 2 {
 			switch r.Method {
@@ -704,9 +826,10 @@ func (s *server) handleProjectDeployAction(w http.ResponseWriter, r *http.Reques
 	deployLog = deployLog.With("deployment_id", job.Deployment.ID, "repo_url", redact.RepoURLForLog(project.RepoURL), "branch", project.Branch)
 	asyncRequested := s.cfg.WebhookAsync || strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("async")), "true") || r.URL.Query().Get("async") == "1"
 	if asyncRequested {
+		resolver := s.newGitAuthResolver(r.Context())
 		go func(job services.DeployJob) {
 			bg := obs.WithStore(context.Background(), s.store)
-			if _, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer); execErr != nil {
+			if _, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer, resolver); execErr != nil {
 				deployLog.Error("async deployment failed", "error", execErr)
 			}
 		}(job)
@@ -719,7 +842,7 @@ func (s *server) handleProjectDeployAction(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	tExec := time.Now()
-	result, err := services.ExecuteDeploy(r.Context(), deployLog, s.cfg, s.store, job, s.envSealer)
+	result, err := services.ExecuteDeploy(r.Context(), deployLog, s.cfg, s.store, job, s.envSealer, s.newGitAuthResolver(r.Context()))
 	if err != nil {
 		deployLog.Error("execute deploy failed", "error", err, "public_code", publicAPIError(err, "deploy_failed"), "duration_ms", time.Since(tExec).Milliseconds())
 		writeJSON(w, http.StatusOK, deploymentActionResponse{
@@ -935,10 +1058,12 @@ func projectToAPI(p models.Project) apiProject {
 		rt = models.DeployRuntimeAuto
 	}
 	return apiProject{
-		ID:      p.ID,
-		Name:    p.Name,
-		RepoURL: p.RepoURL,
-		Branch:  p.Branch,
+		ID:                   p.ID,
+		Name:                 p.Name,
+		RepoURL:              p.RepoURL,
+		Branch:               p.Branch,
+		GitSource:            p.GitSource,
+		GitHubInstallationID: p.GitHubInstallationID,
 		Deploy: apiDeployConfig{
 			Runtime:    rt,
 			InstallCmd: p.DeployInstallCmd,

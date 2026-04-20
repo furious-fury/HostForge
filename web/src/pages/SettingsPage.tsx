@@ -6,6 +6,7 @@ import { AboutSection } from "./settings/AboutSection";
 import { CaddySection } from "./settings/CaddySection";
 import { DeploySection } from "./settings/DeploySection";
 import { DnsSection } from "./settings/DnsSection";
+import { GitHubAppSection } from "./settings/GitHubAppSection";
 import { PreferencesSection } from "./settings/PreferencesSection";
 import { SystemSection } from "./settings/SystemSection";
 import { WebhooksSection } from "./settings/WebhooksSection";
@@ -15,6 +16,7 @@ const TABS = [
   { id: "system", label: "System" },
   { id: "deploy", label: "Deploy" },
   { id: "caddy", label: "Caddy" },
+  { id: "github-app", label: "GitHub App" },
   { id: "webhooks", label: "Webhooks" },
   { id: "dns", label: "DNS" },
   { id: "preferences", label: "Preferences" },
@@ -101,6 +103,7 @@ export function SettingsPage() {
             {active === "system" && <SystemSection settings={settingsQ.data} />}
             {active === "deploy" && <DeploySection settings={settingsQ.data} />}
             {active === "caddy" && <CaddySection settings={settingsQ.data} />}
+            {active === "github-app" && <GitHubAppSection />}
             {active === "webhooks" && <WebhooksSection settings={settingsQ.data} />}
             {active === "dns" && <DnsSection settings={settingsQ.data} />}
             {active === "preferences" && <PreferencesSection />}

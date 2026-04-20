@@ -1,5 +1,6 @@
 import { Button } from "../../components/Button";
 import { Panel } from "../../components/Panel";
+import { useConfirm } from "../../components/useConfirm";
 import {
   DEFAULT_UI_PREFS,
   type DeploymentsPageSize,
@@ -19,6 +20,7 @@ const PAGE_OPTIONS: DeploymentsPageSize[] = [25, 50, 100, 200];
 
 export function PreferencesSection() {
   const { prefs, setPrefs, resetUIPrefs } = useUIPrefs();
+  const confirm = useConfirm();
 
   return (
     <div className="flex flex-col gap-6">
@@ -99,10 +101,15 @@ export function PreferencesSection() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => {
-              if (window.confirm("Reset all UI preferences to defaults?")) {
-                resetUIPrefs();
-              }
+            onClick={async () => {
+              const ok = await confirm({
+                title: "Reset preferences",
+                description: "Reset all UI preferences (theme, landing page, page size, locale) back to their defaults?",
+                confirmLabel: "Reset",
+                confirmVariant: "primary",
+                dangerBanner: null,
+              });
+              if (ok) resetUIPrefs();
             }}
           >
             Reset preferences to defaults

@@ -58,25 +58,59 @@ type CreateProjectInput struct {
 	DeployInstallCmd string
 	DeployBuildCmd   string
 	DeployStartCmd   string
+	// GitSource (url | github_app | ssh). Empty defaults to "url".
+	GitSource string
+	// GitHubInstallationID is used when GitSource=github_app.
+	GitHubInstallationID int64
+}
+
+// projectSelectColumns lists columns returned by every SELECT against projects, in scan order.
+const projectSelectColumns = `id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, git_source, github_installation_id, created_at, updated_at`
+
+// scanProject scans a row produced by a `SELECT `+projectSelectColumns+` FROM projects ...` query.
+func scanProject(row interface {
+	Scan(dest ...any) error
+}) (models.Project, error) {
+	var p models.Project
+	var createdAt, updatedAt string
+	if err := row.Scan(
+		&p.ID,
+		&p.Name,
+		&p.RepoURL,
+		&p.Branch,
+		&p.DeployRuntime,
+		&p.DeployInstallCmd,
+		&p.DeployBuildCmd,
+		&p.DeployStartCmd,
+		&p.GitSource,
+		&p.GitHubInstallationID,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return models.Project{}, err
+	}
+	if strings.TrimSpace(p.GitSource) == "" {
+		p.GitSource = models.GitSourceURL
+	}
+	p.CreatedAt = parseTime(createdAt)
+	p.UpdatedAt = parseTime(updatedAt)
+	return p, nil
 }
 
 // GetProjectByRepoAndBranch returns an existing project by repo URL and branch.
 func (s *Store) GetProjectByRepoAndBranch(ctx context.Context, repoURL, branch string) (models.Project, error) {
 	trimmedRepo := strings.TrimSpace(repoURL)
 	trimmedBranch := strings.TrimSpace(branch)
-	var p models.Project
-	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(
+	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at FROM projects WHERE repo_url = ? AND branch = ?`,
+		`SELECT `+projectSelectColumns+` FROM projects WHERE repo_url = ? AND branch = ?`,
 		trimmedRepo,
 		trimmedBranch,
-	).Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &p.DeployRuntime, &p.DeployInstallCmd, &p.DeployBuildCmd, &p.DeployStartCmd, &createdAt, &updatedAt)
+	)
+	p, err := scanProject(row)
 	if err != nil {
 		return models.Project{}, fmt.Errorf("lookup project by repo+branch: %w", err)
 	}
-	p.CreatedAt = parseTime(createdAt)
-	p.UpdatedAt = parseTime(updatedAt)
 	return p, nil
 }
 
@@ -84,7 +118,7 @@ func (s *Store) GetProjectByRepoAndBranch(ctx context.Context, repoURL, branch s
 func (s *Store) ListProjectsByRepoURL(ctx context.Context, repoURL string) ([]models.Project, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at FROM projects WHERE repo_url = ? ORDER BY created_at DESC`,
+		`SELECT `+projectSelectColumns+` FROM projects WHERE repo_url = ? ORDER BY created_at DESC`,
 		strings.TrimSpace(repoURL),
 	)
 	if err != nil {
@@ -94,13 +128,10 @@ func (s *Store) ListProjectsByRepoURL(ctx context.Context, repoURL string) ([]mo
 
 	var projects []models.Project
 	for rows.Next() {
-		var p models.Project
-		var createdAt, updatedAt string
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &p.DeployRuntime, &p.DeployInstallCmd, &p.DeployBuildCmd, &p.DeployStartCmd, &createdAt, &updatedAt); err != nil {
+		p, err := scanProject(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan project: %w", err)
 		}
-		p.CreatedAt = parseTime(createdAt)
-		p.UpdatedAt = parseTime(updatedAt)
 		projects = append(projects, p)
 	}
 	return projects, rows.Err()
@@ -112,17 +143,14 @@ func (s *Store) EnsureProject(ctx context.Context, repoURL, branch string) (mode
 	trimmedRepo := strings.TrimSpace(repoURL)
 	trimmedBranch := strings.TrimSpace(branch)
 
-	var p models.Project
-	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(
+	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at FROM projects WHERE repo_url = ? AND branch = ?`,
+		`SELECT `+projectSelectColumns+` FROM projects WHERE repo_url = ? AND branch = ?`,
 		trimmedRepo,
 		trimmedBranch,
-	).Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &p.DeployRuntime, &p.DeployInstallCmd, &p.DeployBuildCmd, &p.DeployStartCmd, &createdAt, &updatedAt)
+	)
+	p, err := scanProject(row)
 	if err == nil {
-		p.CreatedAt = parseTime(createdAt)
-		p.UpdatedAt = parseTime(updatedAt)
 		return p, nil
 	}
 	if err != sql.ErrNoRows {
@@ -139,6 +167,7 @@ func (s *Store) EnsureProject(ctx context.Context, repoURL, branch string) (mode
 		DeployInstallCmd: "",
 		DeployBuildCmd:   "",
 		DeployStartCmd:   "",
+		GitSource:        models.GitSourceURL,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
@@ -171,21 +200,27 @@ func (s *Store) CreateProject(ctx context.Context, in CreateProjectInput) (model
 	if rt == "" {
 		rt = models.DeployRuntimeAuto
 	}
+	gs := strings.TrimSpace(in.GitSource)
+	if gs == "" {
+		gs = models.GitSourceURL
+	}
 	p := models.Project{
-		ID:               newID(),
-		Name:             name,
-		RepoURL:          repoURL,
-		Branch:           branch,
-		DeployRuntime:    rt,
-		DeployInstallCmd: strings.TrimSpace(in.DeployInstallCmd),
-		DeployBuildCmd:   strings.TrimSpace(in.DeployBuildCmd),
-		DeployStartCmd:   strings.TrimSpace(in.DeployStartCmd),
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:                   newID(),
+		Name:                 name,
+		RepoURL:              repoURL,
+		Branch:               branch,
+		DeployRuntime:        rt,
+		DeployInstallCmd:     strings.TrimSpace(in.DeployInstallCmd),
+		DeployBuildCmd:       strings.TrimSpace(in.DeployBuildCmd),
+		DeployStartCmd:       strings.TrimSpace(in.DeployStartCmd),
+		GitSource:            gs,
+		GitHubInstallationID: in.GitHubInstallationID,
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO projects(id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO projects(id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, git_source, github_installation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID,
 		p.Name,
 		p.RepoURL,
@@ -194,6 +229,8 @@ func (s *Store) CreateProject(ctx context.Context, in CreateProjectInput) (model
 		p.DeployInstallCmd,
 		p.DeployBuildCmd,
 		p.DeployStartCmd,
+		p.GitSource,
+		p.GitHubInstallationID,
 		p.CreatedAt.Format(time.RFC3339),
 		p.UpdatedAt.Format(time.RFC3339),
 	)
@@ -201,6 +238,41 @@ func (s *Store) CreateProject(ctx context.Context, in CreateProjectInput) (model
 		return models.Project{}, fmt.Errorf("insert project: %w", err)
 	}
 	return p, nil
+}
+
+// UpdateProjectGitSource sets git_source and github_installation_id for a project.
+// gitSource must be one of models.GitSourceURL, GitSourceGitHubApp, GitSourceSSH.
+func (s *Store) UpdateProjectGitSource(ctx context.Context, projectID, gitSource string, installationID int64) error {
+	pid := strings.TrimSpace(projectID)
+	if pid == "" {
+		return fmt.Errorf("empty project id")
+	}
+	gs := strings.TrimSpace(gitSource)
+	switch gs {
+	case models.GitSourceURL, models.GitSourceGitHubApp, models.GitSourceSSH:
+	default:
+		return fmt.Errorf("invalid git_source %q", gitSource)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE projects SET git_source = ?, github_installation_id = ?, updated_at = ? WHERE id = ?`,
+		gs,
+		installationID,
+		now,
+		pid,
+	)
+	if err != nil {
+		return fmt.Errorf("update project git_source: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // CreateDeployment inserts a deployment with status QUEUED.
@@ -416,6 +488,15 @@ func (s *Store) DeleteProjectCascade(ctx context.Context, projectID string) erro
 	if _, err := tx.ExecContext(ctx, `DELETE FROM domains WHERE project_id = ?`, pid); err != nil {
 		return fmt.Errorf("delete domains: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM project_git_auth WHERE project_id = ?`, pid); err != nil {
+		return fmt.Errorf("delete project git auth: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM project_ssh_keys WHERE project_id = ?`, pid); err != nil {
+		return fmt.Errorf("delete project ssh keys: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM project_env_vars WHERE project_id = ?`, pid); err != nil {
+		return fmt.Errorf("delete project env vars: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, pid); err != nil {
 		return fmt.Errorf("delete project: %w", err)
 	}
@@ -427,18 +508,15 @@ func (s *Store) DeleteProjectCascade(ctx context.Context, projectID string) erro
 
 // GetProjectByID returns a project row by id.
 func (s *Store) GetProjectByID(ctx context.Context, projectID string) (models.Project, error) {
-	var p models.Project
-	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(
+	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at FROM projects WHERE id = ?`,
+		`SELECT `+projectSelectColumns+` FROM projects WHERE id = ?`,
 		strings.TrimSpace(projectID),
-	).Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &p.DeployRuntime, &p.DeployInstallCmd, &p.DeployBuildCmd, &p.DeployStartCmd, &createdAt, &updatedAt)
+	)
+	p, err := scanProject(row)
 	if err != nil {
 		return models.Project{}, fmt.Errorf("lookup project by id: %w", err)
 	}
-	p.CreatedAt = parseTime(createdAt)
-	p.UpdatedAt = parseTime(updatedAt)
 	return p, nil
 }
 
@@ -603,7 +681,7 @@ func (s *Store) UpdateContainerStatus(ctx context.Context, containerID, status s
 
 // ListProjects returns all projects, newest first by created_at.
 func (s *Store) ListProjects(ctx context.Context) ([]models.Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at FROM projects ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+projectSelectColumns+` FROM projects ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
@@ -611,13 +689,10 @@ func (s *Store) ListProjects(ctx context.Context) ([]models.Project, error) {
 
 	var items []models.Project
 	for rows.Next() {
-		var p models.Project
-		var createdAt, updatedAt string
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.Branch, &p.DeployRuntime, &p.DeployInstallCmd, &p.DeployBuildCmd, &p.DeployStartCmd, &createdAt, &updatedAt); err != nil {
+		p, err := scanProject(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan project: %w", err)
 		}
-		p.CreatedAt = parseTime(createdAt)
-		p.UpdatedAt = parseTime(updatedAt)
 		items = append(items, p)
 	}
 	return items, rows.Err()

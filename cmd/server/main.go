@@ -168,6 +168,7 @@ func runServer(log *slog.Logger, args []string) int {
 	mux.HandleFunc("/api/settings", handler.withRequestContext(handler.requireManagementAuth(handler.handleSettingsRoutes)))
 	mux.HandleFunc("/api/settings/", handler.withRequestContext(handler.requireManagementAuth(handler.handleSettingsRoutes)))
 	mux.HandleFunc("/api/repositories/branches", handler.withRequestContext(handler.requireManagementAuth(handler.handleRepositoryBranches)))
+	mux.HandleFunc("/api/github/", handler.withRequestContext(handler.requireManagementAuth(handler.handleGitHubAppRoutes)))
 	mux.HandleFunc("/api/projects", handler.withRequestContext(handler.requireManagementAuth(handler.handleProjectsCollection)))
 	mux.HandleFunc("/api/projects/", handler.withRequestContext(handler.requireManagementAuth(handler.handleProjectRoutes)))
 	mux.HandleFunc("/api/deployments", handler.withRequestContext(handler.requireManagementAuth(handler.handleDeploymentsCollection)))
@@ -199,6 +200,7 @@ type server struct {
 	hostSampler    *hostmetrics.Sampler
 	hostSnapCache  hostSnapshotCache
 	envSealer      *envcrypt.Sealer
+	appCache       *appClientHolder
 }
 
 type githubPushPayload struct {
@@ -249,15 +251,6 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	eventType := strings.TrimSpace(r.Header.Get("X-GitHub-Event"))
-	if eventType != "" && eventType != "push" {
-		log.Info("ignoring unsupported webhook event", "event", eventType)
-		writeJSON(w, http.StatusOK, map[string]string{
-			"status":     "ignored",
-			"request_id": requestID,
-			"reason":     "unsupported_event",
-		})
-		return
-	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, int64(s.cfg.WebhookMaxBodyBytes))
 	defer r.Body.Close()
@@ -280,12 +273,33 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if !auth.VerifyGitHubSignature(s.cfg.WebhookSecret, signature, body) {
+	if !s.verifyWebhookSignature(r.Context(), signature, body) {
 		log.Warn("webhook rejected", "reason", "signature_mismatch", "remote_ip", remoteIP)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{
 			"status":     "error",
 			"request_id": requestID,
 			"error":      "invalid_signature",
+		})
+		return
+	}
+
+	switch eventType {
+	case "installation", "installation_repositories":
+		s.handleInstallationEvent(r.Context(), log, eventType, body)
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status":     "ok",
+			"request_id": requestID,
+			"event":      eventType,
+		})
+		return
+	case "", "push":
+		// fall through to push handling below
+	default:
+		log.Info("ignoring unsupported webhook event", "event", eventType)
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status":     "ignored",
+			"request_id": requestID,
+			"reason":     "unsupported_event",
 		})
 		return
 	}
@@ -393,9 +407,10 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 
 	deployLog := log.With("project_id", project.ID, "deployment_id", job.Deployment.ID, "repo_url", redact.RepoURLForLog(repoURL), "branch", branch)
 	if s.cfg.WebhookAsync {
+		resolver := s.newGitAuthResolver(r.Context())
 		go func(job services.DeployJob) {
 			bg := obs.WithStore(context.Background(), s.store)
-			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer)
+			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer, resolver)
 			if execErr != nil {
 				deployLog.Error("async deployment failed", "error", execErr)
 			}
@@ -410,7 +425,7 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deployWall := time.Now()
-	result, err := services.ExecuteDeploy(r.Context(), deployLog, s.cfg, s.store, job, s.envSealer)
+	result, err := services.ExecuteDeploy(r.Context(), deployLog, s.cfg, s.store, job, s.envSealer, s.newGitAuthResolver(r.Context()))
 	if err != nil {
 		deployLog.Error("synchronous deployment failed", "error", err, "public_code", publicAPIError(err, "deployment_failed"), "duration_ms", time.Since(deployWall).Milliseconds())
 		writeJSON(w, http.StatusOK, map[string]string{

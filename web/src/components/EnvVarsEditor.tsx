@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ApiProjectEnvVar } from "../api";
 import { deleteProjectEnv, listProjectEnv, updateProjectEnv, upsertProjectEnv } from "../api";
 import { Button } from "./Button";
+import { useConfirm } from "./useConfirm";
 
 function EyeIcon({ className = "size-4" }: { className?: string }) {
   return (
@@ -498,6 +499,7 @@ function LocalEnvEditor({ rows, onChange }: { rows: EnvDraftPair[]; onChange: (r
 }
 
 function RemoteEnvEditor({ projectID, onChange }: { projectID: string; onChange?: () => void }) {
+  const confirmDialog = useConfirm();
   const [rows, setRows] = useState<ApiProjectEnvVar[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -593,7 +595,20 @@ function RemoteEnvEditor({ projectID, onChange }: { projectID: string; onChange?
 
   const removeRemote = useCallback(
     async (id: string) => {
-      if (!window.confirm("Remove this environment variable?")) return;
+      const row = rows.find((r) => r.id === id);
+      const ok = await confirmDialog({
+        title: "Remove environment variable",
+        description: (
+          <>
+            Remove <span className="mono font-semibold">{row?.key ?? id}</span> from this project? The variable will be
+            deleted immediately and won't be injected into future deployments.
+          </>
+        ),
+        confirmLabel: "Remove",
+        confirmVariant: "danger",
+        dangerBanner: null,
+      });
+      if (!ok) return;
       setBusy(true);
       setErr("");
       try {
@@ -610,7 +625,7 @@ function RemoteEnvEditor({ projectID, onChange }: { projectID: string; onChange?
         setBusy(false);
       }
     },
-    [fireChange, projectID, replaceId],
+    [confirmDialog, fireChange, projectID, replaceId, rows],
   );
 
   const applyPasteRemote = useCallback(async () => {

@@ -36,17 +36,23 @@ func (s *Store) CreateProjectWithSealedEnv(ctx context.Context, in CreateProject
 	if rt == "" {
 		rt = models.DeployRuntimeAuto
 	}
+	gs := strings.TrimSpace(in.GitSource)
+	if gs == "" {
+		gs = models.GitSourceURL
+	}
 	p := models.Project{
-		ID:               newID(),
-		Name:             name,
-		RepoURL:          repoURL,
-		Branch:           branch,
-		DeployRuntime:    rt,
-		DeployInstallCmd: strings.TrimSpace(in.DeployInstallCmd),
-		DeployBuildCmd:   strings.TrimSpace(in.DeployBuildCmd),
-		DeployStartCmd:   strings.TrimSpace(in.DeployStartCmd),
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:                   newID(),
+		Name:                 name,
+		RepoURL:              repoURL,
+		Branch:               branch,
+		DeployRuntime:        rt,
+		DeployInstallCmd:     strings.TrimSpace(in.DeployInstallCmd),
+		DeployBuildCmd:       strings.TrimSpace(in.DeployBuildCmd),
+		DeployStartCmd:       strings.TrimSpace(in.DeployStartCmd),
+		GitSource:            gs,
+		GitHubInstallationID: in.GitHubInstallationID,
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -57,7 +63,7 @@ func (s *Store) CreateProjectWithSealedEnv(ctx context.Context, in CreateProject
 
 	_, err = tx.ExecContext(
 		ctx,
-		`INSERT INTO projects(id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO projects(id, name, repo_url, branch, deploy_runtime, deploy_install_cmd, deploy_build_cmd, deploy_start_cmd, git_source, github_installation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID,
 		p.Name,
 		p.RepoURL,
@@ -66,6 +72,8 @@ func (s *Store) CreateProjectWithSealedEnv(ctx context.Context, in CreateProject
 		p.DeployInstallCmd,
 		p.DeployBuildCmd,
 		p.DeployStartCmd,
+		p.GitSource,
+		p.GitHubInstallationID,
 		p.CreatedAt.Format(time.RFC3339),
 		p.UpdatedAt.Format(time.RFC3339),
 	)

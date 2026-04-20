@@ -43,6 +43,77 @@ type ProjectEnvSealed struct {
 	ValueCT []byte
 }
 
+// ProjectGitAuthMeta is non-sensitive metadata for per-project git credentials.
+type ProjectGitAuthMeta struct {
+	ProjectID  string
+	Provider   string
+	TokenLast4 string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// ProjectGitAuthSealed holds ciphertext used for git transport authentication.
+type ProjectGitAuthSealed struct {
+	ProjectID string
+	Provider  string
+	TokenCT   []byte
+}
+
+// GitSource values for projects.git_source.
+const (
+	GitSourceURL       = "url"
+	GitSourceGitHubApp = "github_app"
+	GitSourceSSH       = "ssh"
+)
+
+// GitHubAppMeta is non-sensitive metadata for the singleton GitHub App row.
+type GitHubAppMeta struct {
+	AppID     int64
+	Slug      string
+	HTMLURL   string
+	ClientID  string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// GitHubAppSecrets is the sealed material used by the GitHub App client.
+type GitHubAppSecrets struct {
+	AppID            int64
+	Slug             string
+	HTMLURL          string
+	ClientID         string
+	ClientSecretCT   []byte
+	PrivateKeyCT     []byte
+	WebhookSecretCT  []byte
+}
+
+// GitHubInstallation mirrors one row in github_app_installations.
+type GitHubInstallation struct {
+	InstallationID int64
+	AccountLogin   string
+	AccountType    string
+	TargetType     string
+	RepoSelection  string
+	SuspendedAt    string // RFC3339 or empty
+	LastSyncedAt   string // RFC3339 or empty
+	CreatedAt      time.Time
+}
+
+// ProjectSSHKeyMeta is the non-sensitive public key + fingerprint for a project.
+type ProjectSSHKeyMeta struct {
+	ProjectID   string
+	PublicKey   string
+	Fingerprint string
+	CreatedAt   time.Time
+}
+
+// ProjectSSHKeySealed holds the sealed private key for deploy-time git transport.
+type ProjectSSHKeySealed struct {
+	ProjectID    string
+	PublicKey    string
+	PrivateKeyCT []byte
+}
+
 // Project is a Git source (repo + branch) that deployments belong to.
 type Project struct {
 	ID      string
@@ -54,8 +125,12 @@ type Project struct {
 	DeployInstallCmd string
 	DeployBuildCmd   string
 	DeployStartCmd   string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// GitSource selects how credentials for this project's repo are resolved: url | github_app | ssh.
+	GitSource string
+	// GitHubInstallationID is set when GitSource=github_app and identifies the installation used to mint tokens. 0 otherwise.
+	GitHubInstallationID int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 // Deployment is one build/run attempt for a project.

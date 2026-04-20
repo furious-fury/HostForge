@@ -34,6 +34,9 @@ export type ApiProject = {
   name: string;
   repo_url: string;
   branch: string;
+  /** One of "url", "github_app", or "ssh"; may be omitted for legacy projects (treat as "url"). */
+  git_source?: string;
+  github_installation_id?: number;
   deploy: ApiDeployConfig;
   created_at: string;
   updated_at: string;
@@ -140,6 +143,8 @@ export type CreateProjectRequest = {
   repo_url: string;
   branch: string;
   project_name: string;
+  git_source?: ProjectGitSource;
+  github_installation_id?: number;
   deploy?: {
     runtime?: string;
     install_cmd?: string;
@@ -156,11 +161,65 @@ export type ApiProjectEnvVar = {
   updated_at: string;
 };
 
+export type ApiProjectGitAuth = {
+  configured: boolean;
+  provider?: string;
+  token_last4?: string;
+  updated_at?: string;
+};
+
 export type RepositoryBranches = {
   repo_url: string;
   branches: string[];
   default_branch: string;
 };
+
+export type ApiGitHubApp = {
+  configured: boolean;
+  app_id?: number;
+  slug?: string;
+  html_url?: string;
+  client_id?: string;
+  updated_at?: string;
+};
+
+export type ApiGitHubInstallation = {
+  installation_id: number;
+  account_login: string;
+  account_type: string;
+  target_type: string;
+  repo_selection: string;
+  suspended: boolean;
+  last_synced_at?: string;
+};
+
+export type ApiGitHubRepo = {
+  id: number;
+  name: string;
+  full_name: string;
+  private: boolean;
+  default_branch: string;
+  html_url: string;
+  clone_url: string;
+};
+
+export type GitHubAppManifest = {
+  status: string;
+  manifest: Record<string, unknown>;
+  post_url: string;
+  callback_url: string;
+  webhook_url: string;
+  state: string;
+};
+
+export type ApiProjectSSHKey = {
+  configured: boolean;
+  public_key?: string;
+  fingerprint?: string;
+  created_at?: string;
+};
+
+export type ProjectGitSource = "url" | "github_app" | "ssh";
 
 function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
   return fetch(input, { credentials: "same-origin", ...init });
@@ -352,6 +411,33 @@ export async function deleteProjectEnv(projectID: string, envID: string): Promis
   await readJSON(res);
 }
 
+export async function fetchProjectGitAuth(projectID: string): Promise<ApiProjectGitAuth> {
+  const res = await apiFetch(`/api/projects/${encodeURIComponent(projectID)}/git-auth`);
+  const body = await readJSON<{ git_auth?: ApiProjectGitAuth }>(res);
+  return body.git_auth || { configured: false, provider: "github" };
+}
+
+export async function upsertProjectGitAuth(
+  projectID: string,
+  token: string,
+  provider = "github",
+): Promise<ApiProjectGitAuth> {
+  const res = await apiFetch(`/api/projects/${encodeURIComponent(projectID)}/git-auth`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, token }),
+  });
+  const body = await readJSON<{ git_auth: ApiProjectGitAuth }>(res);
+  return body.git_auth;
+}
+
+export async function deleteProjectGitAuth(projectID: string): Promise<void> {
+  const res = await apiFetch(`/api/projects/${encodeURIComponent(projectID)}/git-auth`, {
+    method: "DELETE",
+  });
+  await readJSON(res);
+}
+
 export async function updateProjectDeploy(projectID: string, deploy: ApiDeployConfig): Promise<ApiProject> {
   const res = await apiFetch(`/api/projects/${projectID}`, {
     method: "PATCH",
@@ -362,8 +448,22 @@ export async function updateProjectDeploy(projectID: string, deploy: ApiDeployCo
   return body.project;
 }
 
-export async function fetchRepositoryBranches(repoURL: string): Promise<RepositoryBranches> {
-  const qs = new URLSearchParams({ repo_url: repoURL }).toString();
+export type FetchBranchesOptions = {
+  projectID?: string;
+  installationID?: number;
+};
+
+export async function fetchRepositoryBranches(
+  repoURL: string,
+  options: FetchBranchesOptions = {},
+): Promise<RepositoryBranches> {
+  const qs = new URLSearchParams({ repo_url: repoURL });
+  if (options.projectID?.trim()) {
+    qs.set("project_id", options.projectID.trim());
+  }
+  if (options.installationID && options.installationID > 0) {
+    qs.set("installation_id", String(options.installationID));
+  }
   const res = await apiFetch(`/api/repositories/branches?${qs}`);
   const body = await readJSON<{
     repo_url: string;
@@ -375,6 +475,101 @@ export async function fetchRepositoryBranches(repoURL: string): Promise<Reposito
     branches: body.branches || [],
     default_branch: body.default_branch || "main",
   };
+}
+
+export async function fetchGitHubApp(): Promise<ApiGitHubApp> {
+  const res = await apiFetch("/api/github/app");
+  const body = await readJSON<{ app: ApiGitHubApp }>(res);
+  return body.app || { configured: false };
+}
+
+export async function createGitHubAppManifest(input: {
+  url?: string;
+  name?: string;
+  organization?: string;
+  callback_url?: string;
+  webhook_url?: string;
+}): Promise<GitHubAppManifest> {
+  const res = await apiFetch("/api/github/app/manifest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return await readJSON<GitHubAppManifest>(res);
+}
+
+export async function exchangeGitHubAppManifest(code: string): Promise<{ app: ApiGitHubApp; install_url?: string }> {
+  const res = await apiFetch("/api/github/app/exchange", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  return await readJSON<{ app: ApiGitHubApp; install_url?: string }>(res);
+}
+
+export async function deleteGitHubApp(): Promise<void> {
+  const res = await apiFetch("/api/github/app", { method: "DELETE" });
+  await readJSON<Record<string, unknown>>(res);
+}
+
+export async function fetchGitHubInstallations(): Promise<ApiGitHubInstallation[]> {
+  const res = await apiFetch("/api/github/installations");
+  const body = await readJSON<{ installations?: ApiGitHubInstallation[] }>(res);
+  return body.installations || [];
+}
+
+export async function syncGitHubInstallations(): Promise<ApiGitHubInstallation[]> {
+  const res = await apiFetch("/api/github/installations/sync", { method: "POST" });
+  const body = await readJSON<{ installations?: ApiGitHubInstallation[] }>(res);
+  return body.installations || [];
+}
+
+export async function fetchInstallationRepositories(
+  installationID: number,
+): Promise<ApiGitHubRepo[]> {
+  const res = await apiFetch(
+    `/api/github/installations/${encodeURIComponent(String(installationID))}/repositories`,
+  );
+  const body = await readJSON<{ repositories?: ApiGitHubRepo[] }>(res);
+  return body.repositories || [];
+}
+
+export async function fetchProjectSSHKey(projectID: string): Promise<ApiProjectSSHKey> {
+  const res = await apiFetch(`/api/projects/${encodeURIComponent(projectID)}/ssh-key`);
+  const body = await readJSON<{ ssh_key?: ApiProjectSSHKey }>(res);
+  return body.ssh_key || { configured: false };
+}
+
+export async function generateProjectSSHKey(projectID: string): Promise<ApiProjectSSHKey> {
+  const res = await apiFetch(`/api/projects/${encodeURIComponent(projectID)}/ssh-key`, {
+    method: "POST",
+  });
+  const body = await readJSON<{ ssh_key: ApiProjectSSHKey }>(res);
+  return body.ssh_key;
+}
+
+export async function deleteProjectSSHKey(projectID: string): Promise<void> {
+  const res = await apiFetch(`/api/projects/${encodeURIComponent(projectID)}/ssh-key`, {
+    method: "DELETE",
+  });
+  await readJSON(res);
+}
+
+export async function updateProjectGitSource(
+  projectID: string,
+  gitSource: ProjectGitSource,
+  installationID?: number,
+): Promise<void> {
+  const body: Record<string, unknown> = { git_source: gitSource };
+  if (installationID && installationID > 0) {
+    body.github_installation_id = installationID;
+  }
+  const res = await apiFetch(`/api/projects/${encodeURIComponent(projectID)}/git-source`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  await readJSON(res);
 }
 
 export async function deployProject(

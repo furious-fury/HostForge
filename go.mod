@@ -8,6 +8,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/moby/moby/api v1.54.1
 	github.com/moby/moby/client v0.4.0
+	golang.org/x/crypto v0.32.0
 	modernc.org/sqlite v1.38.2
 )
 
@@ -48,7 +49,6 @@ require (
 	go.opentelemetry.io/otel v1.35.0 // indirect
 	go.opentelemetry.io/otel/metric v1.35.0 // indirect
 	go.opentelemetry.io/otel/trace v1.35.0 // indirect
-	golang.org/x/crypto v0.32.0 // indirect
 	golang.org/x/net v0.34.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect

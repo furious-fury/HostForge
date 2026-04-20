@@ -14,12 +14,12 @@ import (
 
 // ListRemoteBranches returns sorted branch names available on repoURL and a
 // best-effort inferred default branch.
-func ListRemoteBranches(ctx context.Context, repoURL string) ([]string, string, error) {
+func ListRemoteBranches(ctx context.Context, repoURL string, auth AuthOptions) ([]string, string, error) {
 	remote := gogit.NewRemote(memory.NewStorage(), &config.RemoteConfig{
 		Name: "origin",
 		URLs: []string{strings.TrimSpace(repoURL)},
 	})
-	refs, err := remote.ListContext(ctx, &gogit.ListOptions{})
+	refs, err := remote.ListContext(ctx, &gogit.ListOptions{Auth: authMethodForRepo(repoURL, auth)})
 	if err != nil {
 		return nil, "", fmt.Errorf("list remote refs: %w", err)
 	}
@@ -65,12 +65,12 @@ func ListRemoteBranches(ctx context.Context, repoURL string) ([]string, string, 
 
 // ResolveBranch returns requested when set; otherwise tries to infer a remote
 // default branch and falls back to "main".
-func ResolveBranch(ctx context.Context, repoURL, requested string) string {
+func ResolveBranch(ctx context.Context, repoURL, requested string, auth AuthOptions) string {
 	branch := strings.TrimSpace(requested)
 	if branch != "" {
 		return branch
 	}
-	_, inferred, err := ListRemoteBranches(ctx, repoURL)
+	_, inferred, err := ListRemoteBranches(ctx, repoURL, auth)
 	if err == nil && strings.TrimSpace(inferred) != "" {
 		return inferred
 	}

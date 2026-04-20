@@ -95,6 +95,50 @@ func buildDockerEnvFromProject(ctx context.Context, log *slog.Logger, store *rep
 	return out, nil
 }
 
+// GitAuthResolver returns per-project git transport credentials. The server and
+// CLI pass an implementation that prefers App > PAT > SSH > public; callers that
+// pass nil fall back to the legacy PAT-only logic in legacyGitAuthFromProject.
+type GitAuthResolver interface {
+	ResolveAuthOptions(ctx context.Context, project models.Project) (git.AuthOptions, error)
+}
+
+// resolveProjectGitAuth picks the resolver when non-nil, otherwise falls back
+// to the legacy sealed-PAT logic.
+func resolveProjectGitAuth(ctx context.Context, store *repository.Store, project models.Project, sealer *envcrypt.Sealer, resolver GitAuthResolver) (git.AuthOptions, error) {
+	if resolver != nil {
+		opts, err := resolver.ResolveAuthOptions(ctx, project)
+		if err != nil {
+			return git.AuthOptions{}, ErrCode("git_auth_prepare_failed", err)
+		}
+		return opts, nil
+	}
+	return legacyGitAuthFromProject(ctx, store, project.ID, sealer)
+}
+
+// legacyGitAuthFromProject decrypts per-project PAT credentials for clone/list
+// operations. It is retained as the default when no resolver is provided so
+// existing unit tests keep working.
+func legacyGitAuthFromProject(ctx context.Context, store *repository.Store, projectID string, sealer *envcrypt.Sealer) (git.AuthOptions, error) {
+	row, err := store.GetProjectGitAuthSealed(ctx, projectID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return git.AuthOptions{}, nil
+		}
+		return git.AuthOptions{}, ErrCode("git_auth_lookup_failed", err)
+	}
+	if sealer == nil {
+		return git.AuthOptions{}, ErrCode("env_encryption_key_missing", fmt.Errorf("project has stored git auth but encryption key is not configured"))
+	}
+	if strings.ToLower(strings.TrimSpace(row.Provider)) != "github" {
+		return git.AuthOptions{}, ErrCode("git_auth_provider_unsupported", fmt.Errorf("provider %q", row.Provider))
+	}
+	pt, err := sealer.Open(row.TokenCT)
+	if err != nil {
+		return git.AuthOptions{}, ErrCode("git_auth_decrypt_failed", err)
+	}
+	return git.AuthOptions{GitHubToken: string(pt)}, nil
+}
+
 // PrepareDeploy creates a queued deployment row and returns execution metadata.
 func PrepareDeploy(ctx context.Context, cfg *config.Config, store *repository.Store, in DeployPrepareInput) (DeployJob, error) {
 	repoURL := strings.TrimSpace(in.RepoURL)
@@ -177,7 +221,8 @@ func recordDeployObs(ctx context.Context, log *slog.Logger, job DeployJob, step,
 }
 
 // ExecuteDeploy runs clone/build/run/health/cutover for a prepared deployment.
-func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob, sealer *envcrypt.Sealer) (result DeployResult, err error) {
+// authResolver may be nil; when nil, legacy sealed-PAT lookup is used.
+func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob, sealer *envcrypt.Sealer, authResolver GitAuthResolver) (result DeployResult, err error) {
 	deployStart := time.Now()
 	log = log.With("project_id", job.Project.ID, "deployment_id", job.Deployment.ID)
 	defer func() {
@@ -243,7 +288,14 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	t0 := time.Now()
 	log.Info("deploy step", "step", "clone_start", "repo_url", redact.RepoURLForLog(job.RepoURL), "worktree", job.Worktree)
 	_, _ = fmt.Fprintf(combinedOut, "hostforge: cloning url=%s worktree=%s\n", redact.RepoURLForLog(job.RepoURL), job.Worktree)
-	if err := git.CloneOrUpdate(ctx, job.RepoURL, job.Branch, job.Worktree); err != nil {
+	gitAuth, err := resolveProjectGitAuth(ctx, store, job.Project, sealer, authResolver)
+	if err != nil {
+		e := ErrCode("git_auth_prepare_failed", err)
+		markFailed(e)
+		_, _ = fmt.Fprintf(combinedOut, "hostforge: git auth setup failed: %v\n", err)
+		return DeployResult{}, e
+	}
+	if err := git.CloneOrUpdate(ctx, job.RepoURL, job.Branch, job.Worktree, gitAuth); err != nil {
 		e := ErrCode("clone_failed", err)
 		markFailed(e)
 		_, _ = fmt.Fprintf(combinedOut, "hostforge: clone failed: %v\n", err)
@@ -432,12 +484,13 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 }
 
 // Deploy runs a deployment end-to-end from persisted acceptance to cutover.
-func Deploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, in DeployPrepareInput, sealer *envcrypt.Sealer) (DeployResult, error) {
+// authResolver may be nil; when nil, legacy sealed-PAT lookup is used.
+func Deploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, in DeployPrepareInput, sealer *envcrypt.Sealer, authResolver GitAuthResolver) (DeployResult, error) {
 	job, err := PrepareDeploy(ctx, cfg, store, in)
 	if err != nil {
 		return DeployResult{}, err
 	}
-	return ExecuteDeploy(ctx, log, cfg, store, job, sealer)
+	return ExecuteDeploy(ctx, log, cfg, store, job, sealer, authResolver)
 }
 
 // SyncCaddyRoutes regenerates HostForge-managed routes and updates ssl_status per outcome.

@@ -21,14 +21,14 @@ func WorktreeDir(repoURL, branch string) string {
 }
 
 // CloneOrUpdate clones repoURL into destDir, or opens and pulls if dest is already a repo.
-func CloneOrUpdate(ctx context.Context, repoURL, branch, destDir string) error {
+func CloneOrUpdate(ctx context.Context, repoURL, branch, destDir string, auth AuthOptions) error {
 	if err := os.MkdirAll(filepath.Dir(destDir), 0o755); err != nil {
 		return fmt.Errorf("mkdir parent: %w", err)
 	}
 
 	gitDir := filepath.Join(destDir, ".git")
 	if st, err := os.Stat(gitDir); err == nil && st.IsDir() {
-		return pull(ctx, destDir, branch)
+		return pull(ctx, repoURL, destDir, branch, auth)
 	}
 	if _, err := os.Stat(destDir); err == nil {
 		if err := os.RemoveAll(destDir); err != nil {
@@ -39,6 +39,7 @@ func CloneOrUpdate(ctx context.Context, repoURL, branch, destDir string) error {
 	opts := &gogit.CloneOptions{
 		URL:      repoURL,
 		Progress: os.Stderr,
+		Auth:     authMethodForRepo(repoURL, auth),
 	}
 	if branch != "" {
 		opts.ReferenceName = plumbing.NewBranchReferenceName(branch)
@@ -47,12 +48,12 @@ func CloneOrUpdate(ctx context.Context, repoURL, branch, destDir string) error {
 
 	_, err := gogit.PlainCloneContext(ctx, destDir, false, opts)
 	if err != nil {
-		return fmt.Errorf("git clone %q: %w", repoURL, err)
+		return fmt.Errorf("git clone: %w", err)
 	}
 	return nil
 }
 
-func pull(ctx context.Context, repoPath, branch string) error {
+func pull(ctx context.Context, repoURL, repoPath, branch string, auth AuthOptions) error {
 	repo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
 		return fmt.Errorf("git open: %w", err)
@@ -61,7 +62,10 @@ func pull(ctx context.Context, repoPath, branch string) error {
 	if err != nil {
 		return fmt.Errorf("worktree: %w", err)
 	}
-	pullOpts := &gogit.PullOptions{RemoteName: "origin"}
+	pullOpts := &gogit.PullOptions{
+		RemoteName: "origin",
+		Auth:       authMethodForRepo(repoURL, auth),
+	}
 	if branch != "" {
 		pullOpts.ReferenceName = plumbing.NewBranchReferenceName(branch)
 		pullOpts.SingleBranch = true
