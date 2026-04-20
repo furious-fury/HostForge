@@ -28,6 +28,15 @@ const xml =
 fs.writeFileSync(path.join(siteRoot, "dist/sitemap.xml"), xml, "utf8");
 console.log("build-sitemap: wrote dist/sitemap.xml with", urls.length, "URLs (SITE_URL=", base, ")");
 
+const robots =
+  `User-agent: *\n` +
+  `Allow: /\n\n` +
+  `Sitemap: ${base}/sitemap.xml\n\n` +
+  `# Agent-readable docs index (see https://llmstxt.org/)\n` +
+  `# llms.txt: ${base}/llms.txt\n`;
+fs.writeFileSync(path.join(siteRoot, "dist/robots.txt"), robots, "utf8");
+console.log("build-sitemap: wrote dist/robots.txt");
+
 function escapeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }

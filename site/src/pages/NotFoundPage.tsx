@@ -10,6 +10,7 @@ export function NotFoundPage() {
     <>
       <Head>
         <title>Not found · HostForge</title>
+        <meta name="robots" content="noindex,follow" />
       </Head>
       <div className="flex min-h-screen flex-col items-center justify-center bg-bg px-6 text-text">
         <div className="absolute right-4 top-4 md:right-8">
