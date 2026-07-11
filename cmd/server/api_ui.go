@@ -17,6 +17,7 @@ import (
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/obs"
+	"github.com/hostforge/hostforge/internal/platformdomain"
 	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
 	"github.com/hostforge/hostforge/internal/services"
@@ -364,6 +365,10 @@ func (s *server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "create_project_failed"})
 			return
 		}
+	}
+	if _, _, err := platformdomain.Ensure(r.Context(), s.store, s.cfg.PlatformDomainBase, project); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "create_platform_domain_failed"})
+		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"status":  "created",

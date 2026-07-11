@@ -3,7 +3,7 @@ import type { ApiProject } from "./api";
 export type AccessLink = {
   href: string;
   label: string;
-  kind: "domain" | "direct";
+  kind: "domain";
 };
 
 function domainScheme(ssl: string): "http" | "https" {
@@ -14,7 +14,7 @@ function domainScheme(ssl: string): "http" | "https" {
   return "https";
 }
 
-/** Resolves where traffic can reach this project (Caddy hostnames + loopback bind). */
+/** Resolves public Caddy hostnames for a project. Container ports stay private. */
 export function projectAccessLinks(project: ApiProject | null): AccessLink[] {
   if (!project) {
     return [];
@@ -25,17 +25,7 @@ export function projectAccessLinks(project: ApiProject | null): AccessLink[] {
     const href = `${scheme}://${d.domain_name}`;
     out.push({ href, label: d.domain_name, kind: "domain" });
   }
-  const c = project.current_container;
-  const hp = c?.host_port;
-  if (hp && hp > 0) {
-    const href = `http://127.0.0.1:${hp}`;
-    out.push({
-      href,
-      label: `${href} (direct)`,
-      kind: "direct",
-    });
-  }
-  return out;
+	return out;
 }
 
 /** One-line summary for fleet tables (hostnames or loopback, comma-separated). */
@@ -45,6 +35,6 @@ export function projectReachSummary(project: ApiProject | null): string {
     return "—";
   }
   return links
-    .map((l) => (l.kind === "domain" ? l.label : l.href.replace(/^https?:\/\//, "")))
+    .map((l) => l.label)
     .join(", ");
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/nixpacks"
 	"github.com/hostforge/hostforge/internal/obs"
+	"github.com/hostforge/hostforge/internal/platformdomain"
 	"github.com/hostforge/hostforge/internal/railpack"
 	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
@@ -473,6 +474,13 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	msHealth := time.Since(t2).Milliseconds()
 	log.Info("deploy step", "step", "health_check_end", "status", "ok", "host_port", hostPortValue, "duration_ms", msHealth)
 	recordDeployObs(ctx, log, job, "health_check", "ok", t2, msHealth, "")
+
+	if _, _, err := platformdomain.Ensure(ctx, store, cfg.PlatformDomainBase, job.Project); err != nil {
+		e := ErrCode("platform_domain_ensure_failed", err)
+		markFailed(e)
+		cleanupCandidate("platform domain assignment failure")
+		return DeployResult{}, e
+	}
 
 	shouldSyncCaddy := cfg.SyncCaddy
 	if !shouldSyncCaddy {

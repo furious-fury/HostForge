@@ -425,17 +425,13 @@ export function ProjectPage() {
                   >
                     {link.label}
                   </a>
-                  {link.kind === "direct" && (
-                    <span className="ml-2 text-xs text-muted">(Docker publish on loopback)</span>
-                  )}
                 </li>
               ))}
             </ul>
           ) : (
             <p className="mt-2 text-sm text-muted">
-              No public hostname or loopback port yet. After a successful deploy you will see a{" "}
-              <span className="mono text-text">http://127.0.0.1:…</span> link here; add domains in the data plane to
-              show HTTPS URLs.
+              No public hostname yet. Configure a platform domain base to assign HTTPS URLs automatically, or add a
+              custom domain below.
             </p>
           )}
           <p className="mt-2 text-xs text-muted">
@@ -507,8 +503,8 @@ export function ProjectPage() {
           </Button>
         </div>
         <p className="mt-3 text-xs text-muted">
-          Redeploy triggers a fresh build. Rollback re-points Caddy to the previous successful deploy. Stop halts the active container without removing it. The service URL is always under{" "}
-          <span className="mono text-text">Access</span> above (restart does not change the loopback port).
+          Redeploy triggers a fresh build. Rollback re-points Caddy to the previous successful deploy. Stop halts the active container without removing it. Public service URLs are listed under{" "}
+          <span className="mono text-text">Access</span> above.
         </p>
       </Panel>
 

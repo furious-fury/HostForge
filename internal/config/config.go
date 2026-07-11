@@ -31,6 +31,9 @@ type Config struct {
 	CaddyRootConfig string
 	// SyncCaddy enables automatic caddy sync after successful deploy.
 	SyncCaddy bool
+	// PlatformDomainBase is the wildcard DNS base used for automatic project URLs.
+	// Example: apps.example.com produces project.apps.example.com.
+	PlatformDomainBase string
 	// HealthPath is the HTTP path used to probe new containers before cutover.
 	HealthPath string
 	// HealthTimeoutMS is per-request health probe timeout in milliseconds.
@@ -130,6 +133,8 @@ const (
 	CaddyRootConfigEnv = "HOSTFORGE_CADDY_ROOT_CONFIG"
 	// SyncCaddyEnv enables post-deploy Caddy sync when set to true.
 	SyncCaddyEnv = "HOSTFORGE_SYNC_CADDY"
+	// PlatformDomainBaseEnv enables automatic project hostnames below a wildcard DNS base.
+	PlatformDomainBaseEnv = "HOSTFORGE_PLATFORM_DOMAIN_BASE"
 	// HealthPathEnv configures the HTTP path used for container readiness probes.
 	HealthPathEnv = "HOSTFORGE_HEALTH_PATH"
 	// HealthTimeoutMSEnv sets per-request health check timeout in milliseconds.
@@ -391,6 +396,7 @@ func Load(dataDirFlag string) (*Config, error) {
 		CaddyGeneratedPath:        caddyGeneratedPath,
 		CaddyRootConfig:           caddyRootConfig,
 		SyncCaddy:                 syncCaddy,
+		PlatformDomainBase:        strings.Trim(strings.ToLower(strings.TrimSpace(os.Getenv(PlatformDomainBaseEnv))), "."),
 		HealthPath:                healthPath,
 		HealthTimeoutMS:           healthTimeoutMS,
 		HealthRetries:             healthRetries,
