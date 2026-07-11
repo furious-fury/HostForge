@@ -371,9 +371,13 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	if cfg.RailpackEnabled {
 		buildStep = "railpack_build"
 		log.Info("deploy step", "step", "railpack_build_start", "dir", job.Worktree, "image", job.ImageRef)
-		adapter, err := newRailpackAdapter(cfg)
+		railpackBuilder, err := newRailpackAdapter(cfg)
+		var dockerfileBuilder builder.Builder
 		if err == nil {
-			_, err = adapter.Build(ctx, builder.Request{
+			dockerfileBuilder, err = newDockerfileBuilder(cfg)
+		}
+		if err == nil {
+			_, err = (builder.Selection{Railpack: railpackBuilder, Dockerfile: dockerfileBuilder}).Build(ctx, builder.Request{
 				Worktree: job.Worktree,
 				ImageRef: job.ImageRef,
 				Platform: runtime.GOOS + "/" + runtime.GOARCH,
@@ -893,6 +897,19 @@ func newRailpackAdapter(cfg *config.Config) (*railpack.Adapter, error) {
 		Executor:      executor,
 		ArtifactsRoot: cfg.RailpackArtifactsDir,
 	})
+}
+
+func newDockerfileBuilder(cfg *config.Config) (builder.Builder, error) {
+	executor, err := railpack.NewBuildKitExecutor(railpack.BuildKitConfig{
+		Binary:          cfg.BuildKitBin,
+		Address:         cfg.BuildKitAddress,
+		FrontendImage:   cfg.RailpackFrontendImage,
+		RailpackVersion: cfg.RailpackVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return railpack.NewDockerfileBuilder(executor)
 }
 
 func railpackLogSink(out io.Writer) builder.EventSink {

@@ -94,6 +94,42 @@ func TestBuildKitExecutor_FailsWhenImageImportFails(t *testing.T) {
 	}
 }
 
+func TestBuildKitExecutor_BuildsRepositoryDockerfile(t *testing.T) {
+	t.Parallel()
+	request, _ := preparedBuildInput(t)
+	if err := os.WriteFile(filepath.Join(request.Worktree, "Dockerfile"), []byte("FROM scratch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{run: func(_ string, _ []string, _ string, stdout, _ io.Writer) error {
+		_, _ = io.WriteString(stdout, "docker image tar")
+		return nil
+	}}
+	result, err := testExecutor(t, runner, &fakeImageStore{imageID: "sha256:dockerfile"}).BuildDockerfile(context.Background(), request, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Kind != builder.KindDockerfile || result.ImageID != "sha256:dockerfile" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	args := strings.Join(runner.calls[0].args, " ")
+	if !strings.Contains(args, "--frontend=dockerfile.v0") || !strings.Contains(args, "filename=Dockerfile") {
+		t.Fatalf("unexpected BuildKit Dockerfile args: %s", args)
+	}
+}
+
+func TestBuildKitExecutor_RejectsMissingRepositoryDockerfile(t *testing.T) {
+	t.Parallel()
+	request, _ := preparedBuildInput(t)
+	runner := &fakeRunner{run: func(_ string, _ []string, _ string, _, _ io.Writer) error {
+		t.Fatal("runner must not be called")
+		return nil
+	}}
+	_, err := testExecutor(t, runner, &fakeImageStore{}).BuildDockerfile(context.Background(), request, nil)
+	if err == nil || len(runner.calls) != 0 {
+		t.Fatalf("got err=%v calls=%d", err, len(runner.calls))
+	}
+}
+
 func TestBuildKitExecutor_FailsWhenSolveFails(t *testing.T) {
 	t.Parallel()
 	request, preparation := preparedBuildInput(t)

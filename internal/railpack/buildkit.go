@@ -108,12 +108,45 @@ func (e *BuildKitExecutor) Build(ctx context.Context, request builder.Request, p
 	if err := validateBuildInput(request, preparation, e.railpackVersion); err != nil {
 		return builder.Result{}, err
 	}
+	imageID, err := e.solveDockerExport(ctx, request, e.buildArgs(request, preparation), stderr)
+	if err != nil {
+		return builder.Result{}, err
+	}
+	result := builder.Result{Kind: builder.KindRailpack, ImageRef: request.ImageRef, ImageID: imageID}
+	if err := result.Validate(request); err != nil {
+		return builder.Result{}, err
+	}
+	return result, nil
+}
+
+// BuildDockerfile submits a repository-root Dockerfile to BuildKit and uses
+// the same streamed Docker export/import path as Railpack frontend builds.
+func (e *BuildKitExecutor) BuildDockerfile(ctx context.Context, request builder.Request, stderr io.Writer) (builder.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return builder.Result{}, err
+	}
+	if e == nil || e.runner == nil || e.images == nil {
+		return builder.Result{}, errors.New("buildkit executor is not configured")
+	}
+	if err := validateDockerfileBuildInput(request); err != nil {
+		return builder.Result{}, err
+	}
+	imageID, err := e.solveDockerExport(ctx, request, e.dockerfileBuildArgs(request), stderr)
+	if err != nil {
+		return builder.Result{}, err
+	}
+	result := builder.Result{Kind: builder.KindDockerfile, ImageRef: request.ImageRef, ImageID: imageID}
+	if err := result.Validate(request); err != nil {
+		return builder.Result{}, err
+	}
+	return result, nil
+}
+
+func (e *BuildKitExecutor) solveDockerExport(ctx context.Context, request builder.Request, args []string, stderr io.Writer) (string, error) {
 	if stderr == nil {
 		stderr = io.Discard
 	}
-
 	reader, writer := io.Pipe()
-	args := e.buildArgs(request, preparation)
 	buildDone := make(chan error, 1)
 	go func() {
 		err := e.runner.Run(ctx, e.binary, args, request.Worktree, writer, stderr)
@@ -125,16 +158,12 @@ func (e *BuildKitExecutor) Build(ctx context.Context, request builder.Request, p
 	_ = reader.CloseWithError(importErr)
 	buildErr := <-buildDone
 	if buildErr != nil {
-		return builder.Result{}, fmt.Errorf("buildkit solve: %w", buildErr)
+		return "", fmt.Errorf("buildkit solve: %w", buildErr)
 	}
 	if importErr != nil {
-		return builder.Result{}, fmt.Errorf("import BuildKit image: %w", importErr)
+		return "", fmt.Errorf("import BuildKit image: %w", importErr)
 	}
-	result := builder.Result{Kind: builder.KindRailpack, ImageRef: request.ImageRef, ImageID: imageID}
-	if err := result.Validate(request); err != nil {
-		return builder.Result{}, err
-	}
-	return result, nil
+	return imageID, nil
 }
 
 func (e *BuildKitExecutor) buildArgs(request builder.Request, preparation Preparation) []string {
@@ -145,6 +174,23 @@ func (e *BuildKitExecutor) buildArgs(request builder.Request, preparation Prepar
 		"--local", "dockerfile=" + filepath.Dir(preparation.PlanPath),
 		"--frontend=gateway.v0",
 		"--opt", "source=" + e.frontendImage,
+		"--opt", "platform=" + request.Platform,
+		"--output", "type=docker,name=" + request.ImageRef,
+	}
+	if strings.TrimSpace(request.CacheKey) != "" {
+		args = append(args, "--opt", "cache-key="+request.CacheKey)
+	}
+	return args
+}
+
+func (e *BuildKitExecutor) dockerfileBuildArgs(request builder.Request) []string {
+	args := []string{
+		"--addr", e.address,
+		"build",
+		"--local", "context=" + request.Worktree,
+		"--local", "dockerfile=" + request.Worktree,
+		"--frontend=dockerfile.v0",
+		"--opt", "filename=Dockerfile",
 		"--opt", "platform=" + request.Platform,
 		"--output", "type=docker,name=" + request.ImageRef,
 	}
@@ -172,6 +218,23 @@ func validateBuildInput(request builder.Request, preparation Preparation, expect
 		if !info.Mode().IsRegular() || info.Size() == 0 {
 			return errors.New("prepared railpack artifact is invalid")
 		}
+	}
+	return nil
+}
+
+func validateDockerfileBuildInput(request builder.Request) error {
+	if err := builder.RequireWorktree(request); err != nil {
+		return err
+	}
+	if strings.TrimSpace(request.ImageRef) == "" || strings.TrimSpace(request.Platform) == "" {
+		return errors.New("buildkit image reference and platform are required")
+	}
+	info, err := os.Stat(filepath.Join(request.Worktree, "Dockerfile"))
+	if err != nil {
+		return fmt.Errorf("stat repository Dockerfile: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("repository Dockerfile must be a regular file")
 	}
 	return nil
 }
