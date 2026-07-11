@@ -1,9 +1,11 @@
 package services
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
+	"github.com/hostforge/hostforge/internal/builder"
 	"github.com/hostforge/hostforge/internal/config"
 )
 
@@ -52,5 +54,25 @@ func TestValidateRailpackConfig_AcceptsCompleteConfiguration(t *testing.T) {
 	t.Parallel()
 	if err := ValidateRailpackConfig(validRailpackConfig()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNewRailpackAdapter_UsesEnabledConfiguration(t *testing.T) {
+	t.Parallel()
+	adapter, err := newRailpackAdapter(validRailpackConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter == nil {
+		t.Fatal("expected adapter")
+	}
+}
+
+func TestRailpackLogSink_FormatsStructuredEvents(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	railpackLogSink(&out)(builder.Event{Phase: "build", Message: "building image"})
+	if got := out.String(); got != "hostforge: railpack build: building image\n" {
+		t.Fatalf("got %q", got)
 	}
 }

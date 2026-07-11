@@ -13,10 +13,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/hostforge/hostforge/internal/builder"
 	"github.com/hostforge/hostforge/internal/caddy"
 	"github.com/hostforge/hostforge/internal/config"
 	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
@@ -25,6 +27,7 @@ import (
 	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/nixpacks"
 	"github.com/hostforge/hostforge/internal/obs"
+	"github.com/hostforge/hostforge/internal/railpack"
 	"github.com/hostforge/hostforge/internal/redact"
 	"github.com/hostforge/hostforge/internal/repository"
 	"github.com/hostforge/hostforge/internal/reqctx"
@@ -310,37 +313,42 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	log.Info("deploy step", "step", "clone_end", "status", "ok", "duration_ms", msClone)
 	recordDeployObs(ctx, log, job, "clone", "ok", t0, msClone, "")
 
-	if tomlBody, gen := RenderWorktreeNixpacksToml(job.Project); gen {
-		nxPath := filepath.Join(job.Worktree, "nixpacks.toml")
-		if err := os.WriteFile(nxPath, []byte(tomlBody), 0o644); err != nil {
-			e := ErrCode("nixpacks_config_write_failed", err)
-			markFailed(e)
-			_, _ = fmt.Fprintf(combinedOut, "hostforge: failed to write nixpacks.toml: %v\n", err)
-			return DeployResult{}, e
-		}
-		rt, ei, eb, es := effectiveNixpacksCommandsForLog(job.Project)
-		_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== generated worktree nixpacks.toml (%d bytes) =====\n", len(tomlBody))
-		_, _ = fmt.Fprintf(combinedOut, "hostforge: effective nixpacks settings runtime=%s install=%q build=%q start=%q\n", rt, ei, eb, es)
-		_, _ = fmt.Fprint(combinedOut, "hostforge: (repo nixpacks.toml, if any, is merged/overridden per Nixpacks rules; see README)\n")
-		_, _ = fmt.Fprint(combinedOut, "hostforge: ========================================================\n\n")
-		log.Info("deploy step", "step", "nixpacks_toml_written", "path", nxPath, "bytes", len(tomlBody), "runtime", rt)
+	if cfg.RailpackEnabled {
+		_, _ = fmt.Fprint(combinedOut, "\nhostforge: Railpack/BuildKit builder enabled; Nixpacks worktree overrides are skipped.\n\n")
+		log.Info("deploy step", "step", "railpack_prepare", "status", "selected")
 	} else {
-		_, _ = fmt.Fprintf(combinedOut, "\nhostforge: no generated nixpacks.toml (runtime=auto, no command overrides)\n\n")
-		log.Info("deploy step", "step", "nixpacks_toml_skipped", "reason", "auto_no_overrides")
-	}
-
-	tPlan := time.Now()
-	if raw, err := nixpacks.PlanJSON(ctx, job.Worktree); err != nil {
-		log.Warn("deploy step", "step", "nixpacks_plan", "status", "skipped", "error", err)
-		_, _ = fmt.Fprintf(combinedOut, "hostforge: nixpacks plan skipped: %v\n", err)
-	} else {
-		kind, label := nixpacks.SummarizePlanWithWorktree(job.Worktree, raw)
-		if err := store.UpdateDeploymentStack(ctx, job.Deployment.ID, kind, label); err != nil {
-			log.Warn("deploy step", "step", "deployment_stack_persist", "status", "failed", "error", err)
+		if tomlBody, gen := RenderWorktreeNixpacksToml(job.Project); gen {
+			nxPath := filepath.Join(job.Worktree, "nixpacks.toml")
+			if err := os.WriteFile(nxPath, []byte(tomlBody), 0o644); err != nil {
+				e := ErrCode("nixpacks_config_write_failed", err)
+				markFailed(e)
+				_, _ = fmt.Fprintf(combinedOut, "hostforge: failed to write nixpacks.toml: %v\n", err)
+				return DeployResult{}, e
+			}
+			rt, ei, eb, es := effectiveNixpacksCommandsForLog(job.Project)
+			_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== generated worktree nixpacks.toml (%d bytes) =====\n", len(tomlBody))
+			_, _ = fmt.Fprintf(combinedOut, "hostforge: effective nixpacks settings runtime=%s install=%q build=%q start=%q\n", rt, ei, eb, es)
+			_, _ = fmt.Fprint(combinedOut, "hostforge: (repo nixpacks.toml, if any, is merged/overridden per Nixpacks rules; see README)\n")
+			_, _ = fmt.Fprint(combinedOut, "hostforge: ========================================================\n\n")
+			log.Info("deploy step", "step", "nixpacks_toml_written", "path", nxPath, "bytes", len(tomlBody), "runtime", rt)
 		} else {
-			log.Info("deploy step", "step", "nixpacks_plan", "duration_ms", time.Since(tPlan).Milliseconds(), "stack_kind", kind, "stack_label", label)
-			if kind != "" || label != "" {
-				_, _ = fmt.Fprintf(combinedOut, "hostforge: detected stack kind=%q label=%q\n", kind, label)
+			_, _ = fmt.Fprintf(combinedOut, "\nhostforge: no generated nixpacks.toml (runtime=auto, no command overrides)\n\n")
+			log.Info("deploy step", "step", "nixpacks_toml_skipped", "reason", "auto_no_overrides")
+		}
+
+		tPlan := time.Now()
+		if raw, err := nixpacks.PlanJSON(ctx, job.Worktree); err != nil {
+			log.Warn("deploy step", "step", "nixpacks_plan", "status", "skipped", "error", err)
+			_, _ = fmt.Fprintf(combinedOut, "hostforge: nixpacks plan skipped: %v\n", err)
+		} else {
+			kind, label := nixpacks.SummarizePlanWithWorktree(job.Worktree, raw)
+			if err := store.UpdateDeploymentStack(ctx, job.Deployment.ID, kind, label); err != nil {
+				log.Warn("deploy step", "step", "deployment_stack_persist", "status", "failed", "error", err)
+			} else {
+				log.Info("deploy step", "step", "nixpacks_plan", "duration_ms", time.Since(tPlan).Milliseconds(), "stack_kind", kind, "stack_label", label)
+				if kind != "" || label != "" {
+					_, _ = fmt.Fprintf(combinedOut, "hostforge: detected stack kind=%q label=%q\n", kind, label)
+				}
 			}
 		}
 	}
@@ -359,20 +367,48 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	}
 
 	t1 := time.Now()
-	log.Info("deploy step", "step", "nixpacks_build_start", "dir", job.Worktree, "image", job.ImageRef)
-	if err := nixpacks.BuildImageWithWriters(ctx, job.Worktree, job.ImageRef, combinedOut, combinedOut); err != nil {
-		e := ErrCode("nixpacks_build_failed", err)
-		markFailed(e)
-		_, _ = fmt.Fprintf(combinedOut, "hostforge: ===== NIXPACKS IMAGE BUILD FAILED =====\nhostforge: nixpacks failed: %v\n", err)
-		ms := time.Since(t1).Milliseconds()
-		log.Info("deploy step", "step", "nixpacks_build_end", "status", "failed", "duration_ms", ms)
-		recordDeployObs(ctx, log, job, "nixpacks_build", "failed", t1, ms, FirstPublicCode(e))
-		return DeployResult{}, e
+	buildStep := "nixpacks_build"
+	if cfg.RailpackEnabled {
+		buildStep = "railpack_build"
+		log.Info("deploy step", "step", "railpack_build_start", "dir", job.Worktree, "image", job.ImageRef)
+		adapter, err := newRailpackAdapter(cfg)
+		if err == nil {
+			_, err = adapter.Build(ctx, builder.Request{
+				Worktree: job.Worktree,
+				ImageRef: job.ImageRef,
+				Platform: runtime.GOOS + "/" + runtime.GOARCH,
+				CacheKey: job.Project.ID,
+			}, railpackLogSink(combinedOut))
+		}
+		if err != nil {
+			e := ErrCode("railpack_build_failed", err)
+			markFailed(e)
+			_, _ = fmt.Fprintf(combinedOut, "hostforge: ===== RAILPACK BUILDKIT IMAGE BUILD FAILED =====\nhostforge: railpack failed: %v\n", err)
+			ms := time.Since(t1).Milliseconds()
+			log.Info("deploy step", "step", "railpack_build_end", "status", "failed", "duration_ms", ms)
+			recordDeployObs(ctx, log, job, buildStep, "failed", t1, ms, FirstPublicCode(e))
+			return DeployResult{}, e
+		}
+		_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== RAILPACK BUILDKIT IMAGE BUILD SUCCEEDED image=%s =====\n\n", job.ImageRef)
+		msRailpack := time.Since(t1).Milliseconds()
+		log.Info("deploy step", "step", "railpack_build_end", "status", "ok", "duration_ms", msRailpack)
+		recordDeployObs(ctx, log, job, buildStep, "ok", t1, msRailpack, "")
+	} else {
+		log.Info("deploy step", "step", "nixpacks_build_start", "dir", job.Worktree, "image", job.ImageRef)
+		if err := nixpacks.BuildImageWithWriters(ctx, job.Worktree, job.ImageRef, combinedOut, combinedOut); err != nil {
+			e := ErrCode("nixpacks_build_failed", err)
+			markFailed(e)
+			_, _ = fmt.Fprintf(combinedOut, "hostforge: ===== NIXPACKS IMAGE BUILD FAILED =====\nhostforge: nixpacks failed: %v\n", err)
+			ms := time.Since(t1).Milliseconds()
+			log.Info("deploy step", "step", "nixpacks_build_end", "status", "failed", "duration_ms", ms)
+			recordDeployObs(ctx, log, job, buildStep, "failed", t1, ms, FirstPublicCode(e))
+			return DeployResult{}, e
+		}
+		_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== NIXPACKS IMAGE BUILD SUCCEEDED image=%s =====\n\n", job.ImageRef)
+		msNix := time.Since(t1).Milliseconds()
+		log.Info("deploy step", "step", "nixpacks_build_end", "status", "ok", "duration_ms", msNix)
+		recordDeployObs(ctx, log, job, buildStep, "ok", t1, msNix, "")
 	}
-	_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== NIXPACKS IMAGE BUILD SUCCEEDED image=%s =====\n\n", job.ImageRef)
-	msNix := time.Since(t1).Milliseconds()
-	log.Info("deploy step", "step", "nixpacks_build_end", "status", "ok", "duration_ms", msNix)
-	recordDeployObs(ctx, log, job, "nixpacks_build", "ok", t1, msNix, "")
 
 	extraEnv, err := buildDockerEnvFromProject(ctx, log, store, job.Project.ID, sealer)
 	if err != nil {
@@ -836,6 +872,36 @@ func ValidateRuntimeConfig(cfg *config.Config) error {
 		return err
 	}
 	return nil
+}
+
+func newRailpackAdapter(cfg *config.Config) (*railpack.Adapter, error) {
+	planner, err := railpack.NewPlanner(cfg.RailpackBin, cfg.RailpackVersion)
+	if err != nil {
+		return nil, err
+	}
+	executor, err := railpack.NewBuildKitExecutor(railpack.BuildKitConfig{
+		Binary:          cfg.BuildKitBin,
+		Address:         cfg.BuildKitAddress,
+		FrontendImage:   cfg.RailpackFrontendImage,
+		RailpackVersion: cfg.RailpackVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return railpack.NewAdapter(railpack.AdapterConfig{
+		Planner:       planner,
+		Executor:      executor,
+		ArtifactsRoot: cfg.RailpackArtifactsDir,
+	})
+}
+
+func railpackLogSink(out io.Writer) builder.EventSink {
+	return func(event builder.Event) {
+		if out == nil {
+			return
+		}
+		_, _ = fmt.Fprintf(out, "hostforge: railpack %s: %s\n", event.Phase, event.Message)
+	}
 }
 
 // ValidateRailpackConfig validates the disabled-by-default Railpack/BuildKit
