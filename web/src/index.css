@@ -3,51 +3,55 @@
 @tailwind utilities;
 
 :root {
-  --hf-bg: #181513;
-  --hf-surface: #211c18;
-  --hf-surface-alt: #2b251f;
-  --hf-border: #3b332b;
-  --hf-border-strong: #65594d;
-  --hf-text: #f4efe9;
-  --hf-muted: #b2a697;
-  --hf-primary: #f16c38;
+  /* Foundation primitives and semantic aliases. */
+  --hf-foundation-900: #262626;
+  --hf-forge: #a41623;
+  --hf-signal: #ffb320;
+  --hf-bg: #1e1e1e;
+  --hf-surface: #292929;
+  --hf-surface-alt: #333333;
+  --hf-border: #4a4a47;
+  --hf-border-strong: #7a7a74;
+  --hf-text: #fafafa;
+  --hf-muted: #c4c4bd;
+  --hf-primary: var(--hf-forge);
   --hf-primary-ink: #ffffff;
-  --hf-success: #5b8f68;
-  --hf-danger: #ef4444;
-  --hf-danger-rgb: 239 68 68;
-  --hf-warning: #c9851b;
-  --hf-info: #496f94;
-  --hf-terminal: #d1f7c4;
-  --hf-terminal-bg: #07090c;
-  --hf-terminal-fg: #d1f7c4;
+  --hf-signal-ink: #262626;
+  --hf-success: #38b87a;
+  --hf-danger: #ff6b62;
+  --hf-danger-rgb: 255 107 98;
+  --hf-warning: #ffc04d;
+  --hf-info: #78aaff;
+  --hf-terminal: #262626;
+  --hf-terminal-bg: #171717;
+  --hf-terminal-fg: #f2f2ed;
   --hf-terminal-border: #3b332b;
   color-scheme: dark;
 }
 
 :root[data-theme="light"] {
-  --hf-bg: #f7f5f1;
+  --hf-bg: #ffffff;
   --hf-surface: #ffffff;
-  --hf-surface-alt: #f5f2ed;
-  --hf-border: #e2ddd5;
-  --hf-border-strong: #bfb6aa;
-  --hf-text: #211c16;
-  --hf-muted: #6f675d;
-  --hf-primary: #e85d2c;
+  --hf-surface-alt: #f7f7f5;
+  --hf-border: #d9d9d5;
+  --hf-border-strong: #8a8a84;
+  --hf-text: #262626;
+  --hf-muted: #5c5c58;
+  --hf-primary: var(--hf-forge);
   --hf-primary-ink: #ffffff;
-  --hf-success: #5b8f68;
-  --hf-danger: #b91c1c;
-  --hf-danger-rgb: 185 28 28;
-  --hf-warning: #b97411;
-  --hf-info: #496f94;
-  --hf-terminal: #1f2937;
-  --hf-terminal-bg: #ece8e1;
-  --hf-terminal-fg: #211c16;
-  --hf-terminal-border: #d6cec3;
+  --hf-signal-ink: #262626;
+  --hf-success: #18794e;
+  --hf-danger: #b42318;
+  --hf-danger-rgb: 180 35 24;
+  --hf-warning: #a15c00;
+  --hf-info: #2f5da8;
+  --hf-terminal: #262626;
+  --hf-terminal-bg: #f7f7f5;
+  --hf-terminal-fg: #262626;
+  --hf-terminal-border: #d9d9d5;
   color-scheme: light;
 }
-* {
-  border-radius: 6px !important;
-}
+
 
 html,
 body,
@@ -57,10 +61,8 @@ body,
 
 body {
   margin: 0;
-  font-family: Inter, system-ui, sans-serif;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background-color: var(--hf-bg);
-  background-image: radial-gradient(circle at 15% 10%, rgb(232 93 44 / 0.07) 0 1px, transparent 1.5px), radial-gradient(circle at 80% 18%, rgb(232 93 44 / 0.05) 0 1px, transparent 1.5px), linear-gradient(135deg, transparent 0 48%, rgb(150 130 110 / 0.09) 49% 50%, transparent 51% 100%);
-  background-size: 42px 42px, 64px 64px, 180px 180px;
   color: var(--hf-text);
   -webkit-font-smoothing: antialiased;
 }
@@ -108,8 +110,6 @@ body,
 
 ::-webkit-scrollbar-track {
   background-color: var(--hf-bg);
-  background-image: radial-gradient(circle at 15% 10%, rgb(232 93 44 / 0.07) 0 1px, transparent 1.5px), radial-gradient(circle at 80% 18%, rgb(232 93 44 / 0.05) 0 1px, transparent 1.5px), linear-gradient(135deg, transparent 0 48%, rgb(150 130 110 / 0.09) 49% 50%, transparent 51% 100%);
-  background-size: 42px 42px, 64px 64px, 180px 180px;
 }
 
 ::-webkit-scrollbar-thumb {

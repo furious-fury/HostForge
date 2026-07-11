@@ -14,6 +14,8 @@ export default {
         muted: "var(--hf-muted)",
         primary: "var(--hf-primary)",
         "primary-ink": "var(--hf-primary-ink)",
+        signal: "var(--hf-signal)",
+        "signal-ink": "var(--hf-signal-ink)",
         success: "var(--hf-success)",
         // `<alpha-value>` enables bg-danger/30, text-danger/80, etc. (see --hf-danger-rgb in index.css).
         danger: "rgb(var(--hf-danger-rgb) / <alpha-value>)",
@@ -25,13 +27,13 @@ export default {
         "terminal-border": "var(--hf-terminal-border)",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
-        display: ["Space Grotesk", "Inter", "system-ui", "sans-serif"],
+        sans: ["ui-sans-serif", "system-ui", "sans-serif"],
+        display: ["ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono", "SFMono-Regular", "Menlo", "monospace"],
       },
       borderRadius: {
         none: "0px",
-        panel: "10px",
+        panel: "8px",
       },
     },
   },

@@ -19,7 +19,7 @@ export function Terminal({ toolbar, text, scrollLocked, emptyMessage = "Awaiting
   }, [text, scrollLocked]);
 
   return (
-    <div className="flex flex-col border border-terminal-border bg-terminal-bg text-terminal-fg">
+    <section aria-label="Deployment logs" className="flex flex-col rounded-panel border border-terminal-border bg-terminal-bg text-terminal-fg">
       {toolbar && (
         <div className="flex flex-wrap items-center gap-2 border-b border-terminal-border bg-surface px-3 py-2 text-text">
           {toolbar}
@@ -32,6 +32,6 @@ export function Terminal({ toolbar, text, scrollLocked, emptyMessage = "Awaiting
       >
         {text || <span className="opacity-60">{emptyMessage}</span>}
       </div>
-    </div>
+    </section>
   );
 }

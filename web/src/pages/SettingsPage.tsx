@@ -32,9 +32,9 @@ export function SettingsPage() {
     <aside className="w-full shrink-0 lg:w-64">
       <Panel title="Settings">
         <nav className="space-y-4 py-2" aria-label="Settings sections">
-          {GROUPS.map((group) => <div key={group.label}>
+          {GROUPS.map((group) => <div key={group.label} className="space-y-1">
             <p className="mono px-3 pb-1 text-[10px] uppercase tracking-[0.08em] text-muted">{group.label}</p>
-            {group.items.map((item) => <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`block w-full border-l-2 px-3 py-2.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${active === item.id ? "border-primary bg-primary/10 font-medium text-text" : "border-transparent text-muted hover:bg-surface-alt hover:text-text"}`}>{item.label}</button>)}
+            {group.items.map((item) => <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`block w-full rounded-md px-3 py-2.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${active === item.id ? "bg-primary font-medium text-primary-ink shadow-sm" : "text-muted hover:bg-surface-alt hover:text-text"}`}>{item.label}</button>)}
           </div>)}
         </nav>
       </Panel>

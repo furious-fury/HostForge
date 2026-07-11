@@ -60,7 +60,8 @@ export function Shell({ children, onLogout }: ShellProps) {
           onLogout={onLogout}
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         />
-        <main className="overflow-y-auto bg-transparent p-6 sm:p-7 lg:p-9"><div className="mx-auto max-w-[1440px]">{children}</div></main>
+        <a className="skip-link" href="#main-content">Skip to content</a>
+        <main id="main-content" tabIndex={-1} className="overflow-y-auto bg-transparent p-6 sm:p-7 lg:p-9"><div className="mx-auto max-w-[1440px]">{children}</div></main>
         <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
       </div>
     </ProjectBreadcrumbProvider>

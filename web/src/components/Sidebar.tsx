@@ -68,7 +68,7 @@ export function Sidebar() {
                       className={({ isActive }) =>
                         `block rounded-md px-3 py-2.5 text-sm transition-colors ${
                           isActive
-                            ? "bg-primary/15 font-medium text-primary"
+                            ? "bg-primary font-medium text-primary-ink shadow-sm"
                             : "text-muted hover:bg-surface-alt hover:text-text"
                         }`
                       }
@@ -87,7 +87,7 @@ export function Sidebar() {
         <div className="flex items-center justify-between">
           <span className="mono uppercase tracking-wider">{RELEASE_LABEL}</span>
           <span className="mono inline-flex items-center gap-1 border border-success px-1.5 py-0.5 text-success">
-            <span aria-hidden>●</span>
+            <span aria-hidden>Ã¢â€”Â</span>
             <span>online</span>
           </span>
         </div>

@@ -21,10 +21,10 @@ export function Panel({
 }: PanelProps) {
   const borderClass = tone === "danger" ? "border-danger" : "border-border";
   return (
-    <section className={`overflow-hidden rounded-[10px] border ${borderClass} bg-surface ${className}`}>
+    <section className={`overflow-hidden rounded-panel border ${borderClass} bg-surface ${className}`}>
       {title !== undefined && (
-        <header className={`flex items-center justify-between border-b ${borderClass} px-5 py-4 sm:px-6`}>
-          <div className="font-medium text-sm text-text">{title}</div>
+        <header className={`flex items-center justify-between gap-4 border-b ${borderClass} px-5 py-4 sm:px-6`}>
+          <div className="text-sm font-semibold text-text">{title}</div>
           {actions && <div className="flex items-center gap-2">{actions}</div>}
         </header>
       )}

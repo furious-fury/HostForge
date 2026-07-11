@@ -5,11 +5,11 @@ export type ButtonVariant = "primary" | "secondary" | "danger" | "ghost";
 export type ButtonSize = "sm" | "md";
 
 const baseClasses =
-  "inline-flex items-center justify-center gap-2 rounded-[10px] border font-medium transition-all duration-150 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg select-none disabled:opacity-50 disabled:cursor-not-allowed";
+  "inline-flex min-h-10 items-center justify-center gap-2 rounded-md border font-medium transition-colors duration-150 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal focus-visible:ring-offset-2 focus-visible:ring-offset-bg select-none disabled:opacity-50 disabled:cursor-not-allowed";
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: "px-3 py-1.5 text-xs",
-  md: "px-4 py-2 text-xs",
+  sm: "min-h-8 px-3 py-1.5 text-xs",
+  md: "px-4 py-2 text-sm",
 };
 
 const variantClasses: Record<ButtonVariant, string> = {
