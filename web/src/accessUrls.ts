@@ -20,7 +20,11 @@ export function projectAccessLinks(project: ApiProject | null): AccessLink[] {
     return [];
   }
   const out: AccessLink[] = [];
+  if (project.default_url) {
+    out.push({ href: project.default_url, label: project.default_url.replace(/^https:\/\//, ""), kind: "domain" });
+  }
   for (const d of project.domains || []) {
+    if (project.default_url === `https://${d.domain_name}`) continue;
     const scheme = domainScheme(d.ssl_status);
     const href = `${scheme}://${d.domain_name}`;
     out.push({ href, label: d.domain_name, kind: "domain" });

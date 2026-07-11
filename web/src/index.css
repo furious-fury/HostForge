@@ -3,21 +3,21 @@
 @tailwind utilities;
 
 :root {
-  --hf-bg: #0b0f14;
-  --hf-surface: #111827;
-  --hf-surface-alt: #0f172a;
-  --hf-border: #1f2937;
-  --hf-border-strong: #374151;
-  --hf-text: #e5e7eb;
-  --hf-muted: #9ca3af;
-  --hf-primary: #f59e0b;
+  --hf-bg: #17130f;
+  --hf-surface: #221d17;
+  --hf-surface-alt: #2a241d;
+  --hf-border: #362f26;
+  --hf-border-strong: #5b5043;
+  --hf-text: #f5f0e8;
+  --hf-muted: #a89c8b;
+  --hf-primary: #f2703d;
   --hf-primary-ink: #0b0f14;
-  --hf-success: #22c55e;
+  --hf-success: #4fb37d;
   --hf-danger: #ef4444;
   /* Space-separated RGB for Tailwind `bg-danger/30` etc. (opacity modifiers do not work on hex `var()`). */
   --hf-danger-rgb: 239 68 68;
-  --hf-warning: #eab308;
-  --hf-info: #38bdf8;
+  --hf-warning: #e8a23a;
+  --hf-info: #5c93c4;
   --hf-terminal: #d1f7c4;
   --hf-terminal-bg: #07090c;
   --hf-terminal-fg: #d1f7c4;
@@ -26,20 +26,20 @@
 }
 
 :root[data-theme="light"] {
-  --hf-bg: #f5f5f5;
+  --hf-bg: #faf8f4;
   --hf-surface: #ffffff;
-  --hf-surface-alt: #fafafa;
-  --hf-border: #d4d4d4;
-  --hf-border-strong: #111827;
-  --hf-text: #0b0f14;
-  --hf-muted: #525252;
-  --hf-primary: #d97706;
+  --hf-surface-alt: #f4efe8;
+  --hf-border: #e8e2d8;
+  --hf-border-strong: #c7beb2;
+  --hf-text: #211c16;
+  --hf-muted: #726b5e;
+  --hf-primary: #e85d2c;
   --hf-primary-ink: #ffffff;
-  --hf-success: #15803d;
+  --hf-success: #3e9467;
   --hf-danger: #b91c1c;
   --hf-danger-rgb: 185 28 28;
-  --hf-warning: #a16207;
-  --hf-info: #0369a1;
+  --hf-warning: #c77f17;
+  --hf-info: #3e77a6;
   --hf-terminal: #1f2937;
   --hf-terminal-bg: #d4d4d4;
   --hf-terminal-fg: #0b0f14;

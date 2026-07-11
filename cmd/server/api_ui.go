@@ -74,6 +74,8 @@ type apiProject struct {
 	Domains          []apiDomain      `json:"domains,omitempty"`
 	DNSGuidance      *dnsops.Guidance `json:"dns_guidance,omitempty"`
 	CurrentContainer *apiContainer    `json:"current_container,omitempty"`
+	DefaultURL       string           `json:"default_url,omitempty"`
+	DefaultURLKind   string           `json:"default_url_kind"`
 }
 
 type apiDeployment struct {
@@ -994,6 +996,18 @@ func (s *server) attachProjectSummary(ctx context.Context, out *apiProject, full
 		return fmt.Errorf("project domains: %w", err)
 	}
 	out.Domains = make([]apiDomain, 0, len(domains))
+	base := strings.Trim(strings.ToLower(strings.TrimSpace(s.cfg.PlatformDomainBase)), ".")
+	out.DefaultURLKind = "none"
+	if base != "" {
+		for _, d := range domains {
+			name := strings.ToLower(strings.TrimSpace(d.DomainName))
+			if strings.HasSuffix(name, "."+base) {
+				out.DefaultURL = "https://" + name
+				out.DefaultURLKind = "platform"
+				break
+			}
+		}
+	}
 	if fullDNS {
 		expectedIPv4, v4src, v4warn := dnsops.ResolveExpectedIPv4(ctx, s.cfg)
 		names := make([]string, 0, len(domains))

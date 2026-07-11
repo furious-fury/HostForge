@@ -26,10 +26,12 @@ export default {
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],
+        display: ["Space Grotesk", "Inter", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono", "SFMono-Regular", "Menlo", "monospace"],
       },
       borderRadius: {
         none: "0px",
+        panel: "10px",
       },
     },
   },

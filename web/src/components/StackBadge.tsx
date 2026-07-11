@@ -31,43 +31,39 @@ function legacyIconBasenamesFromLabel(stackLabel: string): string[] {
  * Built-in basename aliases (optional files): golang→go, next→node_next, react→node_cra, vite→node_vite, vue→node_nuxt, html5→Staticfile.
  * Always ends with default.*, node.*, then the inline glyph.
  */
-function stackIconCandidates(kind: string, stackLabel: string): string[] {
-  const b = stackIconsBase();
-  const k = (kind || "").toLowerCase() || "unknown";
-  const lab = (stackLabel || "").toLowerCase();
+const stackIconRegistry: Record<string, { name: string; ext: "png" | "svg" }> = {
+  node: { name: "node", ext: "png" },
+  node_spa: { name: "node", ext: "png" },
+  node_next: { name: "next", ext: "png" },
+  node_vite: { name: "vite", ext: "png" },
+  node_nuxt: { name: "vue", ext: "png" },
+  node_cra: { name: "react", ext: "png" },
+  node_remix: { name: "node", ext: "png" },
+  node_svelte: { name: "node", ext: "png" },
+  node_astro: { name: "node", ext: "png" },
+  go: { name: "golang", ext: "png" },
+  golang: { name: "golang", ext: "png" },
+  csharp: { name: "c#", ext: "png" },
+  "c#": { name: "c#", ext: "png" },
+  staticfile: { name: "html5", ext: "png" },
+  html: { name: "html5", ext: "png" },
+  unknown: { name: "default", ext: "svg" },
+  default: { name: "default", ext: "svg" },
+  python: { name: "python", ext: "png" },
+  ruby: { name: "ruby", ext: "png" },
+  php: { name: "php", ext: "png" },
+  rust: { name: "rust", ext: "png" },
+  java: { name: "java", ext: "png" },
+  deno: { name: "deno", ext: "png" },
+  django: { name: "django", ext: "png" },
+};
 
-  const aliasBasenames: Record<string, string[]> = {
-    go: ["golang", "go"],
-    node_next: ["next", "node_next"],
-    node_cra: ["react", "node_cra"],
-    node_vite: ["vite", "node_vite"],
-    node_nuxt: ["vue", "node_nuxt"],
-  };
-
-  let basenames: string[];
-  if (aliasBasenames[k]) {
-    basenames = aliasBasenames[k]!;
-  } else if ((k === "unknown" && lab.includes("staticfile")) || k === "staticfile") {
-    basenames = ["html5", "staticfile", "unknown"];
-  } else if (k === "unknown") {
-    basenames = ["unknown", ...legacyIconBasenamesFromLabel(stackLabel)];
-  } else {
-    basenames = [k];
-  }
-
-  const urls: string[] = [];
-  for (const name of basenames) {
-    urls.push(stackIconAssetUrl(b, name, "png"), stackIconAssetUrl(b, name, "svg"));
-  }
-  urls.push(
-    stackIconAssetUrl(b, "default", "png"),
-    stackIconAssetUrl(b, "default", "svg"),
-    stackIconAssetUrl(b, "node", "png"),
-    stackIconAssetUrl(b, "node", "svg"),
-  );
-  return urls;
+export function stackIconAssetFor(kind: string, stackLabel = ""): string | null {
+  const normalized = (kind || "").trim().toLowerCase();
+  const legacy = legacyIconBasenamesFromLabel(stackLabel)[0];
+  const entry = stackIconRegistry[normalized] || (legacy ? stackIconRegistry[legacy] : undefined);
+  return entry ? stackIconAssetUrl(stackIconsBase(), entry.name, entry.ext) : null;
 }
-
 /** Inline fallback when no asset under `public/stack-icons/` loads (same as previous StackIcon). */
 function LegacyStackGlyph({
   kind,
@@ -184,7 +180,7 @@ function StackIcon({
   className?: string;
 }) {
   const slug = (kind || "unknown").toLowerCase() || "unknown";
-  const candidates = useMemo(() => stackIconCandidates(kind, stackLabel), [kind, stackLabel]);
+  const asset = useMemo(() => stackIconAssetFor(kind, stackLabel), [kind, stackLabel]);
   const [idx, setIdx] = useState(0);
 
   useEffect(() => {
@@ -193,14 +189,14 @@ function StackIcon({
 
   const boxStyle = { width: STACK_ICON_PX, height: STACK_ICON_PX } as const;
 
-  if (idx >= candidates.length) {
+  if (!asset || idx > 0) {
     return <LegacyStackGlyph kind={slug} className={className} sizePx={STACK_ICON_PX} />;
   }
 
   return (
     <img
-      key={candidates[idx]}
-      src={candidates[idx]}
+      key={asset}
+      src={asset}
       alt=""
       width={STACK_ICON_PX}
       height={STACK_ICON_PX}

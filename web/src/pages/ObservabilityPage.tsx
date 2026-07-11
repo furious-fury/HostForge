@@ -58,7 +58,7 @@ export function ObservabilityPage() {
     <div className="flex flex-col gap-6">
       <header>
         <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Observe</div>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-text">Observability</h1>
+        <h1 className="font-display mt-1 text-2xl font-semibold tracking-tight text-text">Traffic and deploy health</h1>
         <p className="mt-2 max-w-3xl text-sm text-muted">
           Last-window aggregates, recent HTTP samples, and deploy step timings persisted on this HostForge instance
           (bounded SQLite retention). Correlation ids match server logs.
@@ -104,7 +104,7 @@ export function ObservabilityPage() {
         />
       </div>
 
-      <Panel title="System checks">
+      <Panel title="Host checks">
         <p className="mb-3 text-[11px] text-muted">
           Same probes as the dashboard; <span className="mono">error_code</span> helps when filing issues.
         </p>
@@ -130,8 +130,11 @@ export function ObservabilityPage() {
         </div>
       </Panel>
 
+      <div className="rounded-[10px] border border-border bg-surface-alt/40 px-4 py-3 text-sm text-muted">
+        <span className="font-medium text-text">Planned telemetry:</span> hourly trends, slow-route rankings, and failure summaries are not collected yet. This page shows only persisted request samples and deployment steps.
+      </div>
       <div className="grid gap-6 lg:grid-cols-2">
-        <Panel title="Recent deploy timelines">
+        <Panel title="Deployment health">
           <p className="mb-3 text-xs text-muted">
             One deploy per row: bar segments ≈ phase time (hover). Total ={" "}
             <span className="mono text-text">deploy_total</span>.
@@ -175,9 +178,9 @@ export function ObservabilityPage() {
           </div>
         </Panel>
 
-        <Panel title="Recent HTTP requests">
+        <Panel title="Request health">
           <p className="mb-3 text-xs text-muted">
-            Sampled API traffic (bounded SQLite). Correlate with logs via{" "}
+            Recent sampled API traffic. Correlate an individual request with logs via{" "}
             <span className="mono text-text">request_id</span>.
           </p>
           {reqQ.isPending ? <p className="text-sm text-muted">Loading…</p> : null}

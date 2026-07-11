@@ -19,9 +19,9 @@ const toneClass: Record<NonNullable<KpiTileProps["tone"]>, string> = {
 
 export function KpiTile({ label, value, hint, footer, tone = "default" }: KpiTileProps) {
   return (
-    <div className="flex flex-col gap-2 border border-border bg-surface p-4">
-      <div className="mono text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">{label}</div>
-      <div className={`text-3xl font-semibold tabular-nums ${toneClass[tone]}`}>{value}</div>
+    <div className="flex flex-col gap-2 rounded-[10px] border border-border bg-surface p-5">
+      <div className="mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted">{label}</div>
+      <div className={`font-display text-3xl font-semibold tabular-nums ${toneClass[tone]}`}>{value}</div>
       {hint && <div className="text-xs text-muted">{hint}</div>}
       {footer ? <div className="mt-1 border-t border-border/60 pt-2">{footer}</div> : null}
     </div>

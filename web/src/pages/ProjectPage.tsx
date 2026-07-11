@@ -299,6 +299,8 @@ export function ProjectPage() {
   const containerStatus = project?.current_container?.status || "UNKNOWN";
   const latest = project?.latest_deployment;
   const accessLinks = projectAccessLinks(project);
+  const platformHostname = project?.default_url?.replace(/^https:\/\//, "") || "";
+  const customDomains = (project?.domains || []).filter((domain) => domain.domain_name !== platformHostname);
   const domainSummary =
     (project?.domains || []).length === 0
       ? "none configured"
@@ -749,9 +751,9 @@ export function ProjectPage() {
       </Panel>
 
       <Panel
-        title="Domains"
+        title="Custom domains"
         actions={
-          project?.domains?.length ? (
+          customDomains.length ? (
             <Button
               variant="secondary"
               size="sm"
@@ -764,6 +766,15 @@ export function ProjectPage() {
           ) : undefined
         }
       >
+        {project?.default_url ? (
+          <div className="mb-4 rounded-[10px] border border-border bg-surface-alt/50 p-3 text-sm">
+            <p className="font-medium text-text">Default platform URL</p>
+            <a href={project.default_url} target="_blank" rel="noreferrer" className="mono mt-1 inline-block break-all text-info hover:underline">{project.default_url}</a>
+            <p className="mt-1 text-xs text-muted">Managed by your platform domain. It cannot be edited or removed here.</p>
+          </div>
+        ) : (
+          <div className="mb-4 rounded-[10px] border border-warning/40 bg-warning/10 p-3 text-sm text-muted">No platform URL yet. Complete platform-domain onboarding to assign this project a managed HTTPS address.</div>
+        )}
         <p className="mb-3 text-xs text-muted">
           <span className="font-medium text-text">Caddy route</span> means HostForge applied a reverse-proxy snippet on this
           server (not that browsers can reach the site yet). <span className="font-medium text-text">Registrar DNS</span> is a
@@ -805,17 +816,17 @@ export function ProjectPage() {
                 }
                 await load({ silent: true });
               } catch (err) {
-                toast.error(err instanceof Error ? err.message : "Add domain failed.");
+                toast.error(err instanceof Error ? err.message : "Add custom domain failed.");
               } finally {
                 setDomainBusy("");
               }
             }}
           >
-            {domainBusy === "add" ? "Adding…" : "Add domain"}
+            {domainBusy === "add" ? "Adding…" : "Add custom domain"}
           </Button>
         </div>
-        {!project?.domains?.length ? (
-          <p className="pt-4 text-sm text-muted">No domains yet. Add a hostname above.</p>
+        {!customDomains.length ? (
+          <p className="pt-4 text-sm text-muted">No custom domains yet. Add an additional hostname above.</p>
         ) : (
           <div className="overflow-x-auto pt-4">
             <table className="w-full text-sm">
@@ -828,7 +839,7 @@ export function ProjectPage() {
                 </tr>
               </thead>
               <tbody>
-                {(project.domains || []).map((d) => (
+                {customDomains.map((d) => (
                   <tr key={d.id} className="border-b border-border/60">
                     <td className="py-3 pr-4">
                       {editDomainId === d.id ? (

@@ -228,7 +228,7 @@ export function DashboardPage() {
               <KpiTile
                 label="Disk (root)"
                 value={rootDisk ? formatPct(rootDisk.used_pct, fmtLocale, 1) : "—"}
-                hint={rootDisk ? rootDisk.mount : "No mount data"}
+                hint={rootDisk ? `${formatBytes(rootDisk.used_bytes, fmtLocale)} / ${formatBytes(rootDisk.total_bytes, fmtLocale)} on ${rootDisk.mount}` : "No mount data"}
                 tone={rootDisk ? pctTone(rootDisk.used_pct) : "default"}
                 footer={<Sparkline values={diskSeries} strokeClassName="stroke-warning" />}
               />

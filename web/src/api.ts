@@ -47,6 +47,8 @@ export type ApiProject = {
   domains?: ApiDomain[];
   dns_guidance?: DnsGuidance;
   current_container?: ApiContainer;
+  default_url?: string;
+  default_url_kind?: "platform" | "none";
 };
 
 export type ApiDeployment = {
