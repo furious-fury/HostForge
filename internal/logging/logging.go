@@ -1,3 +1,4 @@
+// Package logging configures structured logging shared by CLI and (later) server.
 package logging
 
 import (

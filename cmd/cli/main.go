@@ -1,22 +1,27 @@
+// Package main implements the hostforge command-line interface: deploy (clone, build, run)
+// and version. Deploy persists control-plane state to SQLite under the configured data directory.
 package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
-	"net/url"
 	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
-	"time"
 
 	"github.com/hostforge/hostforge/internal/config"
-	"github.com/hostforge/hostforge/internal/docker"
+	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
+	"github.com/hostforge/hostforge/internal/database"
+	"github.com/hostforge/hostforge/internal/dnsops"
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/logging"
-	"github.com/hostforge/hostforge/internal/nixpacks"
+	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/hostforge/hostforge/internal/services"
+	"github.com/hostforge/hostforge/internal/version"
 )
 
 func main() {
@@ -29,8 +34,17 @@ func main() {
 	case "deploy":
 		code := runDeploy(log, os.Args[2:])
 		os.Exit(code)
+	case "domain":
+		code := runDomain(log, os.Args[2:])
+		os.Exit(code)
+	case "caddy":
+		code := runCaddy(log, os.Args[2:])
+		os.Exit(code)
+	case "validate":
+		code := runValidate(log, os.Args[2:])
+		os.Exit(code)
 	case "version":
-		fmt.Println("hostforge dev")
+		fmt.Printf("hostforge %s\n", version.Display())
 		os.Exit(0)
 	default:
 		printUsage()
@@ -43,6 +57,11 @@ func printUsage() {
 
 Usage:
   hostforge deploy [flags] <repo_url>
+  hostforge domain add [flags] --domain <host> <repo_url>
+  hostforge domain remove [flags] (--id <domain_id> | --domain <host> <repo_url>)
+  hostforge domain edit [flags] --id <domain_id> --domain <new_host>
+  hostforge caddy sync [flags]
+  hostforge validate docker|preflight
   hostforge version
 
 deploy clones the repository (HTTPS), runs nixpacks build in the worktree, and streams build logs to stdout/stderr.
@@ -60,14 +79,37 @@ Flags for deploy:
     	range end when host-port=-1 (default from %s)
   -container-port int
     	app port inside container (default from %s)
+  -health-path string
+		HTTP path probed before cutover (default from %s)
+  -health-timeout-ms int
+		per-request health timeout in milliseconds (default from %s)
+  -health-retries int
+		number of health probe attempts before deploy fails (default from %s)
+  -health-interval-ms int
+		delay between health probes in milliseconds (default from %s)
+  -health-expected-min int
+		minimum accepted health status code (default from %s)
+  -health-expected-max int
+		maximum accepted health status code (default from %s)
+  -sync-caddy
+		run caddy sync after successful deploy (default from %s)
 
-`, os.Args[0], config.DataDirEnv, config.HostPortEnv, config.PortStartEnv, config.PortEndEnv, config.ContainerPortEnv)
+`, os.Args[0], config.DataDirEnv, config.HostPortEnv, config.PortStartEnv, config.PortEndEnv, config.ContainerPortEnv, config.HealthPathEnv, config.HealthTimeoutMSEnv, config.HealthRetriesEnv, config.HealthIntervalMSEnv, config.HealthExpectedMinEnv, config.HealthExpectedMaxEnv, config.SyncCaddyEnv)
 }
 
+// runDeploy clones repoURL, builds a Docker image with Nixpacks, runs a container, and records
+// project/deployment/container rows in SQLite. Status flow: QUEUED → BUILDING → SUCCESS or FAILED
+// (FAILED also records error_message). On failure after deployment creation, the deployment is
+// marked FAILED; no container row is written unless the container started successfully.
 func runDeploy(log *slog.Logger, args []string) int {
 	defaultHostPort, defaultPortStart, defaultPortEnd, defaultContainerPort, err := config.RuntimeDefaults()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: runtime env defaults: %v\n", err)
+		return 2
+	}
+	defaultHealthPath, defaultHealthTimeoutMS, defaultHealthRetries, defaultHealthIntervalMS, defaultHealthExpectedMin, defaultHealthExpectedMax, err := config.HealthDefaults()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: health env defaults: %v\n", err)
 		return 2
 	}
 
@@ -79,6 +121,13 @@ func runDeploy(log *slog.Logger, args []string) int {
 	portStart := fs.Int("port-start", defaultPortStart, "range start when host-port=-1")
 	portEnd := fs.Int("port-end", defaultPortEnd, "range end when host-port=-1")
 	containerPort := fs.Int("container-port", defaultContainerPort, "app port inside container")
+	healthPath := fs.String("health-path", defaultHealthPath, "HTTP path probed before cutover")
+	healthTimeoutMS := fs.Int("health-timeout-ms", defaultHealthTimeoutMS, "per-request health timeout in milliseconds")
+	healthRetries := fs.Int("health-retries", defaultHealthRetries, "number of health probe attempts before deploy fails")
+	healthIntervalMS := fs.Int("health-interval-ms", defaultHealthIntervalMS, "delay between health probes in milliseconds")
+	healthExpectedMin := fs.Int("health-expected-min", defaultHealthExpectedMin, "minimum accepted health status code")
+	healthExpectedMax := fs.Int("health-expected-max", defaultHealthExpectedMax, "maximum accepted health status code")
+	syncCaddy := fs.Bool("sync-caddy", cfgBoolDefault(config.SyncCaddyEnv, false), "run caddy sync after successful deploy")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -89,8 +138,8 @@ func runDeploy(log *slog.Logger, args []string) int {
 		fs.PrintDefaults()
 		return 2
 	}
-	repoURL := strings.TrimSpace(rest[0])
-	if err := validateRepoURL(repoURL); err != nil {
+	repoURL, err := services.CanonicalRepoURL(rest[0])
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: invalid repo URL: %v\n", err)
 		return 2
 	}
@@ -104,131 +153,400 @@ func runDeploy(log *slog.Logger, args []string) int {
 	cfg.PortStart = *portStart
 	cfg.PortEnd = *portEnd
 	cfg.ContainerPort = *containerPort
-	if err := validateRuntimeConfig(cfg); err != nil {
+	cfg.HealthPath = *healthPath
+	cfg.HealthTimeoutMS = *healthTimeoutMS
+	cfg.HealthRetries = *healthRetries
+	cfg.HealthIntervalMS = *healthIntervalMS
+	cfg.HealthExpectedMin = *healthExpectedMin
+	cfg.HealthExpectedMax = *healthExpectedMax
+	cfg.SyncCaddy = *syncCaddy
+	if err := services.ValidateRuntimeConfig(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "error: runtime config: %v\n", err)
 		return 2
 	}
-	for _, d := range []string{cfg.DataDir, cfg.WorktreesDir(), cfg.BuildsDir()} {
+	for _, d := range []string{cfg.DataDir, cfg.WorktreesDir(), cfg.BuildsDir(), cfg.LogsDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", d, err)
 			return 1
 		}
 	}
 
-	slug := git.WorktreeDir(repoURL, *branch)
-	worktree := filepath.Join(cfg.WorktreesDir(), slug)
-	buildID := time.Now().UTC().Format("20060102t150405")
-	imageRef := fmt.Sprintf("hostforge/%s:%s", slug, buildID)
-	containerName := fmt.Sprintf("hostforge-%s-%s", slug[:12], buildID)
-
 	ctx := context.Background()
-	dockerClient, err := docker.NewClient(ctx)
+	// Control-plane DB: schema + migrations applied on open (see internal/database).
+	db, err := database.OpenSQLite(ctx, cfg.DBPath())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: docker: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
 		return 1
 	}
-	defer dockerClient.Close()
-
-	log.Info("cloning", "url", repoURL, "worktree", worktree)
-	if err := git.CloneOrUpdate(ctx, repoURL, *branch, worktree); err != nil {
-		fmt.Fprintf(os.Stderr, "error: clone: %v\n", err)
-		return 1
+	defer db.Close()
+	store := repository.New(db)
+	var envSealer *envcrypt.Sealer
+	if k := strings.TrimSpace(os.Getenv(config.EnvEncryptionKeyEnv)); k != "" {
+		sealer, err := envcrypt.NewFromBase64Key(k)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %s: %v\n", config.EnvEncryptionKeyEnv, err)
+			return 1
+		}
+		envSealer = sealer
 	}
-
-	hostPortValue, err := docker.PickHostPort(cfg.HostPort, cfg.PortStart, cfg.PortEnd)
+	resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch), git.AuthOptions{})
+	project, err := store.EnsureProject(ctx, repoURL, resolvedBranch)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: host port selection: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: project state: %v\n", err)
 		return 1
+	}
+	result, err := services.Deploy(ctx, log, cfg, store, services.DeployPrepareInput{
+		Project: project,
+		RepoURL: repoURL,
+		Branch:  resolvedBranch,
+	}, envSealer, cliGitAuthResolver(ctx, store, envSealer))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: deploy: %v\n", err)
+		return 1
+	}
+	fmt.Printf("deployment_id=%s\ncontainer_id=%s\nimage=%s\ncontainer_port=%d\nhost_port=%d\nurl=%s\n",
+		result.DeploymentID, result.ContainerID, result.ImageRef, result.ContainerPort, result.HostPort, result.URL)
+	return 0
+}
+
+func runDomain(log *slog.Logger, args []string) int {
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		fmt.Fprintln(os.Stderr, "error: domain requires a subcommand (supported: add, remove, edit)")
+		return 2
+	}
+	switch strings.TrimSpace(args[0]) {
+	case "add":
+		return runDomainAdd(log, args[1:])
+	case "remove":
+		return runDomainRemove(log, args[1:])
+	case "edit":
+		return runDomainEdit(log, args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "error: unsupported domain subcommand %q\n", args[0])
+		return 2
+	}
+}
+
+func runDomainAdd(log *slog.Logger, args []string) int {
+	fs := flag.NewFlagSet("domain add", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dataDir := fs.String("data-dir", "", "data directory (overrides "+config.DataDirEnv+")")
+	branch := fs.String("branch", "", "git branch (default: remote default)")
+	domainName := fs.String("domain", "", "domain to route to latest successful deployment")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fmt.Fprintln(os.Stderr, "error: domain add requires exactly one <repo_url>")
+		return 2
+	}
+	if strings.TrimSpace(*domainName) == "" {
+		fmt.Fprintln(os.Stderr, "error: --domain is required")
+		return 2
+	}
+	if err := dnsops.ValidateDomainName(strings.TrimSpace(*domainName)); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
+	repoURL, err := services.CanonicalRepoURL(rest[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: invalid repo URL: %v\n", err)
+		return 2
 	}
 
-	log.Info("running nixpacks image build", "dir", worktree, "image", imageRef)
-	if err := nixpacks.BuildImage(ctx, worktree, imageRef); err != nil {
-		fmt.Fprintf(os.Stderr, "error: nixpacks: %v\n", err)
-		return 1
-	}
-	containerID, err := docker.RunContainer(ctx, dockerClient, docker.RunOptions{
-		ImageRef:      imageRef,
-		ContainerName: containerName,
-		ContainerPort: cfg.ContainerPort,
-		HostPort:      hostPortValue,
-	})
+	cfg, err := config.Load(*dataDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: run container: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: config: %v\n", err)
 		return 1
 	}
-	url := fmt.Sprintf("http://127.0.0.1:%d", hostPortValue)
-	log.Info("deploy finished", "image", imageRef, "container_id", shortID(containerID), "url", url)
-	fmt.Printf("container_id=%s\nimage=%s\ncontainer_port=%d\nhost_port=%d\nurl=%s\n",
-		containerID, imageRef, cfg.ContainerPort, hostPortValue, url)
-	if err := writeLastDeploy(filepath.Join(cfg.DataDir, "last-deploy.json"), deployState{
-		ContainerID:   containerID,
-		ImageRef:      imageRef,
-		RepoURL:       repoURL,
-		Branch:        strings.TrimSpace(*branch),
-		HostPort:      hostPortValue,
-		ContainerPort: cfg.ContainerPort,
-		Worktree:      worktree,
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to write last-deploy.json: %v\n", err)
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", cfg.DataDir, err)
+		return 1
+	}
+	ctx := context.Background()
+	db, err := database.OpenSQLite(ctx, cfg.DBPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+	store := repository.New(db)
+
+	resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch), git.AuthOptions{})
+	project, err := store.EnsureProject(ctx, repoURL, resolvedBranch)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: project state: %v\n", err)
+		return 1
+	}
+	domainRec, err := store.CreateDomain(ctx, project.ID, strings.TrimSpace(*domainName))
+	if err != nil {
+		if errors.Is(err, repository.ErrDuplicateDomain) {
+			fmt.Fprintln(os.Stderr, "error: duplicate domain (hostname already registered)")
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "error: domain state: %v\n", err)
+		return 1
+	}
+	log.Info("domain added", "domain", domainRec.DomainName, "project_id", domainRec.ProjectID)
+	fmt.Printf("domain_id=%s\ndomain=%s\nproject_id=%s\nssl_status=%s\n",
+		domainRec.ID, domainRec.DomainName, domainRec.ProjectID, domainRec.SSLStatus)
+	printDNSGuidance(os.Stdout, cfg, ctx, []string{domainRec.DomainName})
+	if err := maybeSyncDomainsCLI(ctx, log, cfg, store); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: caddy sync after domain change: %v\n", err)
 	}
 	return 0
 }
 
-func validateRepoURL(raw string) error {
-	u, err := url.Parse(raw)
+func runDomainRemove(log *slog.Logger, args []string) int {
+	fs := flag.NewFlagSet("domain remove", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dataDir := fs.String("data-dir", "", "data directory (overrides "+config.DataDirEnv+")")
+	id := fs.String("id", "", "domain row id (from domain add / UI)")
+	domainName := fs.String("domain", "", "hostname to remove (requires <repo_url>)")
+	branch := fs.String("branch", "", "git branch when resolving project by repo (default: remote default)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	rest := fs.Args()
+	if strings.TrimSpace(*id) == "" && (strings.TrimSpace(*domainName) == "" || len(rest) != 1) {
+		fmt.Fprintln(os.Stderr, "error: domain remove requires either --id <domain_id> OR (--domain <host> and exactly one <repo_url>)")
+		return 2
+	}
+	if strings.TrimSpace(*id) != "" && (strings.TrimSpace(*domainName) != "" || len(rest) != 0) {
+		fmt.Fprintln(os.Stderr, "error: when using --id, do not pass --domain or <repo_url>")
+		return 2
+	}
+	cfg, err := config.Load(*dataDir)
 	if err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "error: config: %v\n", err)
+		return 1
 	}
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return fmt.Errorf("only http(s) URLs are supported (got scheme %q)", u.Scheme)
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", cfg.DataDir, err)
+		return 1
 	}
-	if u.Host == "" {
-		return fmt.Errorf("missing host")
+	ctx := context.Background()
+	db, err := database.OpenSQLite(ctx, cfg.DBPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
+		return 1
 	}
-	return nil
+	defer db.Close()
+	store := repository.New(db)
+
+	var removedID string
+	if strings.TrimSpace(*id) != "" {
+		if _, err := store.GetDomainByID(ctx, *id); err != nil {
+			if errors.Is(err, repository.ErrDomainNotFound) {
+				fmt.Fprintln(os.Stderr, "error: domain not found")
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "error: lookup domain: %v\n", err)
+			return 1
+		}
+		if err := store.DeleteDomain(ctx, *id); err != nil {
+			fmt.Fprintf(os.Stderr, "error: delete domain: %v\n", err)
+			return 1
+		}
+		removedID = strings.TrimSpace(*id)
+	} else {
+		repoURL, err := services.CanonicalRepoURL(rest[0])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: invalid repo URL: %v\n", err)
+			return 2
+		}
+		resolvedBranch := git.ResolveBranch(ctx, repoURL, strings.TrimSpace(*branch), git.AuthOptions{})
+		project, err := store.EnsureProject(ctx, repoURL, resolvedBranch)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: project state: %v\n", err)
+			return 1
+		}
+		d, err := store.GetDomainByProjectAndName(ctx, project.ID, strings.TrimSpace(*domainName))
+		if err != nil {
+			if errors.Is(err, repository.ErrDomainNotFound) {
+				fmt.Fprintln(os.Stderr, "error: domain not found for this project")
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "error: lookup domain: %v\n", err)
+			return 1
+		}
+		if err := store.DeleteDomain(ctx, d.ID); err != nil {
+			fmt.Fprintf(os.Stderr, "error: delete domain: %v\n", err)
+			return 1
+		}
+		removedID = d.ID
+	}
+	log.Info("domain removed", "domain_id", removedID)
+	fmt.Printf("removed_domain_id=%s\n", removedID)
+	if err := maybeSyncDomainsCLI(ctx, log, cfg, store); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: caddy sync after domain change: %v\n", err)
+	}
+	return 0
 }
 
-func validateRuntimeConfig(cfg *config.Config) error {
-	if cfg.HostPort < -1 {
-		return fmt.Errorf("host port must be -1, 0, or >0")
+func runDomainEdit(log *slog.Logger, args []string) int {
+	fs := flag.NewFlagSet("domain edit", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dataDir := fs.String("data-dir", "", "data directory (overrides "+config.DataDirEnv+")")
+	id := fs.String("id", "", "domain row id")
+	newName := fs.String("domain", "", "new hostname (FQDN)")
+	if err := fs.Parse(args); err != nil {
+		return 2
 	}
-	if cfg.ContainerPort <= 0 {
-		return fmt.Errorf("container port must be > 0")
+	if strings.TrimSpace(*id) == "" || strings.TrimSpace(*newName) == "" {
+		fmt.Fprintln(os.Stderr, "error: domain edit requires --id and --domain <new_host>")
+		return 2
 	}
-	if cfg.HostPort == -1 {
-		if cfg.PortStart <= 0 || cfg.PortEnd <= 0 || cfg.PortStart > cfg.PortEnd {
-			return fmt.Errorf("invalid host port range %d..%d", cfg.PortStart, cfg.PortEnd)
+	if err := dnsops.ValidateDomainName(strings.TrimSpace(*newName)); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
+	cfg, err := config.Load(*dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: config: %v\n", err)
+		return 1
+	}
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", cfg.DataDir, err)
+		return 1
+	}
+	ctx := context.Background()
+	db, err := database.OpenSQLite(ctx, cfg.DBPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+	store := repository.New(db)
+
+	existing, err := store.GetDomainByID(ctx, *id)
+	if err != nil {
+		if errors.Is(err, repository.ErrDomainNotFound) {
+			fmt.Fprintln(os.Stderr, "error: domain not found")
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "error: lookup domain: %v\n", err)
+		return 1
+	}
+	updated, err := store.UpdateDomainName(ctx, existing.ProjectID, existing.ID, strings.TrimSpace(*newName))
+	if err != nil {
+		if errors.Is(err, repository.ErrDuplicateDomain) {
+			fmt.Fprintln(os.Stderr, "error: duplicate domain (hostname already registered)")
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "error: update domain: %v\n", err)
+		return 1
+	}
+	log.Info("domain updated", "domain_id", updated.ID, "domain", updated.DomainName)
+	fmt.Printf("domain_id=%s\ndomain=%s\nproject_id=%s\nssl_status=%s\n",
+		updated.ID, updated.DomainName, updated.ProjectID, updated.SSLStatus)
+	printDNSGuidance(os.Stdout, cfg, ctx, []string{updated.DomainName})
+	if err := maybeSyncDomainsCLI(ctx, log, cfg, store); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: caddy sync after domain change: %v\n", err)
+	}
+	return 0
+}
+
+func maybeSyncDomainsCLI(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store) error {
+	if !cfg.DomainSyncAfterMutate {
+		return nil
+	}
+	if strings.TrimSpace(cfg.CaddyRootConfig) == "" {
+		return nil
+	}
+	return services.SyncCaddyRoutes(ctx, log, cfg, store)
+}
+
+func printDNSGuidance(w io.Writer, cfg *config.Config, ctx context.Context, hostnames []string) {
+	g := dnsops.BuildGuidance(ctx, cfg, hostnames)
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "# --- DNS records (add at your DNS provider) ---")
+	fmt.Fprintf(w, "# IPv4 source: %s\n", g.IPv4Source)
+	if g.IPv4 != "" {
+		fmt.Fprintf(w, "# Suggested IPv4 target: %s\n", g.IPv4)
+	}
+	if g.IPv6 != "" {
+		fmt.Fprintf(w, "# IPv6 source: %s\n", g.IPv6Source)
+		fmt.Fprintf(w, "# Suggested IPv6 target: %s\n", g.IPv6)
+	}
+	for _, step := range g.Steps {
+		fmt.Fprintf(w, "# %s\n", step)
+	}
+	if len(g.Steps) > 0 {
+		fmt.Fprintln(w, "#")
+	}
+	for _, r := range g.Records {
+		if strings.TrimSpace(r.Value) == "" {
+			continue
+		}
+		fmt.Fprintf(w, "# %-5s name=%-8s value=%-40s zone=%s\n", r.Type, r.Name, r.Value, r.ZoneHint)
+		if r.Note != "" {
+			fmt.Fprintf(w, "#       %s\n", r.Note)
 		}
 	}
-	return nil
+	if g.Message != "" {
+		fmt.Fprintf(w, "# Note: %s\n", g.Message)
+	}
+	fmt.Fprintln(w, "# --- end DNS ---")
 }
 
-type deployState struct {
-	ContainerID   string `json:"container_id"`
-	ImageRef      string `json:"image_ref"`
-	RepoURL       string `json:"repo_url"`
-	Branch        string `json:"branch,omitempty"`
-	HostPort      int    `json:"host_port"`
-	ContainerPort int    `json:"container_port"`
-	Worktree      string `json:"worktree"`
-	CreatedAt     string `json:"created_at"`
+func runCaddy(log *slog.Logger, args []string) int {
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		fmt.Fprintln(os.Stderr, "error: caddy requires a subcommand (supported: sync)")
+		return 2
+	}
+	switch strings.TrimSpace(args[0]) {
+	case "sync":
+		return runCaddySync(log, args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "error: unsupported caddy subcommand %q\n", args[0])
+		return 2
+	}
 }
 
-func writeLastDeploy(path string, state deployState) error {
-	body, err := json.MarshalIndent(state, "", "  ")
+func runCaddySync(log *slog.Logger, args []string) int {
+	fs := flag.NewFlagSet("caddy sync", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dataDir := fs.String("data-dir", "", "data directory (overrides "+config.DataDirEnv+")")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	cfg, err := config.Load(*dataDir)
 	if err != nil {
-		return fmt.Errorf("encode state: %w", err)
+		fmt.Fprintf(os.Stderr, "error: config: %v\n", err)
+		return 1
 	}
-	if err := os.WriteFile(path, append(body, '\n'), 0o644); err != nil {
-		return fmt.Errorf("write file: %w", err)
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "error: mkdir %s: %v\n", cfg.DataDir, err)
+		return 1
 	}
-	return nil
+	ctx := context.Background()
+	db, err := database.OpenSQLite(ctx, cfg.DBPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+	store := repository.New(db)
+	if err := services.SyncCaddyRoutes(ctx, log, cfg, store); err != nil {
+		fmt.Fprintf(os.Stderr, "error: caddy sync: %v\n", err)
+		return 1
+	}
+	fmt.Printf("generated_path=%s\nroot_config=%s\n", cfg.CaddyGeneratedPath, cfg.CaddyRootConfig)
+	fmt.Println("caddy sync: ok (snippet written and root Caddyfile validated).")
+	fmt.Println("If Caddy was not running, reload was skipped; start it with: sudo systemctl start caddy")
+	return 0
 }
 
-func shortID(id string) string {
-	if len(id) <= 12 {
-		return id
+func cfgBoolDefault(envKey string, def bool) bool {
+	raw := strings.TrimSpace(os.Getenv(envKey))
+	if raw == "" {
+		return def
 	}
-	return id[:12]
+	val, err := strconv.ParseBool(raw)
+	if err != nil {
+		return def
+	}
+	return val
 }

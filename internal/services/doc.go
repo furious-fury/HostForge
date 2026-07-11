@@ -1,2 +1,2 @@
-// Package services contains domain orchestration (Phase 2+).
+// Package services holds orchestration above repositories (deploy pipeline and route sync).
 package services

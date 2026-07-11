@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+Sitemap: /sitemap.xml
+
+# Agent-readable docs index (see https://llmstxt.org/)
+# llms.txt: /llms.txt
