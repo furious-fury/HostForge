@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -829,6 +831,75 @@ func ValidateRuntimeConfig(cfg *config.Config) error {
 	}
 	if cfg.HealthExpectedMin <= 0 || cfg.HealthExpectedMax <= 0 || cfg.HealthExpectedMin > cfg.HealthExpectedMax {
 		return fmt.Errorf("invalid health expected status range %d..%d", cfg.HealthExpectedMin, cfg.HealthExpectedMax)
+	}
+	if err := ValidateRailpackConfig(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ValidateRailpackConfig validates the disabled-by-default Railpack/BuildKit
+// configuration without touching host services. It is safe to call in unit
+// tests and before HostForge creates its data directories.
+func ValidateRailpackConfig(cfg *config.Config) error {
+	if cfg == nil || !cfg.RailpackEnabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.RailpackBin) == "" || strings.TrimSpace(cfg.RailpackVersion) == "" {
+		return fmt.Errorf("railpack is enabled but helper binary and version are required")
+	}
+	if !strings.Contains(strings.TrimSpace(cfg.RailpackFrontendImage), "@sha256:") {
+		return fmt.Errorf("railpack is enabled but frontend image must be digest-pinned")
+	}
+	if strings.TrimSpace(cfg.BuildKitBin) == "" || strings.TrimSpace(cfg.BuildKitAddress) == "" {
+		return fmt.Errorf("railpack is enabled but BuildKit binary and address are required")
+	}
+	if strings.TrimSpace(cfg.RailpackArtifactsDir) == "" {
+		return fmt.Errorf("railpack is enabled but artifacts directory is required")
+	}
+	if cfg.RailpackBuildConcurrency <= 0 {
+		return fmt.Errorf("railpack build concurrency must be > 0")
+	}
+	if cfg.RailpackMinFreeDiskBytes <= 0 {
+		return fmt.Errorf("railpack minimum free disk bytes must be > 0")
+	}
+	return nil
+}
+
+// ValidateRailpackReadiness verifies the local dependencies when Railpack is
+// explicitly enabled. It is intentionally not called while the feature flag is
+// false, preserving the existing Nixpacks deployment baseline.
+func ValidateRailpackReadiness(ctx context.Context, cfg *config.Config) error {
+	if err := ValidateRailpackConfig(cfg); err != nil || cfg == nil || !cfg.RailpackEnabled {
+		return err
+	}
+	for _, binary := range []string{cfg.RailpackBin, cfg.BuildKitBin} {
+		if _, err := exec.LookPath(binary); err != nil {
+			return fmt.Errorf("railpack readiness: executable %q: %w", binary, err)
+		}
+	}
+	if err := os.MkdirAll(cfg.RailpackArtifactsDir, 0o700); err != nil {
+		return fmt.Errorf("railpack readiness: create artifacts directory: %w", err)
+	}
+	if info, err := os.Stat(cfg.RailpackArtifactsDir); err != nil || !info.IsDir() {
+		return fmt.Errorf("railpack readiness: artifacts directory unavailable")
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cli, err := docker.NewClient(checkCtx)
+	if err != nil {
+		return fmt.Errorf("railpack readiness: docker unavailable: %w", err)
+	}
+	defer cli.Close()
+	var output bytes.Buffer
+	cmd := exec.CommandContext(checkCtx, cfg.BuildKitBin, "--addr", cfg.BuildKitAddress, "debug", "workers")
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("railpack readiness: BuildKit unavailable: %w", err)
+	}
+	if strings.TrimSpace(output.String()) == "" {
+		return fmt.Errorf("railpack readiness: BuildKit returned no workers")
 	}
 	return nil
 }

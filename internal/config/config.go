@@ -65,6 +65,23 @@ type Config struct {
 	WebhookRateLimitPerMinute int
 	// LogsDirPath overrides where build logs are written (default: <data-dir>/logs).
 	LogsDirPath string
+	// RailpackEnabled enables the future Railpack/BuildKit path. It remains false
+	// by default until the deployment service is explicitly migrated.
+	RailpackEnabled bool
+	// RailpackBin and RailpackVersion identify the pinned prepare helper.
+	RailpackBin     string
+	RailpackVersion string
+	// RailpackFrontendImage must be an immutable digest-pinned frontend image.
+	RailpackFrontendImage string
+	// BuildKitBin and BuildKitAddress identify the local BuildKit daemon.
+	BuildKitBin     string
+	BuildKitAddress string
+	// RailpackArtifactsDir keeps generated plans outside source worktrees.
+	RailpackArtifactsDir string
+	// RailpackBuildConcurrency bounds concurrent BuildKit solves.
+	RailpackBuildConcurrency int
+	// RailpackMinFreeDiskBytes is the admission threshold for future build workers.
+	RailpackMinFreeDiskBytes int64
 	// DNSServerIPv4 is an explicit public IPv4 for DNS A record suggestions (overrides auto-detect).
 	DNSServerIPv4 string
 	// DNSServerIPv6 is an explicit public IPv6 for AAAA suggestions (overrides auto-detect).
@@ -147,6 +164,24 @@ const (
 	WebhookRateLimitPerMinuteEnv = "HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE"
 	// LogsDirEnv overrides the default logs directory under data dir.
 	LogsDirEnv = "HOSTFORGE_LOGS_DIR"
+	// RailpackEnabledEnv enables the future Railpack/BuildKit deployment path.
+	RailpackEnabledEnv = "HOSTFORGE_RAILPACK_ENABLED"
+	// RailpackBinEnv overrides the pinned Railpack prepare helper path.
+	RailpackBinEnv = "HOSTFORGE_RAILPACK_BIN"
+	// RailpackVersionEnv is the required helper/frontend release when enabled.
+	RailpackVersionEnv = "HOSTFORGE_RAILPACK_VERSION"
+	// RailpackFrontendImageEnv is a required digest-pinned BuildKit frontend image.
+	RailpackFrontendImageEnv = "HOSTFORGE_RAILPACK_FRONTEND_IMAGE"
+	// BuildKitBinEnv overrides the buildctl executable path.
+	BuildKitBinEnv = "HOSTFORGE_BUILDKIT_BIN"
+	// BuildKitAddressEnv identifies the local BuildKit daemon socket.
+	BuildKitAddressEnv = "HOSTFORGE_BUILDKIT_ADDRESS"
+	// RailpackArtifactsDirEnv overrides temporary generated-plan storage.
+	RailpackArtifactsDirEnv = "HOSTFORGE_RAILPACK_ARTIFACTS_DIR"
+	// RailpackBuildConcurrencyEnv bounds active Railpack BuildKit solves.
+	RailpackBuildConcurrencyEnv = "HOSTFORGE_RAILPACK_BUILD_CONCURRENCY"
+	// RailpackMinFreeDiskBytesEnv gates future builds under disk pressure.
+	RailpackMinFreeDiskBytesEnv = "HOSTFORGE_RAILPACK_MIN_FREE_DISK_BYTES"
 	// DNSServerIPv4Env sets a fixed IPv4 for DNS guidance (skips auto-detect when set).
 	DNSServerIPv4Env = "HOSTFORGE_DNS_SERVER_IPV4"
 	// DNSServerIPv6Env sets a fixed IPv6 for DNS guidance (optional).
@@ -288,6 +323,36 @@ func Load(dataDirFlag string) (*Config, error) {
 		return nil, err
 	}
 	logsDirPath := strings.TrimSpace(os.Getenv(LogsDirEnv))
+	railpackEnabled, err := envBool(RailpackEnabledEnv, false)
+	if err != nil {
+		return nil, err
+	}
+	railpackBin := strings.TrimSpace(os.Getenv(RailpackBinEnv))
+	if railpackBin == "" {
+		railpackBin = "railpack"
+	}
+	railpackVersion := strings.TrimSpace(os.Getenv(RailpackVersionEnv))
+	buildKitBin := strings.TrimSpace(os.Getenv(BuildKitBinEnv))
+	if buildKitBin == "" {
+		buildKitBin = "buildctl"
+	}
+	buildKitAddress := strings.TrimSpace(os.Getenv(BuildKitAddressEnv))
+	if buildKitAddress == "" {
+		buildKitAddress = "unix:///run/buildkit/buildkitd.sock"
+	}
+	railpackFrontendImage := strings.TrimSpace(os.Getenv(RailpackFrontendImageEnv))
+	railpackArtifactsDir := strings.TrimSpace(os.Getenv(RailpackArtifactsDirEnv))
+	if railpackArtifactsDir == "" {
+		railpackArtifactsDir = filepath.Join(abs, "railpack")
+	}
+	railpackBuildConcurrency, err := envInt(RailpackBuildConcurrencyEnv, 1)
+	if err != nil {
+		return nil, err
+	}
+	railpackMinFreeDiskBytes, err := envInt64(RailpackMinFreeDiskBytesEnv, 10*1024*1024*1024)
+	if err != nil {
+		return nil, err
+	}
 	dnsServerIPv4 := strings.TrimSpace(os.Getenv(DNSServerIPv4Env))
 	dnsServerIPv6 := strings.TrimSpace(os.Getenv(DNSServerIPv6Env))
 	dnsDetectURL := strings.TrimSpace(os.Getenv(DNSDetectURLEnv))
@@ -343,15 +408,24 @@ func Load(dataDirFlag string) (*Config, error) {
 		SessionCookieSecure:       sessionCookieSecure,
 		WebhookRateLimitPerMinute: webhookRateLimitPerMinute,
 		LogsDirPath:               logsDirPath,
+		RailpackEnabled:           railpackEnabled,
+		RailpackBin:               railpackBin,
+		RailpackVersion:           railpackVersion,
+		RailpackFrontendImage:     railpackFrontendImage,
+		BuildKitBin:               buildKitBin,
+		BuildKitAddress:           buildKitAddress,
+		RailpackArtifactsDir:      railpackArtifactsDir,
+		RailpackBuildConcurrency:  railpackBuildConcurrency,
+		RailpackMinFreeDiskBytes:  railpackMinFreeDiskBytes,
 		DNSServerIPv4:             dnsServerIPv4,
 		DNSServerIPv6:             dnsServerIPv6,
 		DNSDetectURL:              dnsDetectURL,
 		DNSDetectIPv6URL:          dnsDetectIPv6URL,
 		DNSDetectTimeoutMS:        dnsDetectTimeoutMS,
 		DomainSyncAfterMutate:     domainSyncAfterMutate,
-		CaddyCertPollIntervalSec: caddyCertPollIntervalSec,
-		CaddyAdminURL:            caddyAdminURL,
-		CaddyStorageRoot:         caddyStorageRoot,
+		CaddyCertPollIntervalSec:  caddyCertPollIntervalSec,
+		CaddyAdminURL:             caddyAdminURL,
+		CaddyStorageRoot:          caddyStorageRoot,
 	}, nil
 }
 
@@ -417,6 +491,18 @@ func envBool(key string, def bool) (bool, error) {
 	val, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, fmt.Errorf("%s must be a boolean: %w", key, err)
+	}
+	return val, nil
+}
+
+func envInt64(key string, def int64) (int64, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def, nil
+	}
+	val, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
 	return val, nil
 }

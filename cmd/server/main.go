@@ -125,6 +125,10 @@ func runServer(log *slog.Logger, args []string) int {
 	}
 
 	ctx := context.Background()
+	if err := services.ValidateRailpackReadiness(ctx, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "error: railpack readiness: %v\n", err)
+		return 2
+	}
 	db, err := database.OpenSQLite(ctx, cfg.DBPath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
