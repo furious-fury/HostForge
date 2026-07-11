@@ -52,11 +52,11 @@ export function Sidebar() {
             <div className="px-3 pb-1 mono text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">
               {group.label}
             </div>
-            <ul className="flex flex-col">
+            <ul className="flex flex-col gap-1">
               {group.items.map((item) =>
                 item.disabled ? (
                   <li key={item.to}>
-                    <span className="block cursor-not-allowed border-l-2 border-transparent px-3 py-2 text-sm text-muted opacity-50">
+                    <span className="block cursor-not-allowed rounded-md px-3 py-2.5 text-sm text-muted opacity-50">
                       {item.label}
                     </span>
                   </li>
@@ -66,10 +66,10 @@ export function Sidebar() {
                       to={item.to}
                       end={item.end}
                       className={({ isActive }) =>
-                        `block border-l-2 px-3 py-2 text-sm ${
+                        `block rounded-md px-3 py-2.5 text-sm transition-colors ${
                           isActive
-                            ? "border-primary bg-surface-alt text-text"
-                            : "border-transparent text-muted hover:border-border-strong hover:text-text"
+                            ? "bg-primary/15 font-medium text-primary"
+                            : "text-muted hover:bg-surface-alt hover:text-text"
                         }`
                       }
                     >

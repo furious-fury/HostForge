@@ -16,14 +16,14 @@ export function Panel({
   children,
   tone = "default",
   className = "",
-  bodyClassName = "p-4",
+  bodyClassName = "p-5 sm:p-6",
   noBody = false,
 }: PanelProps) {
   const borderClass = tone === "danger" ? "border-danger" : "border-border";
   return (
     <section className={`overflow-hidden rounded-[10px] border ${borderClass} bg-surface ${className}`}>
       {title !== undefined && (
-        <header className={`flex items-center justify-between border-b ${borderClass} px-4 py-3`}>
+        <header className={`flex items-center justify-between border-b ${borderClass} px-5 py-4 sm:px-6`}>
           <div className="font-medium text-sm text-text">{title}</div>
           {actions && <div className="flex items-center gap-2">{actions}</div>}
         </header>

@@ -60,7 +60,7 @@ export function Shell({ children, onLogout }: ShellProps) {
           onLogout={onLogout}
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         />
-        <main className="overflow-y-auto bg-transparent p-5 lg:p-7"><div className="mx-auto max-w-[1440px]">{children}</div></main>
+        <main className="overflow-y-auto bg-transparent p-6 sm:p-7 lg:p-9"><div className="mx-auto max-w-[1440px]">{children}</div></main>
         <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
       </div>
     </ProjectBreadcrumbProvider>
