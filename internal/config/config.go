@@ -103,6 +103,11 @@ type Config struct {
 	CaddyAdminURL string
 	// CaddyStorageRoot is optional on-disk Caddy data dir (e.g. ~/.local/share/caddy) for leaf cert scans.
 	CaddyStorageRoot string
+	// BootstrapEnabled enables the short-lived IP HTTPS onboarding ingress.
+	BootstrapEnabled   bool
+	BootstrapPublicIP  string
+	BootstrapHTTPSPort int
+	BootstrapExpiresAt string
 }
 
 // DataDirEnv is the environment variable overriding the default data directory.
@@ -204,7 +209,11 @@ const (
 	// CaddyAdminURLEnv overrides the Caddy admin API base URL for read-only probes.
 	CaddyAdminURLEnv = "HOSTFORGE_CADDY_ADMIN"
 	// CaddyStorageRootEnv points at Caddy's on-disk storage root for certificate file scans.
-	CaddyStorageRootEnv = "HOSTFORGE_CADDY_STORAGE_ROOT"
+	CaddyStorageRootEnv   = "HOSTFORGE_CADDY_STORAGE_ROOT"
+	BootstrapEnabledEnv   = "HOSTFORGE_BOOTSTRAP_ENABLED"
+	BootstrapPublicIPEnv  = "HOSTFORGE_BOOTSTRAP_PUBLIC_IP"
+	BootstrapHTTPSPortEnv = "HOSTFORGE_BOOTSTRAP_HTTPS_PORT"
+	BootstrapExpiresAtEnv = "HOSTFORGE_BOOTSTRAP_EXPIRES_AT"
 	// EnvEncryptionKeyEnv is an optional base64-encoded 32-byte AES-256 key used to encrypt
 	// per-project environment variable values at rest (see README). When unset, env CRUD
 	// API returns 503 and deploy skips injecting project env (unless ciphertext rows exist).
@@ -385,6 +394,14 @@ func Load(dataDirFlag string) (*Config, error) {
 		caddyAdminURL = "http://127.0.0.1:2019"
 	}
 	caddyStorageRoot := expandUserPath(strings.TrimSpace(os.Getenv(CaddyStorageRootEnv)))
+	bootstrapEnabled, err := envBool(BootstrapEnabledEnv, false)
+	if err != nil {
+		return nil, err
+	}
+	bootstrapPort, err := envInt(BootstrapHTTPSPortEnv, 443)
+	if err != nil {
+		return nil, err
+	}
 	return &Config{
 		DataDir:                   abs,
 		ListenAddr:                listen,
@@ -432,6 +449,10 @@ func Load(dataDirFlag string) (*Config, error) {
 		CaddyCertPollIntervalSec:  caddyCertPollIntervalSec,
 		CaddyAdminURL:             caddyAdminURL,
 		CaddyStorageRoot:          caddyStorageRoot,
+		BootstrapEnabled:          bootstrapEnabled,
+		BootstrapPublicIP:         strings.TrimSpace(os.Getenv(BootstrapPublicIPEnv)),
+		BootstrapHTTPSPort:        bootstrapPort,
+		BootstrapExpiresAt:        strings.TrimSpace(os.Getenv(BootstrapExpiresAtEnv)),
 	}, nil
 }
 

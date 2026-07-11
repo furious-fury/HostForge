@@ -98,6 +98,17 @@ export type SystemStatusCheck = {
   error_code?: string;
 };
 
+export type OnboardingStatus = {
+  bootstrap_enabled: boolean;
+  bootstrap_public_ip: string;
+  bootstrap_https_port: number;
+  bootstrap_expires_at: string;
+  github_app_complete: boolean;
+  platform_domain: string;
+  permanent_ingress_complete: boolean;
+  bootstrap_complete: boolean;
+  completed_at?: string;
+};
 export type SystemStatus = {
   version: string;
   checks: SystemStatusCheck[];
@@ -257,6 +268,11 @@ export async function fetchProjects(): Promise<ApiProject[]> {
   return body.projects || [];
 }
 
+export async function fetchOnboardingStatus(): Promise<OnboardingStatus> {
+  const res = await apiFetch("/api/onboarding");
+  const body = await readJSON<{ onboarding: OnboardingStatus }>(res);
+  return body.onboarding;
+}
 export async function fetchSystemStatus(): Promise<SystemStatus> {
   const res = await apiFetch("/api/system/status");
   return await readJSON<SystemStatus>(res);

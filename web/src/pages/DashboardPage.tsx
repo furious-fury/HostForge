@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { ApiDeployment, ApiProject } from "../api";
+import { ApiDeployment, ApiProject, fetchOnboardingStatus } from "../api";
 import { hostDiskMounts, hostMem, hostNetIfaces, type HostDiskUsage, type HostSample } from "../api/host";
 import { ButtonLink } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
@@ -55,6 +56,7 @@ export function DashboardPage() {
   const systemQ = useSystemStatusQuery();
   const hostSnapQ = useHostSnapshot();
   const hostHistQ = useHostHistory(120);
+  const onboardingQ = useQuery({ queryKey: ["onboarding"], queryFn: fetchOnboardingStatus, staleTime: 30_000, retry: 1 });
 
   const projects: ApiProject[] = projectsQ.data ?? [];
   const deployments: ApiDeployment[] = deploysQ.data ?? [];
@@ -159,6 +161,15 @@ export function DashboardPage() {
       </header>
 
       {projectsError && <div className="border border-danger p-3 text-sm text-danger">{projectsError}</div>}
+      {onboardingQ.data && !onboardingQ.data.bootstrap_complete && (
+        <Panel title="Onboarding progress">
+          <div className="grid gap-3 px-4 py-3 text-sm sm:grid-cols-3">
+            <div><span className={onboardingQ.data.github_app_complete ? "text-success" : "text-warning"}>{onboardingQ.data.github_app_complete ? "Complete" : "Pending"}</span><p className="mt-1 text-muted">GitHub App</p></div>
+            <div><span className={onboardingQ.data.platform_domain ? "text-success" : "text-warning"}>{onboardingQ.data.platform_domain || "Pending"}</span><p className="mt-1 text-muted">Platform domain</p></div>
+            <div><span className={onboardingQ.data.permanent_ingress_complete ? "text-success" : "text-warning"}>{onboardingQ.data.permanent_ingress_complete ? "Complete" : "Pending"}</span><p className="mt-1 text-muted">Permanent HTTPS</p></div>
+          </div>
+        </Panel>
+      )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <KpiTile label="Active Projects" value={dashOr(stats.activeProjects)} hint="Projects registered with the control plane" />

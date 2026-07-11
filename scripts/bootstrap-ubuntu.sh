@@ -29,7 +29,6 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y ca-certificates curl git gnupg ufw fail2ban snapd
 ufw allow OpenSSH
-ufw allow 80/tcp
 ufw allow 443/tcp
 ufw --force enable
 systemctl enable --now fail2ban
@@ -111,14 +110,56 @@ HOSTFORGE_RAILPACK_ARTIFACTS_DIR=/var/lib/hostforge/railpack
 HOSTFORGE_RAILPACK_BUILD_CONCURRENCY=1
 HOSTFORGE_RAILPACK_MIN_FREE_DISK_BYTES=10737418240
 EOF
+# Bootstrap ingress is the sole public control-plane listener. Caddy obtains an
+# IP-address certificate before HostForge is started; there is no HTTP fallback.
+PUBLIC_IP="$(curl -4fsS https://api.ipify.org)"
+BOOTSTRAP_EXPIRES_AT="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
+install -d -m 0770 -o root -g caddy /etc/caddy/hostforge.d
+install -m 0640 -o root -g caddy /dev/null /etc/caddy/hostforge.d/routes.caddy
+cat >/etc/caddy/Caddyfile <<EOF
+{
+    auto_https disable_redirects
+}
+
+# HostForge bootstrap: public IP HTTPS only; do not add an HTTP site block.
+https://${PUBLIC_IP} {
+    tls
+    reverse_proxy 127.0.0.1:8080
+}
+
+import /etc/caddy/hostforge.d/routes.caddy
+EOF
+cat >>/etc/hostforge/hostforge.env <<EOF
+HOSTFORGE_BOOTSTRAP_ENABLED=true
+HOSTFORGE_BOOTSTRAP_PUBLIC_IP=${PUBLIC_IP}
+HOSTFORGE_BOOTSTRAP_HTTPS_PORT=443
+HOSTFORGE_BOOTSTRAP_EXPIRES_AT=${BOOTSTRAP_EXPIRES_AT}
+HOSTFORGE_CADDY_ROOT_CONFIG=/etc/caddy/Caddyfile
+HOSTFORGE_CADDY_GENERATED_PATH=/etc/caddy/hostforge.d/routes.caddy
+HOSTFORGE_SYNC_CADDY=true
+HOSTFORGE_SESSION_COOKIE_SECURE=true
+EOF
+caddy validate --config /etc/caddy/Caddyfile
+systemctl restart caddy
+# A successful TLS handshake is the certificate-provisioning gate. Do not start
+# HostForge if Caddy cannot obtain an IP certificate.
+for attempt in $(seq 1 24); do
+  if curl --silent --show-error --output /dev/null --connect-timeout 5 "https://${PUBLIC_IP}/"; then
+    break
+  fi
+  if [[ "${attempt}" -eq 24 ]]; then
+    systemctl stop caddy
+    echo "error: bootstrap IP HTTPS certificate was not provisioned; HostForge was not started." >&2
+    exit 1
+  fi
+  sleep 5
+done
 systemctl restart hostforge-server
 
-cat <<'EOF'
+cat <<EOF
 
-HostForge is installed and listening privately on 127.0.0.1:8080.
-For first access, run from your computer:
-  ssh -N -L 8080:127.0.0.1:8080 root@YOUR_VPS_IP
-Then open http://localhost:8080 and sign in as admin with the secret you chose.
+HostForge is available over verified bootstrap HTTPS:
+  https://${PUBLIC_IP}/
 
-Next: configure a hostname in HostForge/Caddy for public HTTPS access.
+Sign in with the admin secret prompted during installation. Configure the GitHub App and permanent platform domain in onboarding. Once permanent HTTPS validates, HostForge atomically removes the IP bootstrap route.
 EOF

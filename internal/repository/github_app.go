@@ -58,6 +58,9 @@ func (s *Store) UpsertGitHubApp(ctx context.Context, in UpsertGitHubAppInput) (m
 	if err := tx.Commit(); err != nil {
 		return models.GitHubAppMeta{}, fmt.Errorf("commit github_app: %w", err)
 	}
+	if err := s.MarkGitHubAppComplete(ctx); err != nil {
+		return models.GitHubAppMeta{}, fmt.Errorf("mark onboarding github app: %w", err)
+	}
 	return s.GetGitHubAppMeta(ctx)
 }
 

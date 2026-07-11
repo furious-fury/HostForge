@@ -22,6 +22,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hostforge/hostforge/internal/auth"
+	"github.com/hostforge/hostforge/internal/bootstrap"
+
 	"github.com/hostforge/hostforge/internal/config"
 	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
 	"github.com/hostforge/hostforge/internal/database"
@@ -73,6 +75,17 @@ func runServer(log *slog.Logger, args []string) int {
 		return 1
 	}
 	cfg.ListenAddr = strings.TrimSpace(*listen)
+	if err := (bootstrap.Config{Enabled: cfg.BootstrapEnabled, PublicIP: cfg.BootstrapPublicIP, HTTPSPort: cfg.BootstrapHTTPSPort, ExpiresAt: cfg.BootstrapExpiresAt}).Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: bootstrap config: %v\n", err)
+		return 2
+	}
+	if cfg.BootstrapEnabled {
+		host, _, splitErr := net.SplitHostPort(cfg.ListenAddr)
+		if splitErr != nil || !(host == "127.0.0.1" || host == "::1" || strings.EqualFold(host, "localhost")) {
+			fmt.Fprintln(os.Stderr, "error: bootstrap mode requires HOSTFORGE_LISTEN to be loopback-only")
+			return 2
+		}
+	}
 	cfg.WebhookBasePath = normalizeRoutePath(*webhookPath)
 	cfg.WebhookMaxBodyBytes = *webhookMaxBodyBytes
 	cfg.WebhookAsync = *webhookAsync
@@ -167,6 +180,7 @@ func runServer(log *slog.Logger, args []string) int {
 	mux.HandleFunc(cfg.WebhookBasePath, handler.withRequestContext(handler.handleGitHubWebhook))
 	mux.HandleFunc("/auth/session", handler.withRequestContext(handler.handleSessionRoutes))
 	mux.HandleFunc("/api/system/status", handler.withRequestContext(handler.requireManagementAuth(handler.handleSystemStatus)))
+	mux.HandleFunc("/api/onboarding", handler.withRequestContext(handler.requireManagementAuth(handler.handleOnboardingRoutes)))
 	mux.HandleFunc("/api/system/host/snapshot", handler.withRequestContext(handler.requireManagementAuth(handler.handleHostSnapshot)))
 	mux.HandleFunc("/api/system/host/history", handler.withRequestContext(handler.requireManagementAuth(handler.handleHostHistory)))
 	mux.HandleFunc("/api/settings", handler.withRequestContext(handler.requireManagementAuth(handler.handleSettingsRoutes)))

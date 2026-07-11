@@ -76,15 +76,25 @@ type GitHubAppMeta struct {
 	UpdatedAt time.Time
 }
 
+// OnboardingState records the durable completion gates for bootstrap cutover.
+type OnboardingState struct {
+	GitHubAppComplete        bool
+	PlatformDomain           string
+	PermanentIngressComplete bool
+	BootstrapComplete        bool
+	CompletedAt              time.Time
+	UpdatedAt                time.Time
+}
+
 // GitHubAppSecrets is the sealed material used by the GitHub App client.
 type GitHubAppSecrets struct {
-	AppID            int64
-	Slug             string
-	HTMLURL          string
-	ClientID         string
-	ClientSecretCT   []byte
-	PrivateKeyCT     []byte
-	WebhookSecretCT  []byte
+	AppID           int64
+	Slug            string
+	HTMLURL         string
+	ClientID        string
+	ClientSecretCT  []byte
+	PrivateKeyCT    []byte
+	WebhookSecretCT []byte
 }
 
 // GitHubInstallation mirrors one row in github_app_installations.
