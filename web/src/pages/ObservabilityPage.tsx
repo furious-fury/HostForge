@@ -180,7 +180,7 @@ export function ObservabilityPage() {
 
         <Panel title="Request health">
           <p className="mb-3 text-xs text-muted">
-            Recent sampled API traffic. Correlate an individual request with logs via{" "}
+            Each row is one sampled request. Use the request ID only when you need to correlate it with server logs via{" "}
             <span className="mono text-text">request_id</span>.
           </p>
           {reqQ.isPending ? <p className="text-sm text-muted">Loading…</p> : null}

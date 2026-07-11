@@ -32,7 +32,7 @@ func PlanJSON(ctx context.Context, workDir string) ([]byte, error) {
 
 type planDoc struct {
 	Variables map[string]json.RawMessage `json:"variables"`
-	Phases    map[string]phaseDoc         `json:"phases"`
+	Phases    map[string]phaseDoc        `json:"phases"`
 	Start     *struct {
 		Cmd string `json:"cmd"`
 	} `json:"start"`
@@ -240,4 +240,22 @@ func titleMeta(meta string) string {
 		return "Unknown"
 	}
 	return strings.ToUpper(meta[:1]) + meta[1:]
+}
+
+// DetectWorktreeStack identifies a stack without invoking Nixpacks. It is used
+// by Railpack deployments so the UI retains useful metadata for every builder.
+func DetectWorktreeStack(workDir string) (string, string) {
+	pkg := readPackageJSON(workDir)
+	if pkg != nil {
+		return refineNodeStack(workDir, planDoc{}, false)
+	}
+	checks := []struct{ file, kind, label string }{
+		{"go.mod", "go", "Go"}, {"requirements.txt", "python", "Python"}, {"pyproject.toml", "python", "Python"}, {"Gemfile", "ruby", "Ruby"}, {"composer.json", "php", "PHP"}, {"Cargo.toml", "rust", "Rust"}, {"deno.json", "deno", "Deno"},
+	}
+	for _, check := range checks {
+		if _, err := os.Stat(filepath.Join(workDir, check.file)); err == nil {
+			return check.kind, check.label
+		}
+	}
+	return "unknown", "Unknown"
 }

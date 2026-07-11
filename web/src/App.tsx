@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { createSession, deleteSession, getSessionStatus } from "./api";
 import { BrandMark } from "./components/BrandMark";
 import { Button } from "./components/Button";
@@ -7,7 +7,6 @@ import { Shell } from "./components/Shell";
 import { ToastProvider } from "./components/ToastProvider";
 import { ConfirmProvider } from "./components/useConfirm";
 import { UIPrefsProvider } from "./hooks/useUIPrefs";
-import { DeploymentsPage } from "./pages/DeploymentsPage";
 import { DeploymentPage } from "./pages/DeploymentPage";
 import { ObservabilityPage } from "./pages/ObservabilityPage";
 import { NewProjectPage } from "./pages/NewProjectPage";
@@ -131,7 +130,7 @@ export default function App() {
           <Shell onLogout={handleLogout}>
             <Routes>
               <Route path="/" element={<DefaultLandingRoute />} />
-              <Route path="/deployments" element={<DeploymentsPage />} />
+              <Route path="/deployments" element={<Navigate to="/projects" replace />} />
               <Route path="/observability" element={<ObservabilityPage />} />
               <Route path="/projects" element={<ProjectsPage />} />
               <Route path="/projects/new" element={<NewProjectPage />} />

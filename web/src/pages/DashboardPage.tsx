@@ -141,15 +141,15 @@ export function DashboardPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Fleet status</h1>
           <p className="mt-1 text-sm text-muted">
             KPIs and a quick snapshot of recent activity. Full deployment history lives on{" "}
-            <Link to="/deployments" className="text-text underline decoration-border-strong underline-offset-2 hover:text-primary">
+            <Link to="/projects" className="text-text underline decoration-border-strong underline-offset-2 hover:text-primary">
               Deployments
             </Link>
             .
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <ButtonLink to="/deployments" variant="secondary" size="sm">
-            All deployments
+          <ButtonLink to="/projects" variant="secondary" size="sm">
+            Projects
           </ButtonLink>
           <ButtonLink to="/projects" variant="secondary" size="sm">
             Open Projects
@@ -161,7 +161,7 @@ export function DashboardPage() {
       </header>
 
       {projectsError && <div className="border border-danger p-3 text-sm text-danger">{projectsError}</div>}
-      {onboardingQ.data && !onboardingQ.data.bootstrap_complete && (
+      {onboardingQ.data?.bootstrap_enabled && !onboardingQ.data.bootstrap_complete && (
         <Panel title="Onboarding progress">
           <div className="grid gap-3 px-4 py-3 text-sm sm:grid-cols-3">
             <div><span className={onboardingQ.data.github_app_complete ? "text-success" : "text-warning"}>{onboardingQ.data.github_app_complete ? "Complete" : "Pending"}</span><p className="mt-1 text-muted">GitHub App</p></div>
@@ -253,10 +253,10 @@ export function DashboardPage() {
           actions={
             <div className="flex flex-wrap items-center gap-3">
               <Link
-                to="/deployments"
+                to="/projects"
                 className="mono text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-text"
               >
-                All deployments →
+                Projects →
               </Link>
               <Link to="/projects" className="mono text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-text">
                 Projects →

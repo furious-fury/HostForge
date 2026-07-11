@@ -329,6 +329,15 @@ func (s *Store) UpdateDeploymentStatus(ctx context.Context, deploymentID, status
 	return nil
 }
 
+// UpdateDeploymentCommitHash records the exact checked-out source revision.
+func (s *Store) UpdateDeploymentCommitHash(ctx context.Context, deploymentID, commitHash string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE deployments SET commit_hash = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(commitHash), time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(deploymentID))
+	if err != nil {
+		return fmt.Errorf("update deployment commit hash: %w", err)
+	}
+	return nil
+}
+
 // UpdateDeploymentLogsPath sets logs_path for a deployment.
 func (s *Store) UpdateDeploymentLogsPath(ctx context.Context, deploymentID, logsPath string) error {
 	_, err := s.db.ExecContext(

@@ -3,52 +3,50 @@
 @tailwind utilities;
 
 :root {
-  --hf-bg: #17130f;
-  --hf-surface: #221d17;
-  --hf-surface-alt: #2a241d;
-  --hf-border: #362f26;
-  --hf-border-strong: #5b5043;
-  --hf-text: #f5f0e8;
-  --hf-muted: #a89c8b;
-  --hf-primary: #f2703d;
-  --hf-primary-ink: #0b0f14;
-  --hf-success: #4fb37d;
+  --hf-bg: #181513;
+  --hf-surface: #211c18;
+  --hf-surface-alt: #2b251f;
+  --hf-border: #3b332b;
+  --hf-border-strong: #65594d;
+  --hf-text: #f4efe9;
+  --hf-muted: #b2a697;
+  --hf-primary: #f16c38;
+  --hf-primary-ink: #ffffff;
+  --hf-success: #5b8f68;
   --hf-danger: #ef4444;
-  /* Space-separated RGB for Tailwind `bg-danger/30` etc. (opacity modifiers do not work on hex `var()`). */
   --hf-danger-rgb: 239 68 68;
-  --hf-warning: #e8a23a;
-  --hf-info: #5c93c4;
+  --hf-warning: #c9851b;
+  --hf-info: #496f94;
   --hf-terminal: #d1f7c4;
   --hf-terminal-bg: #07090c;
   --hf-terminal-fg: #d1f7c4;
-  --hf-terminal-border: #1f2937;
+  --hf-terminal-border: #3b332b;
   color-scheme: dark;
 }
 
 :root[data-theme="light"] {
-  --hf-bg: #faf8f4;
+  --hf-bg: #f7f5f1;
   --hf-surface: #ffffff;
-  --hf-surface-alt: #f4efe8;
-  --hf-border: #e8e2d8;
-  --hf-border-strong: #c7beb2;
+  --hf-surface-alt: #f5f2ed;
+  --hf-border: #e2ddd5;
+  --hf-border-strong: #bfb6aa;
   --hf-text: #211c16;
-  --hf-muted: #726b5e;
+  --hf-muted: #6f675d;
   --hf-primary: #e85d2c;
   --hf-primary-ink: #ffffff;
-  --hf-success: #3e9467;
+  --hf-success: #5b8f68;
   --hf-danger: #b91c1c;
   --hf-danger-rgb: 185 28 28;
-  --hf-warning: #c77f17;
-  --hf-info: #3e77a6;
+  --hf-warning: #b97411;
+  --hf-info: #496f94;
   --hf-terminal: #1f2937;
-  --hf-terminal-bg: #d4d4d4;
-  --hf-terminal-fg: #0b0f14;
-  --hf-terminal-border: #111827;
+  --hf-terminal-bg: #ece8e1;
+  --hf-terminal-fg: #211c16;
+  --hf-terminal-border: #d6cec3;
   color-scheme: light;
 }
-
 * {
-  border-radius: 0 !important;
+  border-radius: 6px !important;
 }
 
 html,
@@ -60,7 +58,9 @@ body,
 body {
   margin: 0;
   font-family: Inter, system-ui, sans-serif;
-  background: var(--hf-bg);
+  background-color: var(--hf-bg);
+  background-image: radial-gradient(circle at 15% 10%, rgb(232 93 44 / 0.07) 0 1px, transparent 1.5px), radial-gradient(circle at 80% 18%, rgb(232 93 44 / 0.05) 0 1px, transparent 1.5px), linear-gradient(135deg, transparent 0 48%, rgb(150 130 110 / 0.09) 49% 50%, transparent 51% 100%);
+  background-size: 42px 42px, 64px 64px, 180px 180px;
   color: var(--hf-text);
   -webkit-font-smoothing: antialiased;
 }
@@ -107,7 +107,9 @@ body,
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--hf-bg);
+  background-color: var(--hf-bg);
+  background-image: radial-gradient(circle at 15% 10%, rgb(232 93 44 / 0.07) 0 1px, transparent 1.5px), radial-gradient(circle at 80% 18%, rgb(232 93 44 / 0.05) 0 1px, transparent 1.5px), linear-gradient(135deg, transparent 0 48%, rgb(150 130 110 / 0.09) 49% 50%, transparent 51% 100%);
+  background-size: 42px 42px, 64px 64px, 180px 180px;
 }
 
 ::-webkit-scrollbar-thumb {

@@ -75,3 +75,16 @@ func pull(ctx context.Context, repoURL, repoPath, branch string, auth AuthOption
 	}
 	return nil
 }
+
+// HeadCommit returns the checked-out commit hash for a cloned worktree.
+func HeadCommit(repoPath string) (string, error) {
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("git open: %w", err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("git head: %w", err)
+	}
+	return head.Hash().String(), nil
+}

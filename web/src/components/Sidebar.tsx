@@ -20,7 +20,6 @@ const groups: NavGroup[] = [
     items: [
       { to: "/", label: "Overview", end: true },
       { to: "/projects", label: "Projects" },
-      { to: "/deployments", label: "Deployments" },
     ],
   },
   {
