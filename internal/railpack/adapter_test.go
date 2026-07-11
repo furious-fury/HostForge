@@ -1,0 +1,64 @@
+package railpack
+
+import (
+	"context"
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/hostforge/hostforge/internal/builder"
+)
+
+func TestAdapter_BuildsWithPrepareAndBuildKitThenCleansArtifacts(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	artifactsRoot := t.TempDir()
+	plannerRunner := &fakeRunner{run: func(_ string, args []string, _ string, stdout, _ io.Writer) error {
+		if len(args) == 1 && args[0] == "--version" {
+			_, _ = io.WriteString(stdout, "railpack 0.23.0\n")
+			return nil
+		}
+		if err := os.WriteFile(args[3], []byte(`{"steps":{}}`), 0o600); err != nil {
+			return err
+		}
+		return os.WriteFile(args[5], []byte(`{"providers":[]}`), 0o600)
+	}}
+	planner := newTestPlanner(t, plannerRunner)
+	buildRunner := &fakeRunner{run: func(_ string, _ []string, _ string, stdout, _ io.Writer) error {
+		_, _ = io.WriteString(stdout, "docker image tar")
+		return nil
+	}}
+	executor := testExecutor(t, buildRunner, &fakeImageStore{imageID: "sha256:abc"})
+	adapter, err := NewAdapter(AdapterConfig{Planner: planner, Executor: executor, ArtifactsRoot: artifactsRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := builder.Request{Worktree: worktree, ImageRef: "hostforge/example:build-1", Platform: "linux/amd64", CacheKey: "project-1"}
+	var events []builder.Event
+	result, err := adapter.Build(context.Background(), request, func(event builder.Event) { events = append(events, event) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ImageID != "sha256:abc" || len(events) < 2 || events[0].Phase != "prepare" || events[len(events)-1].Phase == "prepare" {
+		t.Fatalf("unexpected result=%+v events=%+v", result, events)
+	}
+	entries, err := os.ReadDir(artifactsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("temporary artifacts remain: %+v", entries)
+	}
+}
+
+func TestNewAdapter_RequiresAllComponents(t *testing.T) {
+	t.Parallel()
+	planner, err := NewPlanner("railpack-test", DefaultVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAdapter(AdapterConfig{Planner: planner, ArtifactsRoot: filepath.Join(t.TempDir(), "artifacts")}); err == nil {
+		t.Fatal("expected missing executor error")
+	}
+}
