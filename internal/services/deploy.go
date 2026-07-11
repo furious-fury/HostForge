@@ -481,6 +481,15 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		cleanupCandidate("platform domain assignment failure")
 		return DeployResult{}, e
 	}
+	// Caddy resolves each domain to the latest SUCCESS deployment. Promote the
+	// healthy candidate before rendering routes so the generated upstream is the
+	// new container, not the one that is about to be removed after cutover.
+	if err := store.UpdateDeploymentStatus(ctx, job.Deployment.ID, models.DeploymentSuccess, ""); err != nil {
+		e := ErrCode("deployment_state_update_failed", fmt.Errorf("mark deployment success: %w", err))
+		markFailed(e)
+		cleanupCandidate("deployment success state failure")
+		return DeployResult{}, e
+	}
 
 	shouldSyncCaddy := cfg.SyncCaddy
 	if !shouldSyncCaddy {
@@ -507,10 +516,6 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		msCaddy := time.Since(t3).Milliseconds()
 		log.Info("deploy step", "step", "caddy_sync_end", "status", "ok", "duration_ms", msCaddy)
 		recordDeployObs(ctx, log, job, "caddy_sync", "ok", t3, msCaddy, "")
-	}
-
-	if err := store.UpdateDeploymentStatus(ctx, job.Deployment.ID, models.DeploymentSuccess, ""); err != nil {
-		log.Warn("failed to mark deployment success", "deployment_id", job.Deployment.ID, "error", err)
 	}
 
 	if job.PreviousContainer.DockerContainerID != "" && job.PreviousContainer.DockerContainerID != containerID {
