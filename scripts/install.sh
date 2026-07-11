@@ -70,11 +70,17 @@ TMP_BIN="${REPO_ROOT}/.install-build"
 mkdir -p "${BIN_DIR}" 2>/dev/null || true
 
 if [[ "${SKIP_BUILD}" -eq 0 ]]; then
-  mkdir -p "${TMP_BIN}"
-  echo "Building hostforge and hostforge-server..."
-  (cd "${REPO_ROOT}" && go build -o "${TMP_BIN}/hostforge" ./cmd/cli)
-  (cd "${REPO_ROOT}" && go build -o "${TMP_BIN}/hostforge-server" ./cmd/server)
-  HF_CLI="${TMP_BIN}/hostforge"
+	mkdir -p "${TMP_BIN}"
+	echo "Building hostforge and hostforge-server..."
+	(cd "${REPO_ROOT}" && go build -o "${TMP_BIN}/hostforge" ./cmd/cli)
+	(cd "${REPO_ROOT}" && go build -o "${TMP_BIN}/hostforge-server" ./cmd/server)
+	if ! command -v npm >/dev/null 2>&1; then
+		echo "error: npm is required to build web/dist; install Node.js 20+ and rerun the installer." >&2
+		exit 1
+	fi
+	echo "Building HostForge web UI..."
+	(cd "${REPO_ROOT}/web" && npm ci && npm run build)
+	HF_CLI="${TMP_BIN}/hostforge"
   HF_SRV="${TMP_BIN}/hostforge-server"
 else
   HF_CLI="${REPO_ROOT}/hostforge"
@@ -175,6 +181,7 @@ User=hostforge
 Group=hostforge
 EnvironmentFile=-${ENV_FILE}
 # HOSTFORGE_LISTEN and all secrets come from EnvironmentFile; cmd/server defaults -listen from env.
+WorkingDirectory=${REPO_ROOT}
 ExecStart=${SERVER_BIN} -data-dir ${DATA_DIR}
 Restart=on-failure
 RestartSec=5
