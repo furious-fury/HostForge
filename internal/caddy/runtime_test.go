@@ -2,6 +2,9 @@ package caddy
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -15,5 +18,22 @@ func TestIsCaddyAdminUnreachable(t *testing.T) {
 	}
 	if isCaddyAdminUnreachable(nil) {
 		t.Fatal("nil")
+	}
+}
+
+func TestWriteAtomicMakesGeneratedFileGroupReadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX file mode bits")
+	}
+	path := filepath.Join(t.TempDir(), "hostforge.caddy")
+	if err := writeAtomic(path, []byte("example.com {}\n")); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o640); got != want {
+		t.Fatalf("generated file permissions = %o, want %o", got, want)
 	}
 }

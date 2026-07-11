@@ -135,6 +135,14 @@ func writeAtomic(path string, body []byte) error {
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
+	// The generated file normally lives in a setgid caddy-owned directory so
+	// the HostForge service can update it while the Caddy service imports it.
+	// CreateTemp defaults to 0600; make the resulting file group-readable
+	// before the atomic rename so Caddy can read the imported route snippet.
+	if err := tmp.Chmod(0o640); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("set generated caddy file permissions: %w", err)
+	}
 
 	if _, err := tmp.Write(body); err != nil {
 		_ = tmp.Close()
