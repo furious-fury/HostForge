@@ -3,7 +3,7 @@
 # Idempotent: safe to re-run; does not overwrite an existing /etc/hostforge/hostforge.env.
 #
 # Usage (from repo clone):
-#   ./scripts/install.sh [--prefix /usr/local] [--data-dir /var/lib/hostforge] [--with-systemd] [--skip-build]
+#   ./scripts/install.sh [--prefix /usr/local] [--data-dir /var/lib/hostforge] [--with-systemd] [--interactive] [--skip-build]
 #
 set -euo pipefail
 
@@ -12,6 +12,7 @@ PREFIX="/usr/local"
 DATA_DIR="/var/lib/hostforge"
 WITH_SYSTEMD=0
 SKIP_BUILD=0
+INTERACTIVE=0
 
 usage() {
   sed -n '1,80p' "$0" | sed -n '/^# /s/^# //p' | head -n 20
@@ -21,6 +22,7 @@ Options:
   --prefix PATH     Install directory (default: /usr/local). Binaries: PREFIX/bin/
   --data-dir PATH   Server data directory used in systemd unit (default: /var/lib/hostforge)
   --with-systemd    Create hostforge user, data dirs, env example, systemd unit (requires root)
+  --interactive     On first systemd install, prompt for the admin login secret and generate the remaining secrets
   --skip-build      Do not run go build; use ./hostforge and ./hostforge-server in repo root
   -h, --help        Show this help
 
@@ -42,6 +44,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --with-systemd)
       WITH_SYSTEMD=1
+      shift
+      ;;
+    --interactive)
+      INTERACTIVE=1
       shift
       ;;
     --skip-build)
@@ -151,7 +157,42 @@ install -d -m 0750 -o root -g hostforge "${ETC_DIR}"
 ENV_EXAMPLE="${REPO_ROOT}/scripts/hostforge-server.env.example"
 ENV_FILE="${ETC_DIR}/hostforge.env"
 if [[ ! -f "${ENV_FILE}" ]]; then
-  if [[ -f "${ENV_EXAMPLE}" ]]; then
+  if [[ "${INTERACTIVE}" -eq 1 ]]; then
+    if ! command -v openssl >/dev/null 2>&1; then
+      echo "error: openssl is required for interactive secret generation." >&2
+      exit 1
+    fi
+    read -r -s -p "Choose HostForge admin login secret (minimum 16 characters): " admin_secret
+    echo
+    read -r -s -p "Confirm HostForge admin login secret: " admin_secret_confirm
+    echo
+    if [[ "${#admin_secret}" -lt 16 ]]; then
+      echo "error: admin login secret must be at least 16 characters." >&2
+      exit 1
+    fi
+    if [[ "${admin_secret}" != "${admin_secret_confirm}" ]]; then
+      echo "error: admin login secrets do not match." >&2
+      exit 1
+    fi
+    session_secret="$(openssl rand -base64 48 | tr -d '\n')"
+    webhook_secret="$(openssl rand -hex 32)"
+    encryption_key="$(openssl rand -base64 32 | tr -d '\n')"
+    env_tmp="$(mktemp)"
+    cat >"${env_tmp}" <<EOF
+# Created by HostForge interactive installer. Keep this file private.
+HOSTFORGE_API_TOKEN=${admin_secret}
+HOSTFORGE_SESSION_SECRET=${session_secret}
+HOSTFORGE_WEBHOOK_SECRET=${webhook_secret}
+HOSTFORGE_ENV_ENCRYPTION_KEY=${encryption_key}
+HOSTFORGE_LISTEN=127.0.0.1:8080
+HOSTFORGE_DATA_DIR=${DATA_DIR}
+HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE=60
+EOF
+    install -m 0640 -o root -g hostforge "${env_tmp}" "${ENV_FILE}"
+    rm -f "${env_tmp}"
+    unset admin_secret admin_secret_confirm session_secret webhook_secret encryption_key
+    echo "Created ${ENV_FILE} with generated secrets."
+  elif [[ -f "${ENV_EXAMPLE}" ]]; then
     env_tmp="$(mktemp)"
     sed \
       -e "s|^HOSTFORGE_DATA_DIR=.*|HOSTFORGE_DATA_DIR=${DATA_DIR}|" \
