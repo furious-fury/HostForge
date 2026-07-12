@@ -9,6 +9,7 @@ import { EmptyState } from "../components/EmptyState";
 import { Panel } from "../components/Panel";
 import { StackBadge } from "../components/StackBadge";
 import { StatusPill } from "../components/StatusPill";
+import { LoadingState, RetryNotice } from "../components/OperationalFeedback";
 import { useToast } from "../components/ToastProvider";
 import { formatRelative } from "../format";
 import { fleetKeys, useProjectsQuery } from "../hooks/fleetQueries";
@@ -139,8 +140,8 @@ export function ProjectsPage() {
         </FilterTab>
       </div>
 
-      {error && <div className="border border-danger p-3 text-sm text-danger">{error}</div>}
-      {loading && projects.length === 0 && <div className="text-sm text-muted">Loading projects…</div>}
+      {error && <RetryNotice title="Projects could not be refreshed" detail={error} onRetry={() => void projectsQ.refetch()} />}
+      {loading && projects.length === 0 && <Panel noBody><LoadingState label="Loading projects" /></Panel>}
 
       {!loading && filtered.length === 0 && projects.length === 0 && (
         <EmptyState

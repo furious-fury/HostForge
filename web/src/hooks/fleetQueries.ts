@@ -7,6 +7,7 @@ import {
   type ApiProject,
   type SystemStatus,
 } from "../api";
+import { isOperationallyActive } from "../components/StatusPill";
 
 export const fleetKeys = {
   projects: ["projects"] as const,
@@ -20,7 +21,7 @@ function projectHasInFlightDeploy(projects: ApiProject[] | undefined): boolean {
   if (!projects?.length) return false;
   return projects.some((p) => {
     const s = p.latest_deployment?.status?.toUpperCase();
-    return s === "QUEUED" || s === "BUILDING";
+    return isOperationallyActive(s);
   });
 }
 
@@ -28,7 +29,7 @@ function deploymentListHasInFlight(rows: ApiDeployment[] | undefined): boolean {
   if (!rows?.length) return false;
   return rows.some((d) => {
     const s = d.status?.toUpperCase();
-    return s === "QUEUED" || s === "BUILDING";
+    return isOperationallyActive(s);
   });
 }
 

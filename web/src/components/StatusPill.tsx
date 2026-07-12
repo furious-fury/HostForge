@@ -5,6 +5,11 @@ type StatusPillProps = {
 
 type OperationalState = "Queued" | "Building" | "Deploying" | "Running health checks" | "Healthy" | "Degraded" | "Failed" | "Rolling back" | "Unknown";
 
+export function isOperationallyActive(status?: string): boolean {
+  const normalized = status?.trim().toUpperCase();
+  return normalized === "QUEUED" || normalized === "PENDING" || normalized === "BUILDING" || normalized === "DEPLOYING" || normalized === "RUNNING_HEALTH_CHECKS" || normalized === "HEALTH_CHECKING" || normalized === "ROLLING_BACK" || normalized === "ROLLBACK";
+}
+
 function classify(status: string): { color: string; label: OperationalState; active: boolean } {
   const normalized = status.trim().toUpperCase();
   if (normalized === "QUEUED" || normalized === "PENDING") return { color: "border-signal/60 bg-signal/15 text-signal-ink", label: "Queued", active: true };

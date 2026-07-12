@@ -6,6 +6,8 @@ import { EmptyState } from "../components/EmptyState";
 import { Panel } from "../components/Panel";
 import { StackBadge } from "../components/StackBadge";
 import { StatusPill } from "../components/StatusPill";
+import { isOperationallyActive } from "../components/StatusPill";
+import { LoadingState, RetryNotice } from "../components/OperationalFeedback";
 import { formatDuration, formatRelative, shortHash } from "../format";
 import { useDeploymentsListQuery, useProjectsQuery } from "../hooks/fleetQueries";
 import { useFormatLocale, useUIPrefs } from "../hooks/useUIPrefs";
@@ -59,7 +61,7 @@ export function DeploymentsPage() {
       const st = normStatus(d.status);
       switch (filter) {
         case "building":
-          return st === "QUEUED" || st === "BUILDING";
+          return isOperationallyActive(st);
         case "success":
           return st === "SUCCESS";
         case "failed":
@@ -76,7 +78,7 @@ export function DeploymentsPage() {
     let failed = 0;
     for (const d of deployments) {
       const st = normStatus(d.status);
-      if (st === "QUEUED" || st === "BUILDING") building += 1;
+      if (isOperationallyActive(st)) building += 1;
       if (st === "SUCCESS") success += 1;
       if (st === "FAILED") failed += 1;
     }
@@ -97,8 +99,7 @@ export function DeploymentsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Build history</h1>
           <p className="mt-1 text-sm text-muted">
             Every deployment across the fleet. Status filters match deployment rows:{" "}
-            <span className="font-medium text-text">Building</span> is <span className="mono">QUEUED</span> or{" "}
-            <span className="mono">BUILDING</span>; <span className="font-medium text-text">Success</span> /{" "}
+            <span className="font-medium text-text">Building</span> includes queued, build, deploy, health-check, and rollback work; <span className="font-medium text-text">Success</span> /{" "}
             <span className="font-medium text-text">Failed</span> are terminal outcomes. For KPIs and a short snapshot, see{" "}
             <Link to="/" className="text-text underline decoration-border-strong underline-offset-2 hover:text-primary">
               Overview
@@ -119,7 +120,7 @@ export function DeploymentsPage() {
         </div>
       </header>
 
-      {error && <div className="border border-danger p-3 text-sm text-danger">{error}</div>}
+      {error && <RetryNotice title="Deployment history could not be refreshed" detail={error} onRetry={() => { void projectsQ.refetch(); void deploysQ.refetch(); }} />}
 
       <Panel
         title="All deployments"
@@ -164,7 +165,7 @@ export function DeploymentsPage() {
         noBody
       >
         {tableLoading && filtered.length === 0 ? (
-          <div className="p-6 text-sm text-muted">Loading deployments…</div>
+          <LoadingState label="Loading deployments" />
         ) : filtered.length === 0 ? (
           <div className="p-4">
             <EmptyState

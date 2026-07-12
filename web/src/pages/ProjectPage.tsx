@@ -40,7 +40,8 @@ import { useToast } from "../components/ToastProvider";
 import { EmptyState } from "../components/EmptyState";
 import { Panel } from "../components/Panel";
 import { StackBadge } from "../components/StackBadge";
-import { StatusPill } from "../components/StatusPill";
+import { isOperationallyActive, StatusPill } from "../components/StatusPill";
+import { LoadingState, OperationalNotice, RetryNotice } from "../components/OperationalFeedback";
 import { formatDuration, formatRelative, shortHash } from "../format";
 import { fleetKeys } from "../hooks/fleetQueries";
 import { invalidateFleetProjectsAndDeployments } from "../hooks/mutationCache";
@@ -193,7 +194,7 @@ export function ProjectPage() {
     () =>
       deployments.some((d) => {
         const s = d.status?.toUpperCase();
-        return s === "QUEUED" || s === "BUILDING";
+        return isOperationallyActive(s);
       }),
     [deployments],
   );
@@ -442,28 +443,34 @@ export function ProjectPage() {
         </div>
       </header>
 
+      {loading && !project ? <Panel noBody><LoadingState label="Loading project overview" /></Panel> : null}
+      {error ? <RetryNotice title="Project data could not be refreshed" detail={error} onRetry={() => void load()} /> : null}
+
       {envNeedsRedeploy && (
-        <div className="flex flex-wrap items-center justify-between gap-3 border border-warning/50 bg-warning/10 p-4 text-sm text-text">
-          <p className="min-w-0 flex-1">
+        <OperationalNotice
+          title="Configuration saved; the running service still uses previous values"
+          tone="warning"
+          action={
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!!actionBusy}
+              onClick={() =>
+                runControl("deploy", async () => {
+                  const out = await deployProject(projectID, { async: true });
+                  if (out.error) throw new Error(out.error);
+                })
+              }
+            >
+              Redeploy now
+            </Button>
+          }
+        >
+          <p>
             Environment variables were changed. <span className="font-semibold">Redeploy</span> to apply them to the
             running container.
           </p>
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={!!actionBusy}
-            onClick={() =>
-              runControl("deploy", async () => {
-                const out = await deployProject(projectID, { async: true });
-                if (out.error) {
-                  throw new Error(out.error);
-                }
-              })
-            }
-          >
-            Redeploy now
-          </Button>
-        </div>
+        </OperationalNotice>
       )}
 
       <Panel title="Controls">
@@ -962,11 +969,9 @@ export function ProjectPage() {
         )}
       </Panel>
 
-      {error && <div className="border border-danger p-3 text-sm text-danger">{error}</div>}
-
       <Panel title="Deployment History" noBody>
         {loading && deployments.length === 0 ? (
-          <div className="p-6 text-sm text-muted">Loading…</div>
+          <LoadingState label="Loading deployment history" />
         ) : deployments.length === 0 ? (
           <div className="p-4">
             <EmptyState

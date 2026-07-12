@@ -22,6 +22,7 @@ import { StatusPill } from "../components/StatusPill";
 import { Stepper } from "../components/Stepper";
 import { EnvVarsEditor, type EnvDraftPair } from "../components/EnvVarsEditor";
 import { Terminal } from "../components/Terminal";
+import { OperationalNotice } from "../components/OperationalFeedback";
 import { invalidateFleetProjectsAndDeployments } from "../hooks/mutationCache";
 import { useDeploymentLogStream } from "../hooks/useDeploymentLogStream";
 import { useUIPrefs } from "../hooks/useUIPrefs";
@@ -70,6 +71,7 @@ export function NewProjectPage() {
   const [projectID, setProjectID] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const formErrorRef = useRef<HTMLDivElement>(null);
   const [deployment, setDeployment] = useState<ApiDeployment | null>(null);
   const [availableBranches, setAvailableBranches] = useState<string[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -208,6 +210,10 @@ export function NewProjectPage() {
       resultAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, [phase]);
+
+  useEffect(() => {
+    if (phase === "form" && errorMessage) formErrorRef.current?.focus();
+  }, [errorMessage, phase]);
 
   function suggestName(url: string) {
     const trimmed = url.trim().replace(/\/$/, "");
@@ -374,6 +380,13 @@ export function NewProjectPage() {
       {phase === "form" && (
         <Panel title="Step 1 · Choose Source">
           <form className="flex flex-col gap-4" onSubmit={onSubmit}>
+            {errorMessage ? (
+              <div ref={formErrorRef} tabIndex={-1}>
+                <OperationalNotice title="Review the deployment details" tone="danger">
+                  {errorMessage}
+                </OperationalNotice>
+              </div>
+            ) : null}
             <div
               role="tablist"
               aria-label="Source"
@@ -578,9 +591,9 @@ export function NewProjectPage() {
             }
           >
             <div className="flex flex-col gap-3">
-              <p className="text-sm text-muted">{message || "Awaiting deployment status…"}</p>
+              <p className="text-sm text-muted" role="status" aria-live="polite">{message || "Awaiting deployment status…"}</p>
               {errorMessage && (
-                <div className="border border-danger bg-danger/10 p-3 text-sm text-danger">{errorMessage}</div>
+                <OperationalNotice title="Deployment failed" tone="danger">{errorMessage}</OperationalNotice>
               )}
               <div className="flex flex-wrap gap-2">
                 {projectID && (

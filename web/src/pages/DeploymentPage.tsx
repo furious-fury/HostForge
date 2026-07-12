@@ -9,8 +9,9 @@ import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
 import { Button, ButtonLink } from "../components/Button";
 import { Panel } from "../components/Panel";
 import { StackBadge } from "../components/StackBadge";
-import { StatusPill } from "../components/StatusPill";
+import { isOperationallyActive, StatusPill } from "../components/StatusPill";
 import { Terminal } from "../components/Terminal";
+import { OperationalNotice, RetryNotice } from "../components/OperationalFeedback";
 import { formatDuration, formatDurationMs, formatRelative, shortHash } from "../format";
 import { useFormatLocale, useUIPrefs } from "../hooks/useUIPrefs";
 
@@ -34,8 +35,7 @@ function shouldReconnectDeploymentLogs(
   deployListFetched: boolean,
 ): boolean {
   if (deployment) {
-    const u = deployment.status?.toUpperCase();
-    return u === "QUEUED" || u === "BUILDING";
+    return isOperationallyActive(deployment.status);
   }
   if (!deployListFetched) {
     return true;
@@ -129,8 +129,7 @@ export function DeploymentPage() {
   }, [projectID, deploymentID]);
 
   const deploymentInFlight = useMemo(() => {
-    const u = deployment?.status?.toUpperCase();
-    return u === "QUEUED" || u === "BUILDING";
+    return isOperationallyActive(deployment?.status);
   }, [deployment?.status]);
 
   useEffect(() => {
@@ -201,18 +200,18 @@ export function DeploymentPage() {
         </dl>
       </header>
 
-      {error && <div className="border border-danger p-3 text-sm text-danger">{error}</div>}
+      {error && <RetryNotice title="Deployment details could not be refreshed" detail={error} onRetry={() => window.location.reload()} retryLabel="Reload" />}
       {panelTab === "logs" && tailError && (
-        <div className="border border-warning p-3 text-sm text-warning">
+        <OperationalNotice title="Log tail could not be loaded" tone="warning">
           Log tail could not be loaded ({tailError}). Live stream may still populate.
-        </div>
+        </OperationalNotice>
       )}
 
       <Panel
         title={panelTab === "logs" ? "Live Logs" : "Deploy steps"}
         actions={
           panelTab === "logs" ? (
-            <span className="mono inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider">
+            <span className="mono inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider" role="status" aria-live="polite">
               <span
                 aria-hidden
                 className={

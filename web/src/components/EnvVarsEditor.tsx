@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ApiProjectEnvVar } from "../api";
 import { deleteProjectEnv, listProjectEnv, updateProjectEnv, upsertProjectEnv } from "../api";
 import { Button } from "./Button";
+import { LoadingState, OperationalNotice, RetryNotice } from "./OperationalFeedback";
 import { useConfirm } from "./useConfirm";
 
 function EyeIcon({ className = "size-4" }: { className?: string }) {
@@ -512,6 +513,7 @@ function RemoteEnvEditor({ projectID, onChange }: { projectID: string; onChange?
   const [showReplaceVal, setShowReplaceVal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pasteText, setPasteText] = useState("");
+  const [lastSaved, setLastSaved] = useState("");
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -538,6 +540,7 @@ function RemoteEnvEditor({ projectID, onChange }: { projectID: string; onChange?
   }, [reload]);
 
   const fireChange = useCallback(() => {
+    setLastSaved("Configuration saved. Redeploy to apply it to the running service.");
     onChange?.();
   }, [onChange]);
 
@@ -659,24 +662,24 @@ function RemoteEnvEditor({ projectID, onChange }: { projectID: string; onChange?
   const sorted = useMemo(() => [...rows].sort((a, b) => a.key.localeCompare(b.key)), [rows]);
 
   if (loading) {
-    return <p className="text-xs text-muted">Loading environment variables…</p>;
+    return <LoadingState label="Loading environment variables" />;
   }
 
   if (noKey) {
     return (
-      <div className="border border-warning/50 bg-warning/5 p-3 text-xs text-muted">
-        <p className="font-semibold text-text">Encryption key not configured</p>
-        <p className="mt-1">
+      <OperationalNotice title="Encryption key not configured" tone="warning">
+        <p>
           Set <span className="mono text-text">HOSTFORGE_ENV_ENCRYPTION_KEY</span> on the server (see README), restart HostForge, then
           reload this page to manage environment variables.
         </p>
-      </div>
+      </OperationalNotice>
     );
   }
 
   return (
     <div className="flex flex-col gap-4">
-      {err && <div className="border border-danger bg-danger/10 p-2 text-xs text-danger">{err}</div>}
+      {err && <RetryNotice title="Environment variables could not be updated" detail={err} onRetry={() => void reload()} />}
+      {lastSaved && <OperationalNotice title={lastSaved} tone="success" live />}
 
       <div className="max-h-[min(24rem,60vh)] w-full overflow-auto border border-border">
         <table className="w-full table-fixed text-left text-xs">
