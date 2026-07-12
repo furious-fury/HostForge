@@ -31,10 +31,12 @@ export function SettingsPage() {
   return <div className="mx-auto flex max-w-[1400px] flex-col gap-6 lg:flex-row lg:items-start">
     <aside className="w-full shrink-0 lg:sticky lg:top-0 lg:w-64">
       <Panel title="Settings" className="lg:max-h-[calc(100vh-4.5rem)]">
-        <nav className="space-y-4 py-2 lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto" aria-label="Settings sections">
-          {GROUPS.map((group) => <div key={group.label} className="space-y-1">
-            <p className="mono px-3 pb-1 text-[10px] uppercase tracking-[0.08em] text-muted">{group.label}</p>
-            {group.items.map((item) => <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`block w-full rounded-md px-3 py-2.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${active === item.id ? "bg-primary font-medium text-primary-ink shadow-sm" : "text-muted hover:bg-surface-alt hover:text-text"}`}>{item.label}</button>)}
+        <nav className="space-y-5 py-2 lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto" aria-label="Settings sections">
+          {GROUPS.map((group) => <div key={group.label} className="space-y-1.5">
+            <p className="mono mx-2 border border-border bg-bg px-2.5 py-1.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted">{group.label}</p>
+            <div className="ml-3 border-l border-border pl-2">
+            {group.items.map((item) => <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`block w-full border-l-2 px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ${active === item.id ? "border-primary bg-primary/10 font-semibold text-text" : "border-transparent text-muted hover:border-border-strong hover:bg-surface-alt hover:text-text"}`}>{item.label}</button>)}
+            </div>
           </div>)}
         </nav>
       </Panel>

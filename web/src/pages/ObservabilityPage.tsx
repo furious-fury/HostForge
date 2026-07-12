@@ -67,8 +67,10 @@ export function ObservabilityPage() {
 
       {err && <div className="border border-danger bg-danger/10 p-3 text-sm text-danger">{err}</div>}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <KpiTile label="HTTP requests (24h)" value={summary?.http_request_count ?? "—"} />
+      <div className="grid gap-6 xl:grid-cols-2">
+        <Panel title="Request health · last 24 hours" bodyClassName="p-4 sm:p-5">
+          <div className="grid gap-3 sm:grid-cols-3">
+        <KpiTile label="Requests" value={summary?.http_request_count ?? "—"} />
         <KpiTile
           label="HTTP errors (≥400)"
           value={summary?.http_error_count ?? "—"}
@@ -80,14 +82,18 @@ export function ObservabilityPage() {
           tone={summary && summary.http_error_count > 0 ? "warning" : "default"}
         />
         <KpiTile
-          label="HTTP p50 / p95"
+          label="Latency p50 / p95"
           value={
             summary
               ? `${formatDurationMs(summary.http_duration_p50_ms)} / ${formatDurationMs(summary.http_duration_p95_ms)}`
               : "—"
           }
         />
-        <KpiTile label="Deploys started (24h)" value={summary?.deploy_count ?? "—"} />
+          </div>
+        </Panel>
+        <Panel title="Deployment health · last 24 hours" bodyClassName="p-4 sm:p-5">
+          <div className="grid gap-3 sm:grid-cols-3">
+        <KpiTile label="Deploys started" value={summary?.deploy_count ?? "—"} />
         <KpiTile
           label="Deploy failures"
           value={summary?.deploy_failed_count ?? "—"}
@@ -95,13 +101,15 @@ export function ObservabilityPage() {
           tone={summary && summary.deploy_failed_count > 0 ? "danger" : "default"}
         />
         <KpiTile
-          label="Deploy total p50 / p95"
+          label="Duration p50 / p95"
           value={
             summary
               ? `${formatDurationMs(summary.deploy_duration_p50_ms)} / ${formatDurationMs(summary.deploy_duration_p95_ms)}`
               : "—"
           }
         />
+          </div>
+        </Panel>
       </div>
 
       <Panel title="Host checks">
@@ -133,8 +141,13 @@ export function ObservabilityPage() {
       <div className="rounded-[10px] border border-border bg-surface-alt/40 px-4 py-3 text-sm text-muted">
         <span className="font-medium text-text">Planned telemetry:</span> hourly trends, slow-route rankings, and failure summaries are not collected yet. This page shows only persisted request samples and deployment steps.
       </div>
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Panel title="Deployment health">
+      <section aria-labelledby="recent-health-heading" className="flex flex-col gap-4">
+        <div>
+          <div className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Recent activity</div>
+          <h2 id="recent-health-heading" className="mt-1 text-lg font-semibold tracking-tight text-text">Recent deployments and request samples</h2>
+        </div>
+      <div className="grid gap-6 lg:grid-cols-5">
+        <Panel title="Deployment executions" className="lg:col-span-3">
           <p className="mb-3 text-xs text-muted">
             One deploy per row: bar segments ≈ phase time (hover). Total ={" "}
             <span className="mono text-text">deploy_total</span>.
@@ -146,7 +159,8 @@ export function ObservabilityPage() {
           <div className="max-h-[min(28rem,55vh)] overflow-auto rounded border border-border bg-surface-alt/30 p-2">
             <ul className="flex flex-col gap-4">
               {deployGroups.map(({ id, steps, name }) => {
-                const totalMs = steps.find((s) => s.step === "deploy_total")?.duration_ms;
+                const terminal = steps.find((s) => s.step === "deploy_total");
+                const totalMs = terminal?.duration_ms;
                 return (
                   <li key={id} className="border border-border bg-surface p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -164,6 +178,7 @@ export function ObservabilityPage() {
                       <span className="mono text-[10px] text-muted" title={`${totalMs ?? "—"} ms`}>
                         {totalMs != null ? `${formatDurationMs(totalMs)} total` : "—"}
                       </span>
+                      {terminal ? <StatusPill status={terminal.status === "ok" ? "SUCCESS" : terminal.status === "failed" ? "FAILED" : terminal.status} size="sm" /> : null}
                     </div>
                     <div className="mt-2">
                       <DeployStepTimeline steps={steps} />
@@ -178,7 +193,7 @@ export function ObservabilityPage() {
           </div>
         </Panel>
 
-        <Panel title="Request health">
+        <Panel title="Request samples" className="lg:col-span-2">
           <p className="mb-3 text-xs text-muted">
             Each row is one sampled request. Use the request ID only when you need to correlate it with server logs via{" "}
             <span className="mono text-text">request_id</span>.
@@ -226,6 +241,7 @@ export function ObservabilityPage() {
           ) : null}
         </Panel>
       </div>
+      </section>
     </div>
   );
 }

@@ -15,7 +15,7 @@ const SheetOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SheetPrimitive.Overlay
     ref={ref}
-    className={join("fixed inset-0 z-50 bg-black/65 backdrop-blur-[1px]", className)}
+    className={join("hf-sheet-overlay fixed inset-0 z-50 bg-black/65 backdrop-blur-[1px]", className)}
     {...props}
   />
 ));
@@ -39,7 +39,7 @@ const SheetContent = React.forwardRef<
     <SheetPrimitive.Content
       ref={ref}
       className={join(
-        "fixed z-50 flex flex-col overflow-hidden border-border bg-surface text-text shadow-2xl outline-none",
+        "hf-sheet-content fixed z-50 flex flex-col overflow-hidden border-border bg-surface text-text shadow-2xl outline-none",
         sideClasses[side],
         className,
       )}
