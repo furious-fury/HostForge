@@ -75,7 +75,7 @@ export default function App() {
 
   if (authChecking) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-bg text-text">
+      <div className="flex min-h-screen items-center justify-center bg-transparent text-text">
         <div className="mono border border-border bg-surface px-6 py-4 text-sm">Checking session…</div>
       </div>
     );
@@ -83,7 +83,7 @@ export default function App() {
 
   if (!authenticated) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-bg p-6 text-text">
+      <div className="flex min-h-screen items-center justify-center bg-transparent p-6 text-text">
         <form className="flex w-full max-w-md flex-col gap-4 border border-border bg-surface p-6" onSubmit={handleLogin}>
           <div>
             <BrandMark size="lg" />
