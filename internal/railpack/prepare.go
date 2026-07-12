@@ -114,7 +114,7 @@ func (p *Planner) Prepare(ctx context.Context, request PrepareRequest, stdout, s
 			return Preparation{}, fmt.Errorf("railpack prepare wrote invalid %s", filepath.Base(path))
 		}
 	}
-	stackKind, stackLabel := StackFromInfoPath(infoPath)
+	stackKind, stackLabel := StackFromInfoPathAndWorktree(infoPath, request.Worktree)
 	return Preparation{
 		Version:    p.expectedVersion,
 		PlanPath:   planPath,
@@ -134,6 +134,18 @@ func StackFromInfoPath(path string) (string, string) {
 		return "unknown", "Unknown"
 	}
 	return StackFromInfoJSON(raw)
+}
+
+// StackFromInfoPathAndWorktree augments Railpack's provider result with a
+// framework classification from the checked-out source. Railpack identifies
+// Node as the provider for Vite, Next.js, and similar frameworks; package.json
+// supplies the extra signal required to select their existing UI icons.
+func StackFromInfoPathAndWorktree(path, worktree string) (string, string) {
+	kind, label := StackFromInfoPath(path)
+	if kind != "node" {
+		return kind, label
+	}
+	return refineNodeStack(worktree, kind, label)
 }
 
 // StackFromInfoJSON maps Railpack detectedProviders to the icon slugs used by
@@ -180,6 +192,45 @@ func stackForProvider(provider string) (string, string, bool) {
 		return "staticfile", "Static site", true
 	default:
 		return "", "", false
+	}
+}
+
+type packageJSON struct {
+	Dependencies    map[string]json.RawMessage `json:"dependencies"`
+	DevDependencies map[string]json.RawMessage `json:"devDependencies"`
+}
+
+func refineNodeStack(worktree, fallbackKind, fallbackLabel string) (string, string) {
+	raw, err := os.ReadFile(filepath.Join(worktree, "package.json"))
+	if err != nil {
+		return fallbackKind, fallbackLabel
+	}
+	var pkg packageJSON
+	if err := json.Unmarshal(raw, &pkg); err != nil {
+		return fallbackKind, fallbackLabel
+	}
+	hasDependency := func(name string) bool {
+		_, inDependencies := pkg.Dependencies[name]
+		_, inDevDependencies := pkg.DevDependencies[name]
+		return inDependencies || inDevDependencies
+	}
+	switch {
+	case hasDependency("next"):
+		return "node_next", "Node.js · Next.js"
+	case hasDependency("@remix-run/react") || hasDependency("@remix-run/node") || hasDependency("remix"):
+		return "node_remix", "Node.js · Remix"
+	case hasDependency("nuxt") || hasDependency("@nuxt/schema"):
+		return "node_nuxt", "Node.js · Nuxt"
+	case hasDependency("@sveltejs/kit"):
+		return "node_svelte", "Node.js · SvelteKit"
+	case hasDependency("astro"):
+		return "node_astro", "Node.js · Astro"
+	case hasDependency("vite"):
+		return "node_vite", "Node.js · Vite"
+	case hasDependency("react-scripts") || hasDependency("craco"):
+		return "node_cra", "Node.js · Create React App"
+	default:
+		return fallbackKind, fallbackLabel
 	}
 }
 

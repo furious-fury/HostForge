@@ -134,7 +134,8 @@ export default function App() {
               <Route path="/observability" element={<ObservabilityPage />} />
               <Route path="/projects" element={<ProjectsPage />} />
               <Route path="/projects/new" element={<NewProjectPage />} />
-              <Route path="/projects/:projectID" element={<ProjectPage />} />
+              <Route path="/projects/:projectID/settings" element={<ProjectPage view="settings" />} />
+              <Route path="/projects/:projectID" element={<ProjectPage view="overview" />} />
               <Route path="/projects/:projectID/deployments/:deploymentID" element={<DeploymentPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<DefaultLandingRoute />} />

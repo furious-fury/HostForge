@@ -32,7 +32,7 @@ import {
 } from "../api";
 import { projectAccessLinks } from "../accessUrls";
 import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
-import { Button } from "../components/Button";
+import { Button, ButtonLink } from "../components/Button";
 import { BuildMethodBadge } from "../components/BuildMethodBadge";
 import { EnvVarsEditor } from "../components/EnvVarsEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -47,7 +47,8 @@ import { fleetKeys } from "../hooks/fleetQueries";
 import { invalidateFleetProjectsAndDeployments } from "../hooks/mutationCache";
 import { useFormatLocale } from "../hooks/useUIPrefs";
 
-export function ProjectPage() {
+export function ProjectPage({ view = "overview" }: { view?: "overview" | "settings" }) {
+  const isSettings = view === "settings";
   const fmtLocale = useFormatLocale();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -430,6 +431,13 @@ export function ProjectPage() {
           <p className="mt-2 text-xs text-muted">
             Domains (Caddy): <span className="mono text-text">{domainSummary}</span>
           </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {isSettings ? (
+              <ButtonLink to={`/projects/${projectID}`} variant="secondary" size="sm">Back to project</ButtonLink>
+            ) : (
+              <ButtonLink to={`/projects/${projectID}/settings`} variant="secondary" size="sm">Project settings</ButtonLink>
+            )}
+          </div>
         </div>
       </header>
 
@@ -463,7 +471,7 @@ export function ProjectPage() {
         </OperationalNotice>
       )}
 
-      <Panel title="Controls">
+      <Panel title="Controls" className={isSettings ? "hidden" : ""}>
         <div className="flex flex-wrap gap-2">
           <Button
             variant="primary"
@@ -507,7 +515,7 @@ export function ProjectPage() {
         </p>
       </Panel>
 
-      <Panel title="Build method">
+      <Panel title="Build method" className={isSettings ? "hidden" : ""}>
         <p className="mb-3 text-xs text-muted">
           Railpack automatically detects the language, framework, and package manager—including Bun—on every deploy.
           HostForge does not apply Nixpacks runtime overrides.
@@ -522,7 +530,7 @@ export function ProjectPage() {
         )}
       </Panel>
 
-      <Panel title="Environment variables">
+      <Panel title="Environment variables" className={isSettings ? "" : "hidden"}>
         <p className="mb-3 text-xs text-muted">
           Values are encrypted on the server and only injected at <span className="font-medium text-text">container runtime</span>{" "}
           (not during the image build). After changing variables, redeploy so the new process picks them up.
@@ -530,7 +538,7 @@ export function ProjectPage() {
         <EnvVarsEditor mode="remote" projectID={projectID} onChange={markEnvPending} />
       </Panel>
 
-      <Panel title="Private repository credentials">
+      <Panel title="Private repository credentials" className={isSettings ? "" : "hidden"}>
         <p className="mb-3 text-xs text-muted">
           Pick one authentication method per project. HostForge tries them in this order at clone/pull time: GitHub
           App installation → Personal Access Token → SSH deploy key → public.
@@ -672,6 +680,7 @@ export function ProjectPage() {
 
       <Panel
         title="Custom domains"
+        className={isSettings ? "" : "hidden"}
         actions={
           customDomains.length ? (
             <Button
@@ -882,7 +891,7 @@ export function ProjectPage() {
         )}
       </Panel>
 
-      <Panel title="Deployment History" noBody>
+      <Panel title="Deployment History" noBody className={isSettings ? "hidden" : ""}>
         {loading && deployments.length === 0 ? (
           <LoadingState label="Loading deployment history" />
         ) : deployments.length === 0 ? (
@@ -935,7 +944,7 @@ export function ProjectPage() {
         )}
       </Panel>
 
-      <Panel title="Danger Zone" tone="danger">
+      <Panel title="Danger Zone" tone="danger" className={isSettings ? "" : "hidden"}>
         <p className="text-sm text-muted">
           Use <span className="mono text-text">Stop</span> above to halt traffic without removing the project. Deleting a project removes all deployments and domain rows and tears down Docker containers.
         </p>

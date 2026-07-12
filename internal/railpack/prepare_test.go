@@ -85,6 +85,22 @@ func TestStackFromInfoJSON_UsesGenericFallbackForUnknownInfo(t *testing.T) {
 	}
 }
 
+func TestStackFromInfoPathAndWorktree_RefinesViteProject(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	if err := os.WriteFile(filepath.Join(worktree, "package.json"), []byte(`{"devDependencies":{"vite":"^5.0.0"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	infoPath := filepath.Join(t.TempDir(), "railpack-info.json")
+	if err := os.WriteFile(infoPath, []byte(`{"detectedProviders":["node"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kind, label := StackFromInfoPathAndWorktree(infoPath, worktree)
+	if kind != "node_vite" || label != "Node.js · Vite" {
+		t.Fatalf("got kind=%q label=%q", kind, label)
+	}
+}
+
 func TestPrepare_RejectsVersionMismatchBeforePrepare(t *testing.T) {
 	t.Parallel()
 	runner := &fakeRunner{run: func(_ string, args []string, _ string, stdout, _ io.Writer) error {

@@ -38,6 +38,8 @@ function useBreadcrumbs(): Crumb[] {
       if (segments[2] === "deployments" && segments[3]) {
         const deploymentID = params.deploymentID || segments[3];
         crumbs.push({ label: `Deployment ${shortenID(deploymentID)}` });
+      } else if (segments[2] === "settings") {
+        crumbs.push({ label: "Project settings" });
       }
     }
     return crumbs;

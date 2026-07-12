@@ -10,7 +10,7 @@ const ProjectBreadcrumbContext = createContext<{
 
 /**
  * Keeps the human-readable project name in sync with the URL for breadcrumbs and headers.
- * Clears when navigating away from /projects/:id routes (excluding /projects/new).
+ * Clears when navigating away from project routes (excluding /projects/new).
  */
 export function ProjectBreadcrumbProvider({ children }: { children: ReactNode }) {
   const location = useLocation();
