@@ -371,6 +371,7 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
           )
         }
         confirmLabel="Delete"
+        pendingLabel="Deleting project…"
         cancelLabel="Cancel"
         confirmVariant="danger"
         typeConfirm={

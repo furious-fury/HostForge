@@ -1,5 +1,6 @@
 import { ReactNode } from "react";
 import { Button } from "./Button";
+import { Skeleton } from "./ui/skeleton";
 
 type NoticeTone = "info" | "warning" | "danger" | "success";
 
@@ -42,9 +43,9 @@ export function LoadingState({ label = "Loading" }: { label?: string }) {
   return (
     <div className="space-y-3 p-5" role="status" aria-live="polite" aria-label={label}>
       <span className="sr-only">{label}</span>
-      <div className="h-4 w-2/5 animate-pulse rounded bg-surface-alt motion-reduce:animate-none" />
-      <div className="h-3 w-full animate-pulse rounded bg-surface-alt motion-reduce:animate-none" />
-      <div className="h-3 w-4/5 animate-pulse rounded bg-surface-alt motion-reduce:animate-none" />
+      <Skeleton className="h-4 w-2/5" />
+      <Skeleton className="h-3 w-full" />
+      <Skeleton className="h-3 w-4/5" />
     </div>
   );
 }

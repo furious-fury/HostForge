@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import { Card, CardContent, CardHeader } from "./ui/card";
 
 type PanelProps = {
   title?: ReactNode;
@@ -19,16 +20,15 @@ export function Panel({
   bodyClassName = "p-5 sm:p-6",
   noBody = false,
 }: PanelProps) {
-  const borderClass = tone === "danger" ? "border-danger" : "border-border";
   return (
-    <section className={`overflow-hidden rounded-panel border ${borderClass} bg-surface shadow-[var(--hf-shadow-panel)] ${className}`}>
+    <Card className={`${tone === "danger" ? "border-danger" : ""} ${className}`}>
       {title !== undefined && (
-        <header className={`flex items-center justify-between gap-4 border-b ${borderClass} px-5 py-4 sm:px-6`}>
+        <CardHeader className={tone === "danger" ? "border-danger" : ""}>
           <div className="text-sm font-semibold text-text">{title}</div>
           {actions && <div className="flex items-center gap-2">{actions}</div>}
-        </header>
+        </CardHeader>
       )}
-      {noBody ? children : <div className={bodyClassName}>{children}</div>}
-    </section>
+      {noBody ? children : <CardContent className={bodyClassName}>{children}</CardContent>}
+    </Card>
   );
 }

@@ -1,6 +1,15 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { LoaderCircle } from "lucide-react";
 import { Button } from "./Button";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
 
 /** User must type `expected` exactly (after trim on both sides) before confirm is enabled. */
 export type TypeConfirmConfig = {
@@ -16,6 +25,8 @@ export type ConfirmDialogProps = {
   description: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** Visible label while an asynchronous confirmation is in progress. */
+  pendingLabel?: string;
   /** Primary action button style */
   confirmVariant?: "danger" | "primary";
   /** When set, confirm stays disabled until the input matches `expected` (trimmed). */
@@ -46,6 +57,7 @@ export function ConfirmDialog({
   description,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
+  pendingLabel = "Working…",
   confirmVariant = "danger",
   typeConfirm,
   dangerBanner,
@@ -68,23 +80,6 @@ export function ConfirmDialog({
   const typedOk = required !== "" && typed.trim() === required;
   const confirmEnabled = !typeConfirm || typedOk;
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !pending) {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, pending]);
-
-  if (!open) {
-    return null;
-  }
-
   const isDestructive = confirmVariant === "danger" || typeConfirm !== undefined;
   const bannerNode = dangerBanner !== undefined ? dangerBanner : isDestructive ? defaultDangerBanner : null;
 
@@ -100,25 +95,12 @@ export function ConfirmDialog({
     }
   }
 
-  return createPortal(
-    <>
-      <button
-        type="button"
-        className="fixed inset-0 z-[90] cursor-default bg-black/75"
-        aria-label="Close dialog"
-        onClick={() => {
-          if (!pending) onClose();
-        }}
-      />
-      <div
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="hf-confirm-title"
-        className="fixed left-1/2 top-1/2 z-[95] w-[min(100vw-2rem,28rem)] -translate-x-1/2 -translate-y-1/2 border border-border-strong bg-surface p-6 text-text"
-      >
-        <h2 id="hf-confirm-title" className="text-lg font-semibold tracking-tight">
-          {title}
-        </h2>
+  return (
+    <AlertDialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !pending) onClose(); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+        </AlertDialogHeader>
         {bannerNode != null && (
           <div
             role="note"
@@ -127,7 +109,7 @@ export function ConfirmDialog({
             {bannerNode}
           </div>
         )}
-        <div className="mt-3 text-sm leading-relaxed text-muted">{description}</div>
+        <AlertDialogDescription className="mt-3">{description}</AlertDialogDescription>
 
         {typeConfirm && (
           <div className="mt-5 border border-border bg-surface-alt p-4">
@@ -160,21 +142,27 @@ export function ConfirmDialog({
           </div>
         )}
 
-        <div className="mt-6 flex flex-wrap justify-end gap-2">
-          <Button variant="secondary" disabled={pending} onClick={onClose} type="button">
-            {cancelLabel}
-          </Button>
+        {pending && (
+          <div className="mt-5 flex items-center gap-2 border border-info/40 bg-info/10 px-3 py-2 text-sm text-text" role="status" aria-live="polite">
+            <LoaderCircle className="size-4 animate-spin text-info motion-reduce:animate-none" aria-hidden />
+            <span>{pendingLabel} Do not close this window.</span>
+          </div>
+        )}
+
+        <AlertDialogFooter>
+          <AlertDialogCancel asChild>
+            <Button variant="secondary" disabled={pending} type="button">{cancelLabel}</Button>
+          </AlertDialogCancel>
           <Button
             variant={confirmVariant === "danger" ? "danger" : "primary"}
             disabled={pending || !confirmEnabled}
             onClick={() => void handleConfirm()}
             type="button"
           >
-            {pending ? "…" : confirmLabel}
+            {pending ? <><LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />{pendingLabel}</> : confirmLabel}
           </Button>
-        </div>
-      </div>
-    </>,
-    document.body,
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
