@@ -1,4 +1,4 @@
-import { Search, Sparkles } from "lucide-react";
+import { Search } from "lucide-react";
 import { useCallback, useMemo, useRef } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import type { ThemePreference } from "../hooks/useUIPrefs";
@@ -23,9 +23,7 @@ function useBreadcrumbs(): Crumb[] {
 
   const crumbs: Crumb[] = [{ label: "Dashboard", to: "/" }];
 
-  if (segments.length === 0) {
-    return crumbs;
-  }
+  if (segments.length === 0) return crumbs;
 
   if (segments[0] === "projects") {
     crumbs.push({ label: "Applications", to: "/projects" });
@@ -39,7 +37,7 @@ function useBreadcrumbs(): Crumb[] {
         const deploymentID = params.deploymentID || segments[3];
         crumbs.push({ label: `Deployment ${shortenID(deploymentID)}` });
       } else if (segments[2] === "settings") {
-        crumbs.push({ label: "Application settings" });
+        crumbs.push({ label: "Settings" });
       }
     }
     return crumbs;
@@ -83,24 +81,20 @@ export function Topbar({ theme, onThemeCycle, onLogout, onOpenCommandPalette }: 
   }, [onOpenCommandPalette]);
 
   return (
-    <header className="flex flex-col justify-between gap-4 rounded-[28px] border border-border bg-surface/80 px-5 py-4 shadow-[var(--hf-shadow-panel)] backdrop-blur-xl sm:px-6 lg:h-20 lg:flex-row lg:items-center">
-      <div className="min-w-0">
-        <div className="mono mb-2 inline-flex items-center gap-2 rounded-full border border-border bg-surface-alt/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-muted">
-          <Sparkles className="h-3.5 w-3.5" />
-          Application Workspace
-        </div>
+    <header className="border-b border-border bg-surface px-4 py-3 sm:px-5 lg:px-6">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-2 text-sm">
           {crumbs.map((crumb, idx) => {
             const last = idx === crumbs.length - 1;
             return (
               <span key={`crumb-${idx}`} className="flex min-w-0 max-w-[18rem] items-center gap-2">
-                {idx > 0 && <span className="shrink-0 text-muted/70" aria-hidden>/</span>}
+                {idx > 0 && <span className="text-muted" aria-hidden>/</span>}
                 {crumb.to && !last ? (
-                  <Link to={crumb.to} className="min-w-0 truncate text-muted transition-colors hover:text-text" title={crumb.label}>
+                  <Link to={crumb.to} className="min-w-0 truncate text-muted hover:text-text" title={crumb.label}>
                     {crumb.label}
                   </Link>
                 ) : (
-                  <span className={`min-w-0 truncate ${last ? "font-semibold text-text" : "text-muted"}`} title={crumb.label}>
+                  <span className={last ? "min-w-0 truncate font-medium text-text" : "min-w-0 truncate text-muted"} title={crumb.label}>
                     {crumb.label}
                   </span>
                 )}
@@ -108,37 +102,37 @@ export function Topbar({ theme, onThemeCycle, onLogout, onOpenCommandPalette }: 
             );
           })}
         </nav>
-      </div>
 
-      <div className="flex flex-1 flex-col gap-3 lg:max-w-[42rem] lg:flex-row lg:items-center lg:justify-end">
-        <label className="relative flex min-w-0 flex-1 items-center">
-          <Search className="pointer-events-none absolute left-3 h-4 w-4 text-muted" />
-          <input
-            ref={searchFieldRef}
-            type="text"
-            readOnly
-            placeholder="Search applications, deployments, and settings"
-            className="w-full rounded-2xl border border-border bg-surface-alt/80 px-3 py-2.5 pl-9 pr-16 text-sm text-text placeholder:text-muted focus:border-border-strong focus:outline-none"
-            aria-label="Open command palette"
-            aria-haspopup="dialog"
-            onClick={openPalette}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                openPalette();
-              }
-            }}
-          />
-          <span className="mono pointer-events-none absolute right-3 rounded-lg border border-border bg-surface px-2 py-1 text-[10px] uppercase tracking-[0.16em] text-muted">
-            {modKey}K
-          </span>
-        </label>
+        <div className="flex flex-1 flex-col gap-3 lg:max-w-[34rem] lg:flex-row lg:items-center lg:justify-end">
+          <label className="relative flex min-w-0 flex-1 items-center">
+            <Search className="pointer-events-none absolute left-3 h-4 w-4 text-muted" />
+            <input
+              ref={searchFieldRef}
+              type="text"
+              readOnly
+              placeholder="Search"
+              className="w-full rounded-md border border-border bg-bg px-3 py-2 pl-9 pr-16 text-sm text-text placeholder:text-muted focus:border-border-strong focus:outline-none"
+              aria-label="Open command palette"
+              aria-haspopup="dialog"
+              onClick={openPalette}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  openPalette();
+                }
+              }}
+            />
+            <span className="mono pointer-events-none absolute right-3 text-[10px] uppercase tracking-[0.16em] text-muted">
+              {modKey}K
+            </span>
+          </label>
 
-        <div className="flex items-center gap-2 self-end lg:self-auto">
-          <ThemeToggle preference={theme} onCycle={onThemeCycle} />
-          <Button variant="ghost" size="sm" onClick={onLogout} className="rounded-xl">
-            Logout
-          </Button>
+          <div className="flex items-center gap-2 self-end lg:self-auto">
+            <ThemeToggle preference={theme} onCycle={onThemeCycle} />
+            <Button variant="ghost" size="sm" onClick={onLogout}>
+              Logout
+            </Button>
+          </div>
         </div>
       </div>
     </header>

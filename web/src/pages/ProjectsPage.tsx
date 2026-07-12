@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, GitBranch, Globe, Plus, Rocket } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiProject, deleteProject } from "../api";
@@ -58,14 +58,6 @@ export function ProjectsPage() {
     return projects.filter((p) => p.latest_deployment?.status?.toUpperCase() === "FAILED");
   }, [projects, filter]);
 
-  const latestUpdated = useMemo(() => {
-    const stamped = projects
-      .map((project) => project.latest_deployment?.created_at)
-      .filter((value): value is string => Boolean(value))
-      .sort((a, b) => Date.parse(b) - Date.parse(a));
-    return stamped[0] ?? "";
-  }, [projects]);
-
   async function executeDelete(project: ApiProject) {
     setDeletingId(project.id);
     const prev = queryClient.getQueryData<ApiProject[]>(fleetKeys.projects);
@@ -83,15 +75,14 @@ export function ProjectsPage() {
       } else {
         void queryClient.invalidateQueries({ queryKey: fleetKeys.projects });
       }
-      const msg = err instanceof Error ? err.message : "Delete failed.";
-      toast.error(msg);
+      toast.error(err instanceof Error ? err.message : "Delete failed.");
     } finally {
       setDeletingId("");
     }
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5">
       <ConfirmDialog
         open={deleteTarget !== null}
         title="Delete application"
@@ -118,205 +109,163 @@ export function ProjectsPage() {
           if (!deletingId) setDeleteTarget(null);
         }}
         onConfirm={async () => {
-          if (deleteTarget) {
-            await executeDelete(deleteTarget);
-          }
+          if (deleteTarget) await executeDelete(deleteTarget);
         }}
       />
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(22rem,0.9fr)]">
-        <Panel className="overflow-hidden" bodyClassName="p-0">
-          <div className="relative overflow-hidden px-6 py-6 sm:px-7">
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.16),transparent_32%),radial-gradient(circle_at_left,rgba(249,115,22,0.18),transparent_28%)]" />
-            <div className="relative">
-              <div className="mono text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">Applications</div>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-text">Deploy around applications, not containers.</h1>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
-                This workspace groups each application with its latest deployment, runtime status, and public reach so the
-                operational picture stays visible without drilling into infrastructure too early.
-              </p>
-              <div className="mt-6 flex flex-wrap gap-3">
-                <ButtonLink to="/projects/new" variant="primary" className="rounded-xl">
-                  <Plus className="h-4 w-4" />
-                  New application
-                </ButtonLink>
-                <ButtonLink to="/observability" variant="secondary" className="rounded-xl">
-                  <Rocket className="h-4 w-4" />
-                  Monitor fleet
-                </ButtonLink>
-              </div>
-            </div>
-          </div>
-        </Panel>
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Applications</div>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-text">Application fleet</h1>
+          <p className="mt-1 text-sm text-muted">Deploy, monitor, and manage applications from a single workspace.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <ButtonLink to="/projects/new" variant="primary" size="sm">
+            <Plus className="h-4 w-4" />
+            New application
+          </ButtonLink>
+        </div>
+      </header>
 
-        <Panel title="Fleet snapshot">
-          <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-            <Metric label="Applications" value={String(counts.all)} hint="Registered in HostForge" />
-            <Metric label="Healthy" value={String(counts.running)} hint="Running with successful deploys" />
-            <Metric label="Needs attention" value={String(counts.failed)} hint="Latest deploy failed" tone={counts.failed > 0 ? "danger" : "default"} />
-          </div>
-          <div className="mt-4 rounded-2xl border border-border bg-surface-alt/70 p-4 text-sm text-muted">
-            <div className="mono text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">Last deployment activity</div>
-            <div className="mt-2 text-text">{latestUpdated ? formatRelative(latestUpdated, new Date(), fmtLocale) : "No deployments yet"}</div>
-          </div>
-        </Panel>
-      </section>
+      <div className="grid gap-4 md:grid-cols-3">
+        <SummaryCard label="Total applications" value={counts.all} />
+        <SummaryCard label="Healthy" value={counts.running} />
+        <SummaryCard label="Failed deployments" value={counts.failed} tone={counts.failed > 0 ? "danger" : "default"} />
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <FilterTab current={filter} value="all" onChange={setFilter} count={counts.all}>
-            All applications
-          </FilterTab>
-          <FilterTab current={filter} value="running" onChange={setFilter} count={counts.running}>
-            Healthy
-          </FilterTab>
-          <FilterTab current={filter} value="failed" onChange={setFilter} count={counts.failed}>
-            Attention
-          </FilterTab>
+          <FilterTab current={filter} value="all" onChange={setFilter} count={counts.all}>All</FilterTab>
+          <FilterTab current={filter} value="running" onChange={setFilter} count={counts.running}>Healthy</FilterTab>
+          <FilterTab current={filter} value="failed" onChange={setFilter} count={counts.failed}>Failed</FilterTab>
         </div>
-        <div className="text-sm text-muted">{filtered.length} shown</div>
+        <div className="text-sm text-muted">{filtered.length} applications</div>
       </div>
 
       {error && <RetryNotice title="Applications could not be refreshed" detail={error} onRetry={() => void projectsQ.refetch()} />}
-      {loading && projects.length === 0 && (
-        <Panel noBody>
-          <LoadingState label="Loading applications" />
-        </Panel>
-      )}
+      {loading && projects.length === 0 && <Panel noBody><LoadingState label="Loading applications" /></Panel>}
 
       {!loading && filtered.length === 0 && projects.length === 0 && (
         <EmptyState
           title="No applications yet"
-          description="Create your first application from a GitHub repository or image. HostForge will take care of build, deploy, and routing."
-          action={
-            <ButtonLink to="/projects/new" variant="primary" size="sm">
-              <Plus className="h-4 w-4" />
-              New application
-            </ButtonLink>
-          }
+          description="Create your first application from a GitHub repository or image."
+          action={<ButtonLink to="/projects/new" variant="primary" size="sm"><Plus className="h-4 w-4" />New application</ButtonLink>}
         />
       )}
 
       {!loading && filtered.length === 0 && projects.length > 0 && (
-        <EmptyState title={`No ${filter} applications`} description="Try another filter to reveal other applications in the fleet." />
+        <EmptyState title={`No ${filter} applications`} description="Try a different filter to see other applications." />
       )}
 
       {filtered.length > 0 && (
-        <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-          {filtered.map((project) => {
-            const reach = projectReachSummary(project);
-            const latest = project.latest_deployment;
-            const hasFailed = latest?.status?.toUpperCase() === "FAILED";
-            return (
-              <Panel key={project.id} className="h-full" bodyClassName="p-5">
-                <div className="flex h-full flex-col gap-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <Link to={`/projects/${project.id}`} className="block text-lg font-semibold text-text transition-colors hover:text-primary">
-                        {project.name}
-                      </Link>
-                      <div className="mono mt-1 truncate text-[11px] text-muted">{project.repo_url}</div>
-                    </div>
-                    <StatusPill status={project.latest_deployment?.status || "UNKNOWN"} size="sm" />
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <InfoTile icon={GitBranch} label="Branch" value={project.branch || "main"} />
-                    <InfoTile icon={Globe} label="Reach" value={reach} mono />
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StackBadge
-                      stackKind={project.stack_kind || project.latest_deployment?.stack_kind}
-                      stackLabel={project.stack_label || project.latest_deployment?.stack_label}
-                    />
-                    {hasFailed ? (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-danger/30 bg-danger/10 px-2.5 py-1 text-xs text-danger">
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        Needs attention
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <div className="grid gap-3 rounded-2xl border border-border bg-surface-alt/60 p-4 text-sm sm:grid-cols-2">
-                    <div>
-                      <div className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Container</div>
-                      <div className="mt-2 text-text">{project.current_container?.status || "Unknown"}</div>
-                    </div>
-                    <div>
-                      <div className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Last deploy</div>
-                      <div className="mt-2 text-text">{formatRelative(latest?.created_at, new Date(), fmtLocale)}</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-auto flex items-center justify-between gap-3 pt-1">
-                    <ButtonLink to={`/projects/${project.id}`} variant="secondary" size="sm" className="rounded-xl">
-                      Open workspace
-                      <ArrowRight className="h-4 w-4" />
-                    </ButtonLink>
-                    <Button variant="danger" size="sm" className="rounded-xl" disabled={deletingId !== ""} onClick={() => setDeleteTarget(project)}>
-                      {deletingId === project.id ? "Deleting…" : "Delete"}
-                    </Button>
-                  </div>
-                </div>
-              </Panel>
-            );
-          })}
-        </div>
+        <Panel title="Applications" noBody>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] table-fixed text-left text-sm">
+              <thead>
+                <tr className="mono border-b border-border bg-surface-alt text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
+                  <th className="w-[24%] px-4 py-3">Application</th>
+                  <th className="w-[12%] px-4 py-3">Branch</th>
+                  <th className="w-[16%] px-4 py-3">Stack</th>
+                  <th className="w-[18%] px-4 py-3">Reach</th>
+                  <th className="w-[12%] px-4 py-3">Runtime</th>
+                  <th className="w-[12%] px-4 py-3">Deploy</th>
+                  <th className="w-[12%] px-4 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((project) => {
+                  const latest = project.latest_deployment;
+                  return (
+                    <tr key={project.id} className="border-b border-border align-top hover:bg-surface-alt/60">
+                      <td className="px-4 py-4">
+                        <div className="min-w-0">
+                          <Link to={`/projects/${project.id}`} className="font-medium text-text hover:text-primary">
+                            {project.name}
+                          </Link>
+                          <div className="mono mt-1 truncate text-[11px] text-muted">{project.repo_url}</div>
+                        </div>
+                      </td>
+                      <td className="mono px-4 py-4 text-xs text-text">{project.branch || "main"}</td>
+                      <td className="px-4 py-4">
+                        <StackBadge
+                          stackKind={project.stack_kind || latest?.stack_kind}
+                          stackLabel={project.stack_label || latest?.stack_label}
+                          compact
+                        />
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="mono break-all text-xs text-text">{projectReachSummary(project)}</div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="text-xs text-text">{project.current_container?.status || "Unknown"}</div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex flex-col gap-2">
+                          <StatusPill status={latest?.status || "UNKNOWN"} size="sm" />
+                          <span className="text-xs text-muted">{formatRelative(latest?.created_at, new Date(), fmtLocale)}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex justify-end gap-2">
+                          <ButtonLink to={`/projects/${project.id}`} variant="secondary" size="sm">
+                            Open
+                          </ButtonLink>
+                          <Button variant="danger" size="sm" disabled={deletingId !== ""} onClick={() => setDeleteTarget(project)}>
+                            {deletingId === project.id ? "..." : "Delete"}
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
       )}
+
+      <Panel title="Create flow">
+        <div className="grid gap-3 md:grid-cols-3">
+          <FlowStep title="1. Create application" description="Connect a Git repository or container image." />
+          <FlowStep title="2. Add services" description="Attach web, worker, database, cache, or cron services." />
+          <FlowStep title="3. Deploy and monitor" description="Watch deployments, logs, and observability in one workspace." />
+        </div>
+      </Panel>
     </div>
   );
 }
 
-function FilterTab({
-  current,
-  value,
-  onChange,
-  count,
-  children,
-}: {
-  current: Filter;
-  value: Filter;
-  onChange: (next: Filter) => void;
-  count: number;
-  children: string;
-}) {
+function FilterTab({ current, value, onChange, count, children }: { current: Filter; value: Filter; onChange: (next: Filter) => void; count: number; children: string }) {
   const active = current === value;
   return (
     <button
       type="button"
       onClick={() => onChange(value)}
       className={[
-        "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm transition-colors",
-        active
-          ? "border-border-strong bg-surface-alt text-text"
-          : "border-border bg-surface text-muted hover:border-border-strong hover:text-text",
+        "rounded-md border px-3 py-2 text-sm transition-colors",
+        active ? "border-border-strong bg-surface-alt text-text" : "border-border bg-surface text-muted hover:bg-surface-alt hover:text-text",
       ].join(" ")}
     >
-      <span>{children}</span>
-      <span className="mono text-[11px] text-muted">{count}</span>
+      {children}
+      <span className="mono ml-2 text-[11px] text-muted">{count}</span>
     </button>
   );
 }
 
-function Metric({ label, value, hint, tone = "default" }: { label: string; value: string; hint: string; tone?: "default" | "danger" }) {
+function SummaryCard({ label, value, tone = "default" }: { label: string; value: number; tone?: "default" | "danger" }) {
   return (
-    <div className="rounded-2xl border border-border bg-surface-alt/60 p-4">
-      <div className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">{label}</div>
+    <div className="rounded-[12px] border border-border bg-surface p-4">
+      <div className="mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">{label}</div>
       <div className={tone === "danger" ? "mt-2 text-2xl font-semibold text-danger" : "mt-2 text-2xl font-semibold text-text"}>{value}</div>
-      <div className="mt-1 text-xs text-muted">{hint}</div>
     </div>
   );
 }
 
-function InfoTile({ icon: Icon, label, value, mono = false }: { icon: typeof GitBranch; label: string; value: string; mono?: boolean }) {
+function FlowStep({ title, description }: { title: string; description: string }) {
   return (
-    <div className="rounded-2xl border border-border bg-surface-alt/60 p-4">
-      <div className="inline-flex items-center gap-2 text-xs text-muted">
-        <Icon className="h-3.5 w-3.5" />
-        <span>{label}</span>
-      </div>
-      <div className={mono ? "mono mt-2 break-all text-sm text-text" : "mt-2 text-sm text-text"}>{value}</div>
+    <div className="rounded-[12px] border border-border bg-surface-alt p-4">
+      <div className="font-medium text-text">{title}</div>
+      <div className="mt-1 text-sm text-muted">{description}</div>
     </div>
   );
 }
