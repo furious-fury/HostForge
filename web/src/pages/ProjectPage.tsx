@@ -32,8 +32,9 @@ import {
 } from "../api";
 import { projectAccessLinks } from "../accessUrls";
 import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
-import { Button, ButtonLink } from "../components/Button";
+import { Button } from "../components/Button";
 import { BuildMethodBadge } from "../components/BuildMethodBadge";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet";
 import { EnvVarsEditor } from "../components/EnvVarsEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/ToastProvider";
@@ -80,6 +81,16 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
   const [sshKeyBusy, setSshKeyBusy] = useState("");
   const [installations, setInstallations] = useState<ApiGitHubInstallation[]>([]);
   const [sourceBusy, setSourceBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(isSettings);
+
+  useEffect(() => {
+    setSettingsOpen(isSettings);
+  }, [isSettings]);
+
+  function onSettingsOpenChange(open: boolean) {
+    setSettingsOpen(open);
+    if (!open && isSettings) navigate(`/projects/${projectID}`);
+  }
 
   const load = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -432,11 +443,7 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
             Domains (Caddy): <span className="mono text-text">{domainSummary}</span>
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
-            {isSettings ? (
-              <ButtonLink to={`/projects/${projectID}`} variant="secondary" size="sm">Back to project</ButtonLink>
-            ) : (
-              <ButtonLink to={`/projects/${projectID}/settings`} variant="secondary" size="sm">Project settings</ButtonLink>
-            )}
+            <Button variant="secondary" size="sm" onClick={() => setSettingsOpen(true)}>Project settings</Button>
           </div>
         </div>
       </header>
@@ -530,7 +537,17 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
         )}
       </Panel>
 
-      <Panel title="Environment variables" className={isSettings ? "" : "hidden"}>
+      <Sheet open={settingsOpen} onOpenChange={onSettingsOpenChange}>
+        <SheetContent side="right">
+          <SheetHeader>
+            <SheetTitle>Project settings</SheetTitle>
+            <SheetDescription>
+              Manage configuration that changes how this project is deployed and published.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto p-5 sm:p-6">
+            <div className="flex flex-col gap-6">
+      <Panel title="Environment variables">
         <p className="mb-3 text-xs text-muted">
           Values are encrypted on the server and only injected at <span className="font-medium text-text">container runtime</span>{" "}
           (not during the image build). After changing variables, redeploy so the new process picks them up.
@@ -538,7 +555,7 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
         <EnvVarsEditor mode="remote" projectID={projectID} onChange={markEnvPending} />
       </Panel>
 
-      <Panel title="Private repository credentials" className={isSettings ? "" : "hidden"}>
+      <Panel title="Private repository credentials">
         <p className="mb-3 text-xs text-muted">
           Pick one authentication method per project. HostForge tries them in this order at clone/pull time: GitHub
           App installation → Personal Access Token → SSH deploy key → public.
@@ -680,7 +697,6 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
 
       <Panel
         title="Custom domains"
-        className={isSettings ? "" : "hidden"}
         actions={
           customDomains.length ? (
             <Button
@@ -891,6 +907,27 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
         )}
       </Panel>
 
+      <Panel title="Danger Zone" tone="danger">
+        <p className="text-sm text-muted">
+          Deleting a project removes its deployments, domains, and Docker containers permanently.
+        </p>
+        <div className="mt-4">
+          <Button
+            variant="danger"
+            disabled={deleteBusy || !!actionBusy || loading || !project}
+            onClick={() => setDeleteDialogOpen(true)}
+            type="button"
+          >
+            Delete project
+          </Button>
+        </div>
+      </Panel>
+
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+
       <Panel title="Deployment History" noBody className={isSettings ? "hidden" : ""}>
         {loading && deployments.length === 0 ? (
           <LoadingState label="Loading deployment history" />
@@ -944,21 +981,6 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
         )}
       </Panel>
 
-      <Panel title="Danger Zone" tone="danger" className={isSettings ? "" : "hidden"}>
-        <p className="text-sm text-muted">
-          Use <span className="mono text-text">Stop</span> above to halt traffic without removing the project. Deleting a project removes all deployments and domain rows and tears down Docker containers.
-        </p>
-        <div className="mt-4">
-          <Button
-            variant="danger"
-            disabled={deleteBusy || !!actionBusy || loading || !project}
-            onClick={() => setDeleteDialogOpen(true)}
-            type="button"
-          >
-            Delete project
-          </Button>
-        </div>
-      </Panel>
     </div>
   );
 }
