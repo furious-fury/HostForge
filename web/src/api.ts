@@ -40,7 +40,7 @@ export type ApiProject = {
   deploy: ApiDeployConfig;
   created_at: string;
   updated_at: string;
-  /** Mirrors latest deployment Nixpacks stack (when set). */
+  /** Mirrors the latest deployment's builder-neutral stack metadata (when set). */
   stack_kind?: string;
   stack_label?: string;
   latest_deployment?: ApiDeployment;
@@ -60,7 +60,7 @@ export type ApiDeployment = {
   image_ref: string;
   worktree: string;
   error_message: string;
-  /** Stable slug from nixpacks plan: lowercased NIXPACKS_METADATA (e.g. java, haskell, c#) or refined node_* / staticfile. */
+  /** Builder-neutral stable stack slug for the UI icon (for example node, go, or dockerfile). */
   stack_kind?: string;
   stack_label?: string;
   created_at: string;

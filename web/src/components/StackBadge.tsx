@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-/** Nixpacks-derived stack slug from the server (`stack_kind`); open set (matches NIXPACKS_METADATA, e.g. `java`, `c#`, `node_vite`). */
+/** Builder-neutral stack slug from the server (`stack_kind`); open set (for example `java`, `c#`, or `node`). */
 export type StackKindSlug = string;
 
 /** Base URL for `public/stack-icons/*` (Vite `BASE_URL` ends with `/`). */

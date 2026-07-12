@@ -19,6 +19,7 @@ import {
 import { Button, ButtonLink } from "../components/Button";
 import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
+import { StackBadge } from "../components/StackBadge";
 import { Stepper } from "../components/Stepper";
 import { EnvVarsEditor, type EnvDraftPair } from "../components/EnvVarsEditor";
 import { Terminal } from "../components/Terminal";
@@ -78,10 +79,6 @@ export function NewProjectPage() {
   const [branchLookupError, setBranchLookupError] = useState("");
   const [branchTouched, setBranchTouched] = useState(false);
   const branchLookupSeq = useRef(0);
-  const [deployRuntime, setDeployRuntime] = useState<"auto" | "bun">("auto");
-  const [deployInstallCmd, setDeployInstallCmd] = useState("");
-  const [deployBuildCmd, setDeployBuildCmd] = useState("");
-  const [deployStartCmd, setDeployStartCmd] = useState("");
   const [envDraft, setEnvDraft] = useState<EnvDraftPair[]>([]);
   /** Wall-clock anchor when the user starts this deploy (independent of log chunks). */
   const [deployStartedAtMs, setDeployStartedAtMs] = useState<number | null>(null);
@@ -235,11 +232,6 @@ export function NewProjectPage() {
     setMessage("");
     setErrorMessage("");
     try {
-      const hasDeployOverrides =
-        deployRuntime === "bun" ||
-        deployInstallCmd.trim() ||
-        deployBuildCmd.trim() ||
-        deployStartCmd.trim();
       const envPayload = envDraft
         .map((e) => ({ key: e.key.trim(), value: e.value }))
         .filter((e) => e.key !== "" && e.value !== "");
@@ -250,16 +242,6 @@ export function NewProjectPage() {
         project_name: projectName.trim(),
         ...(useApp
           ? { git_source: "github_app", github_installation_id: selectedInstallationID }
-          : {}),
-        ...(hasDeployOverrides
-          ? {
-              deploy: {
-                runtime: deployRuntime,
-                install_cmd: deployInstallCmd.trim(),
-                build_cmd: deployBuildCmd.trim(),
-                start_cmd: deployStartCmd.trim(),
-              },
-            }
           : {}),
         ...(envPayload.length > 0 ? { env: envPayload } : {}),
       });
@@ -502,49 +484,12 @@ export function NewProjectPage() {
             </div>
             <div className="rounded border border-border bg-surface-alt/40 p-4">
               <div className="mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
-                Build runtime (Nixpacks)
+                Build detection (Railpack)
               </div>
               <p className="mt-1 text-xs text-muted">
-                Choose <span className="font-medium text-text">Bun</span> to pin a Bun-friendly Nixpacks plan (Node 20,
-                not Node 18). Leave on <span className="font-medium text-text">Auto</span> for stock Nixpacks detection,
-                or add custom install/build/start commands only when needed.
+                Railpack detects your language, framework, and package manager—including Bun—from the repository. The
+                detected stack and icon appear after the first build.
               </p>
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                <Field label="Runtime">
-                  <select
-                    className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
-                    value={deployRuntime}
-                    onChange={(e) => setDeployRuntime(e.target.value as "auto" | "bun")}
-                  >
-                    <option value="auto">Auto (Nixpacks default)</option>
-                    <option value="bun">Bun (recommended for Bun apps)</option>
-                  </select>
-                </Field>
-                <Field label="Install command (optional)">
-                  <input
-                    className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
-                    value={deployInstallCmd}
-                    onChange={(e) => setDeployInstallCmd(e.target.value)}
-                    placeholder={deployRuntime === "bun" ? "default: bun install" : "e.g. npm ci"}
-                  />
-                </Field>
-                <Field label="Build command (optional)">
-                  <input
-                    className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
-                    value={deployBuildCmd}
-                    onChange={(e) => setDeployBuildCmd(e.target.value)}
-                    placeholder={deployRuntime === "bun" ? "default: bun run build" : "e.g. npm run build"}
-                  />
-                </Field>
-                <Field label="Start command (optional)">
-                  <input
-                    className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
-                    value={deployStartCmd}
-                    onChange={(e) => setDeployStartCmd(e.target.value)}
-                    placeholder={deployRuntime === "bun" ? "default: bun run start" : "e.g. npm run start"}
-                  />
-                </Field>
-              </div>
             </div>
             <details className="rounded border border-border bg-surface-alt/40 p-4">
               <summary className="cursor-pointer mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
@@ -592,6 +537,12 @@ export function NewProjectPage() {
           >
             <div className="flex flex-col gap-3">
               <p className="text-sm text-muted" role="status" aria-live="polite">{message || "Awaiting deployment status…"}</p>
+              {deployment?.stack_kind || deployment?.stack_label ? (
+                <div className="flex items-center gap-2 text-xs text-muted">
+                  <span>Detected stack</span>
+                  <StackBadge stackKind={deployment.stack_kind} stackLabel={deployment.stack_label} />
+                </div>
+              ) : null}
               {errorMessage && (
                 <OperationalNotice title="Deployment failed" tone="danger">{errorMessage}</OperationalNotice>
               )}
