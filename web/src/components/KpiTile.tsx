@@ -20,7 +20,7 @@ const toneClass: Record<NonNullable<KpiTileProps["tone"]>, { value: string; acce
 export function KpiTile({ label, value, hint, footer, tone = "default" }: KpiTileProps) {
   const style = toneClass[tone];
   return (
-    <div className={`flex flex-col gap-3 rounded-panel border border-border border-t-2 bg-surface p-5 shadow-[var(--hf-shadow-panel)] sm:p-6 ${style.accent}`}>
+    <div className={`flex flex-col gap-3 rounded-b-panel rounded-t-none border border-border border-t-2 bg-surface p-5 shadow-[var(--hf-shadow-panel)] sm:p-6 ${style.accent}`}>
       <div className="flex items-center gap-2 mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted">
         <span aria-hidden className={`size-1.5 rounded-full ${style.dot}`} />
         {label}

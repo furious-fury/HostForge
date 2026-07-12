@@ -22,7 +22,7 @@ export function Stepper({ steps, currentIndex, failedIndex }: StepperProps) {
           stateClass = "text-success border-success";
           dot = "●";
         } else if (isCurrent) {
-          stateClass = "text-primary border-primary";
+          stateClass = "border-primary bg-primary text-primary-ink";
           dot = "●";
         } else if (isFailed) {
           stateClass = "text-danger border-danger";
