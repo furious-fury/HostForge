@@ -213,28 +213,28 @@ export function DashboardPage() {
                 value={formatPct(snap.cpu_pct, fmtLocale, 1)}
                 hint={snap.rates_ready ? "Busy % since last tick" : "Rates warming up"}
                 tone={pctTone(snap.cpu_pct)}
-                footer={<Sparkline values={cpuSeries} className="opacity-90" strokeClassName="stroke-primary" />}
+                footer={<Sparkline values={cpuSeries} width={240} height={52} className="w-full" strokeClassName="stroke-primary" showGrid />}
               />
               <KpiTile
                 label="Memory"
                 value={formatPct(hostMem(snap).used_pct, fmtLocale, 1)}
                 hint={`${formatBytes(hostMem(snap).used_bytes, fmtLocale)} / ${formatBytes(hostMem(snap).total_bytes, fmtLocale)}`}
                 tone={pctTone(hostMem(snap).used_pct)}
-                footer={<Sparkline values={memSeries} strokeClassName="stroke-info" />}
+                footer={<Sparkline values={memSeries} width={240} height={52} className="w-full" strokeClassName="stroke-info" showGrid />}
               />
               <KpiTile
                 label="Disk (root)"
                 value={rootDisk ? formatPct(rootDisk.used_pct, fmtLocale, 1) : "—"}
                 hint={rootDisk ? `${formatBytes(rootDisk.used_bytes, fmtLocale)} / ${formatBytes(rootDisk.total_bytes, fmtLocale)} on ${rootDisk.mount}` : "No mount data"}
                 tone={rootDisk ? pctTone(rootDisk.used_pct) : "default"}
-                footer={<Sparkline values={diskSeries} strokeClassName="stroke-warning" />}
+                footer={<Sparkline values={diskSeries} width={240} height={52} className="w-full" strokeClassName="stroke-warning" showGrid />}
               />
               <KpiTile
                 label="Network"
                 value={formatBitsPerSec(totalNetBytesPerSec(snap), fmtLocale)}
                 hint="Σ interfaces (excl. lo / docker bridges)"
                 tone="info"
-                footer={<Sparkline values={netSeries} strokeClassName="stroke-success" />}
+                footer={<Sparkline values={netSeries} width={240} height={52} className="w-full" strokeClassName="stroke-success" showGrid />}
               />
             </div>
           ) : (

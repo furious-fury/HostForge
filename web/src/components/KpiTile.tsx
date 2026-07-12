@@ -9,19 +9,23 @@ type KpiTileProps = {
   tone?: "default" | "success" | "danger" | "warning" | "info";
 };
 
-const toneClass: Record<NonNullable<KpiTileProps["tone"]>, string> = {
-  default: "text-text",
-  success: "text-success",
-  danger: "text-danger",
-  warning: "text-warning",
-  info: "text-info",
+const toneClass: Record<NonNullable<KpiTileProps["tone"]>, { value: string; accent: string; dot: string }> = {
+  default: { value: "text-text", accent: "border-t-border-strong", dot: "bg-border-strong" },
+  success: { value: "text-success", accent: "border-t-success", dot: "bg-success" },
+  danger: { value: "text-danger", accent: "border-t-danger", dot: "bg-danger" },
+  warning: { value: "text-warning", accent: "border-t-warning", dot: "bg-warning" },
+  info: { value: "text-info", accent: "border-t-info", dot: "bg-info" },
 };
 
 export function KpiTile({ label, value, hint, footer, tone = "default" }: KpiTileProps) {
+  const style = toneClass[tone];
   return (
-    <div className="flex flex-col gap-3 rounded-[10px] border border-border bg-surface p-5 sm:p-6">
-      <div className="mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted">{label}</div>
-      <div className={`font-display text-3xl font-semibold tabular-nums ${toneClass[tone]}`}>{value}</div>
+    <div className={`flex flex-col gap-3 rounded-panel border border-border border-t-2 bg-surface p-5 shadow-[var(--hf-shadow-panel)] sm:p-6 ${style.accent}`}>
+      <div className="flex items-center gap-2 mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted">
+        <span aria-hidden className={`size-1.5 rounded-full ${style.dot}`} />
+        {label}
+      </div>
+      <div className={`font-display text-3xl font-semibold tabular-nums ${style.value}`}>{value}</div>
       {hint && <div className="text-xs text-muted">{hint}</div>}
       {footer ? <div className="mt-2 border-t border-border/60 pt-3">{footer}</div> : null}
     </div>

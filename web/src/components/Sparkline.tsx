@@ -6,6 +6,7 @@ type SparklineProps = {
   max?: number;
   className?: string;
   strokeClassName?: string;
+  showGrid?: boolean;
 };
 
 export function Sparkline({
@@ -16,6 +17,7 @@ export function Sparkline({
   max: maxOverride,
   className = "",
   strokeClassName = "stroke-primary",
+  showGrid = false,
 }: SparklineProps) {
   const filtered = values.filter((v) => Number.isFinite(v));
   if (filtered.length === 0) {
@@ -44,7 +46,14 @@ export function Sparkline({
   }
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className={className} aria-hidden>
-      <polyline fill="none" className={strokeClassName} strokeWidth={1.5} strokeLinejoin="round" points={pts.join(" ")} />
+      {showGrid ? (
+        <>
+          <line x1={pad} y1={pad + h * 0.25} x2={width - pad} y2={pad + h * 0.25} className="stroke-border" strokeDasharray="2 3" strokeWidth={0.75} />
+          <line x1={pad} y1={pad + h * 0.75} x2={width - pad} y2={pad + h * 0.75} className="stroke-border" strokeDasharray="2 3" strokeWidth={0.75} />
+        </>
+      ) : null}
+      <polyline fill="none" className={strokeClassName} strokeWidth={2} strokeLinejoin="round" points={pts.join(" ")} />
+      <circle cx={pts.at(-1)?.split(",")[0]} cy={pts.at(-1)?.split(",")[1]} r={1.75} className={strokeClassName.replace("stroke-", "fill-")} />
     </svg>
   );
 }
