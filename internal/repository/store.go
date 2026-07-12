@@ -353,7 +353,7 @@ func (s *Store) UpdateDeploymentLogsPath(ctx context.Context, deploymentID, logs
 	return nil
 }
 
-// UpdateDeploymentStack sets stack_kind and stack_label from nixpacks plan summary (deploy pipeline).
+// UpdateDeploymentStack sets builder-neutral stack_kind and stack_label for a deployment.
 func (s *Store) UpdateDeploymentStack(ctx context.Context, deploymentID, stackKind, stackLabel string) error {
 	_, err := s.db.ExecContext(
 		ctx,

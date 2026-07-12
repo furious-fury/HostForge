@@ -81,7 +81,13 @@ func (a *Adapter) Build(ctx context.Context, request builder.Request, sink build
 		sink(builder.Event{Phase: "build", Message: "Building image with Railpack BuildKit frontend."})
 	}
 	buildLogs := eventWriter{phase: "build", sink: sink}
-	return a.executor.Build(ctx, request, preparation, &buildLogs)
+	result, err := a.executor.Build(ctx, request, preparation, &buildLogs)
+	if err != nil {
+		return builder.Result{}, err
+	}
+	result.StackKind = preparation.StackKind
+	result.StackLabel = preparation.StackLabel
+	return result, nil
 }
 
 // eventWriter converts external tool output into builder events. Both helpers

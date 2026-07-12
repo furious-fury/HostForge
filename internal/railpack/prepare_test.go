@@ -51,7 +51,7 @@ func TestPrepare_WritesPlanAndInfoOutsideWorktree(t *testing.T) {
 		if err := os.WriteFile(planPath, []byte(`{"steps":{}}`), 0o600); err != nil {
 			return err
 		}
-		return os.WriteFile(infoPath, []byte(`{"providers":[]}`), 0o600)
+		return os.WriteFile(infoPath, []byte(`{"detectedProviders":["node"]}`), 0o600)
 	}}
 
 	preparation, err := newTestPlanner(t, runner).Prepare(context.Background(), PrepareRequest{Worktree: worktree, ArtifactsDir: artifacts}, nil, nil)
@@ -61,8 +61,27 @@ func TestPrepare_WritesPlanAndInfoOutsideWorktree(t *testing.T) {
 	if preparation.Version != DefaultVersion || filepath.Dir(preparation.PlanPath) != artifacts || filepath.Dir(preparation.InfoPath) != artifacts {
 		t.Fatalf("unexpected preparation: %+v", preparation)
 	}
+	if preparation.StackKind != "node" || preparation.StackLabel != "Node.js" {
+		t.Fatalf("unexpected stack metadata: %+v", preparation)
+	}
 	if len(runner.calls) != 2 || !reflect.DeepEqual(runner.calls[1].args[:2], []string{"prepare", worktree}) {
 		t.Fatalf("unexpected calls: %+v", runner.calls)
+	}
+}
+
+func TestStackFromInfoJSON_PrefersRecognisedLanguageProvider(t *testing.T) {
+	t.Parallel()
+	kind, label := StackFromInfoJSON([]byte(`{"detectedProviders":["npm", "Python"]}`))
+	if kind != "python" || label != "Python" {
+		t.Fatalf("got kind=%q label=%q", kind, label)
+	}
+}
+
+func TestStackFromInfoJSON_UsesGenericFallbackForUnknownInfo(t *testing.T) {
+	t.Parallel()
+	kind, label := StackFromInfoJSON([]byte(`{"detectedProviders":["npm"]}`))
+	if kind != "unknown" || label != "Unknown" {
+		t.Fatalf("got kind=%q label=%q", kind, label)
 	}
 }
 

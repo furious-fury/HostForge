@@ -3,6 +3,7 @@ package railpack
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,9 +30,11 @@ type PrepareRequest struct {
 // Preparation is the non-secret metadata a future BuildKit adapter needs to
 // invoke the Railpack frontend and persist build provenance.
 type Preparation struct {
-	Version  string
-	PlanPath string
-	InfoPath string
+	Version    string
+	PlanPath   string
+	InfoPath   string
+	StackKind  string
+	StackLabel string
 }
 
 // commandRunner exists to keep CLI execution isolated and fully testable.
@@ -111,7 +114,73 @@ func (p *Planner) Prepare(ctx context.Context, request PrepareRequest, stdout, s
 			return Preparation{}, fmt.Errorf("railpack prepare wrote invalid %s", filepath.Base(path))
 		}
 	}
-	return Preparation{Version: p.expectedVersion, PlanPath: planPath, InfoPath: infoPath}, nil
+	stackKind, stackLabel := StackFromInfoPath(infoPath)
+	return Preparation{
+		Version:    p.expectedVersion,
+		PlanPath:   planPath,
+		InfoPath:   infoPath,
+		StackKind:  stackKind,
+		StackLabel: stackLabel,
+	}, nil
+}
+
+// StackFromInfoPath derives the stable UI stack fields from Railpack's
+// serialized build result. An unrecognised or malformed info file is a normal
+// compatibility case across Railpack releases, so it deliberately returns the
+// generic fallback rather than failing a build.
+func StackFromInfoPath(path string) (string, string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "unknown", "Unknown"
+	}
+	return StackFromInfoJSON(raw)
+}
+
+// StackFromInfoJSON maps Railpack detectedProviders to the icon slugs used by
+// the management UI. Railpack may report auxiliary providers (for example a
+// package manager) alongside the language provider, so known language names
+// take precedence over their original order.
+func StackFromInfoJSON(raw []byte) (string, string) {
+	var info struct {
+		DetectedProviders []string `json:"detectedProviders"`
+	}
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return "unknown", "Unknown"
+	}
+	for _, provider := range info.DetectedProviders {
+		if kind, label, ok := stackForProvider(provider); ok {
+			return kind, label
+		}
+	}
+	return "unknown", "Unknown"
+}
+
+func stackForProvider(provider string) (string, string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(provider))
+	switch normalized {
+	case "node", "nodejs", "node.js":
+		return "node", "Node.js", true
+	case "python":
+		return "python", "Python", true
+	case "go", "golang":
+		return "go", "Go", true
+	case "php":
+		return "php", "PHP", true
+	case "java":
+		return "java", "Java", true
+	case "ruby":
+		return "ruby", "Ruby", true
+	case "deno":
+		return "deno", "Deno", true
+	case "rust":
+		return "rust", "Rust", true
+	case "elixir":
+		return "elixir", "Elixir", true
+	case "staticfile", "static", "html":
+		return "staticfile", "Static site", true
+	default:
+		return "", "", false
+	}
 }
 
 func (p *Planner) verifyVersion(ctx context.Context, stdout, stderr io.Writer) error {

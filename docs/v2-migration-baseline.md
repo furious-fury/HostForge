@@ -58,6 +58,27 @@ Migration work starts from this commit; it must be delivered in small, forward-o
 - **Public port sharing:** remove API/UI `http://127.0.0.1:<port>` access links and any host-port-as-public-URL behavior. A healthy container with no platform/custom domain remains internally healthy but unpublished.
 - **CLI/Nixpacks teaching:** replace README and `site/` installation, quickstart, architecture, deployment, CLI reference, and marketing text so the product no longer teaches the retired flow.
 
+### Stack detection and project setup migration
+
+- The New Project flow must show the detected project stack and use the existing
+  stack-icon assets. `stack_kind` and `stack_label` remain the UI contract, but
+  they must be populated from Railpack preparation metadata or, for a
+  Dockerfile fallback, neutral Dockerfile inspection metadata. An unknown stack
+  uses the existing default icon and an explicit `Unknown` label; it must not
+  silently appear as a Nixpacks result.
+- Remove all Nixpacks wording from project setup, deployment details, build
+  logs, API labels, and documentation. The selected builder (`Railpack` or
+  `Dockerfile fallback`) is the build-method label shown to users.
+- Remove the project-level Bun/runtime selector and the `deploy_runtime`
+  Nixpacks override model. Railpack owns language and package-manager
+  detection, including Bun; users should only configure builder-neutral inputs
+  that Railpack cannot infer, such as an explicit start command when that
+  feature is retained.
+- Migration work must backfill or derive stack metadata for historical
+  deployments where possible, retain the generic icon fallback for older rows,
+  and include tests for Railpack-detected, Dockerfile-fallback, and unknown
+  stacks.
+
 ### Deferred
 
 - Preview/PR environments, with independent routing, retention, and cleanup policy.
@@ -79,7 +100,9 @@ Migration work starts from this commit; it must be delivered in small, forward-o
 2. Add project/environment schema and API/UI state before making webhook routing or Caddy routes environment-specific.
 3. Complete GitHub App-only source selection and migration of existing credential behavior before deleting PAT/SSH storage and UI.
 4. Delete `cmd/cli` only after reusable deploy/domain/log logic is callable through server services/workers.
-5. Remove Nixpacks names and docs only as Railpack/BuildKit produces equivalent build status, stack metadata, and Dockerfile fallback behavior.
+5. Remove Nixpacks names, the Bun/runtime override, and docs only as
+   Railpack/BuildKit produces equivalent build status, stack metadata, icon
+   selection, and Dockerfile fallback behavior.
 
 ## Highest-risk areas
 
@@ -91,4 +114,8 @@ Migration work starts from this commit; it must be delivered in small, forward-o
 
 ## Recommended next commit
 
-Add the builder interface with contract tests only (including Dockerfile fallback selection), following [ADR 0001](./adr-0001-railpack-buildkit.md). Do not switch the active deploy path, delete legacy surfaces, or alter SQLite data in that commit.
+Make stack metadata builder-neutral: populate `stack_kind`/`stack_label` from
+the Railpack path, display the existing icon assets in the New Project and
+deployment UI, and remove the visible Nixpacks/Bun setup controls. Keep the
+change compatible with legacy rows through the default icon before deleting
+the Nixpacks persistence and worktree code in a follow-up migration.

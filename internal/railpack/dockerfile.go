@@ -30,7 +30,13 @@ func (b *DockerfileBuilder) Build(ctx context.Context, request builder.Request, 
 		sink(builder.Event{Phase: "build", Message: "Building repository Dockerfile with BuildKit."})
 	}
 	logs := eventWriter{phase: "build", sink: sink}
-	return b.executor.BuildDockerfile(ctx, request, &logs)
+	result, err := b.executor.BuildDockerfile(ctx, request, &logs)
+	if err != nil {
+		return builder.Result{}, err
+	}
+	result.StackKind = "dockerfile"
+	result.StackLabel = "Dockerfile"
+	return result, nil
 }
 
 var _ builder.Builder = (*DockerfileBuilder)(nil)

@@ -153,7 +153,7 @@ type Deployment struct {
 	ImageRef     string // Docker image reference built for this attempt
 	Worktree     string // on-disk clone path for this deploy
 	ErrorMessage string // set when Status is DeploymentFailed
-	// StackKind is a stable slug from nixpacks plan (e.g. node, node_vite, node_next, go) for UI icons; empty if not captured.
+	// StackKind is a builder-neutral stable slug (e.g. node, go, dockerfile) for UI icons; empty if not captured.
 	StackKind string
 	// StackLabel is a short human summary (e.g. "Node · SPA"); empty if not captured.
 	StackLabel string

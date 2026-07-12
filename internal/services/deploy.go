@@ -377,8 +377,9 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		if err == nil {
 			dockerfileBuilder, err = newDockerfileBuilder(cfg)
 		}
+		var buildResult builder.Result
 		if err == nil {
-			_, err = (builder.Selection{Railpack: railpackBuilder, Dockerfile: dockerfileBuilder}).Build(ctx, builder.Request{
+			buildResult, err = (builder.Selection{Railpack: railpackBuilder, Dockerfile: dockerfileBuilder}).Build(ctx, builder.Request{
 				Worktree: job.Worktree,
 				ImageRef: job.ImageRef,
 				Platform: runtime.GOOS + "/" + runtime.GOARCH,
@@ -393,6 +394,12 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 			log.Info("deploy step", "step", "railpack_build_end", "status", "failed", "duration_ms", ms)
 			recordDeployObs(ctx, log, job, buildStep, "failed", t1, ms, FirstPublicCode(e))
 			return DeployResult{}, e
+		}
+		if err := store.UpdateDeploymentStack(ctx, job.Deployment.ID, buildResult.StackKind, buildResult.StackLabel); err != nil {
+			log.Warn("deploy step", "step", "deployment_stack_persist", "status", "failed", "error", err)
+		} else {
+			log.Info("deploy step", "step", "deployment_stack_persist", "status", "ok", "stack_kind", buildResult.StackKind, "stack_label", buildResult.StackLabel, "builder", buildResult.Kind)
+			_, _ = fmt.Fprintf(combinedOut, "hostforge: detected stack kind=%q label=%q builder=%q\n", buildResult.StackKind, buildResult.StackLabel, buildResult.Kind)
 		}
 		_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== RAILPACK BUILDKIT IMAGE BUILD SUCCEEDED image=%s =====\n\n", job.ImageRef)
 		msRailpack := time.Since(t1).Milliseconds()

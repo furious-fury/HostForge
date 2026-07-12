@@ -29,7 +29,7 @@ func TestDockerfileBuilder_ImplementsBuilderContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Kind != builder.KindDockerfile || len(events) == 0 {
+	if result.Kind != builder.KindDockerfile || result.StackKind != "dockerfile" || result.StackLabel != "Dockerfile" || len(events) == 0 {
 		t.Fatalf("unexpected result=%+v events=%+v", result, events)
 	}
 }

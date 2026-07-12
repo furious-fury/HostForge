@@ -22,7 +22,7 @@ func TestAdapter_BuildsWithPrepareAndBuildKitThenCleansArtifacts(t *testing.T) {
 		if err := os.WriteFile(args[3], []byte(`{"steps":{}}`), 0o600); err != nil {
 			return err
 		}
-		return os.WriteFile(args[5], []byte(`{"providers":[]}`), 0o600)
+		return os.WriteFile(args[5], []byte(`{"detectedProviders":["go"]}`), 0o600)
 	}}
 	planner := newTestPlanner(t, plannerRunner)
 	buildRunner := &fakeRunner{run: func(_ string, _ []string, _ string, stdout, _ io.Writer) error {
@@ -40,7 +40,7 @@ func TestAdapter_BuildsWithPrepareAndBuildKitThenCleansArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ImageID != "sha256:abc" || len(events) < 2 || events[0].Phase != "prepare" || events[len(events)-1].Phase == "prepare" {
+	if result.ImageID != "sha256:abc" || result.StackKind != "go" || result.StackLabel != "Go" || len(events) < 2 || events[0].Phase != "prepare" || events[len(events)-1].Phase == "prepare" {
 		t.Fatalf("unexpected result=%+v events=%+v", result, events)
 	}
 	entries, err := os.ReadDir(artifactsRoot)
