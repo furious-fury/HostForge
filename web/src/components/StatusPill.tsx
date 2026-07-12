@@ -16,7 +16,7 @@ function classify(status: string): { color: string; label: OperationalState; act
   if (normalized === "BUILDING") return { color: "border-signal/60 bg-signal/15 text-signal-ink", label: "Building", active: true };
   if (normalized === "DEPLOYING") return { color: "border-signal/60 bg-signal/15 text-signal-ink", label: "Deploying", active: true };
   if (normalized === "RUNNING_HEALTH_CHECKS" || normalized === "HEALTH_CHECKING") return { color: "border-signal/60 bg-signal/15 text-signal-ink", label: "Running health checks", active: true };
-  if (normalized === "SUCCESS" || normalized === "READY" || normalized === "RUNNING") return { color: "border-success/40 bg-success/10 text-success", label: "Healthy", active: false };
+  if (normalized === "SUCCESS" || normalized === "READY" || normalized === "RUNNING") return { color: "border-success bg-success text-success-ink", label: "Healthy", active: false };
   if (normalized === "DEGRADED" || normalized === "WARNING") return { color: "border-warning/40 bg-warning/10 text-warning", label: "Degraded", active: false };
   if (normalized === "ROLLING_BACK" || normalized === "ROLLBACK") return { color: "border-warning/40 bg-warning/10 text-warning", label: "Rolling back", active: true };
   if (normalized === "FAILED" || normalized === "ERROR" || normalized === "CRASHED" || normalized === "DOWN") return { color: "border-danger/40 bg-danger/10 text-danger", label: "Failed", active: false };

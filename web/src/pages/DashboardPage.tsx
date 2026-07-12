@@ -151,9 +151,6 @@ export function DashboardPage() {
           <ButtonLink to="/projects" variant="secondary" size="sm">
             Projects
           </ButtonLink>
-          <ButtonLink to="/projects" variant="secondary" size="sm">
-            Open Projects
-          </ButtonLink>
           <ButtonLink to="/projects/new" variant="primary" size="sm">
             + New Project
           </ButtonLink>
@@ -256,9 +253,6 @@ export function DashboardPage() {
                 to="/projects"
                 className="mono text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-text"
               >
-                Projects →
-              </Link>
-              <Link to="/projects" className="mono text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-text">
                 Projects →
               </Link>
             </div>
@@ -365,7 +359,7 @@ export function DashboardPage() {
                 + New Project
               </ButtonLink>
               <ButtonLink to="/projects" variant="secondary" size="sm">
-                Open Projects
+                View projects
               </ButtonLink>
             </div>
           </div>

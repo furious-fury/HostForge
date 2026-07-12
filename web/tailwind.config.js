@@ -14,9 +14,11 @@ export default {
         muted: "var(--hf-muted)",
         primary: "var(--hf-primary)",
         "primary-ink": "var(--hf-primary-ink)",
+        focus: "var(--hf-focus)",
         signal: "var(--hf-signal)",
         "signal-ink": "var(--hf-signal-ink)",
         success: "var(--hf-success)",
+        "success-ink": "var(--hf-success-ink)",
         // `<alpha-value>` enables bg-danger/30, text-danger/80, etc. (see --hf-danger-rgb in index.css).
         danger: "rgb(var(--hf-danger-rgb) / <alpha-value>)",
         warning: "var(--hf-warning)",

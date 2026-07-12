@@ -16,8 +16,11 @@
   --hf-muted: #c4c4bd;
   --hf-primary: var(--hf-forge);
   --hf-primary-ink: #ffffff;
+  --hf-focus: var(--hf-info);
   --hf-signal-ink: #262626;
   --hf-success: #38b87a;
+  --hf-success-ink: #102016;
+  --hf-shadow-panel: none;
   --hf-danger: #ff6b62;
   --hf-danger-rgb: 255 107 98;
   --hf-warning: #ffc04d;
@@ -39,8 +42,11 @@
   --hf-muted: #5c5c58;
   --hf-primary: var(--hf-forge);
   --hf-primary-ink: #ffffff;
+  --hf-focus: var(--hf-info);
   --hf-signal-ink: #262626;
   --hf-success: #18794e;
+  --hf-success-ink: #ffffff;
+  --hf-shadow-panel: 0 1px 2px rgb(38 38 38 / 0.06), 0 6px 16px rgb(38 38 38 / 0.04);
   --hf-danger: #b42318;
   --hf-danger-rgb: 180 35 24;
   --hf-warning: #a15c00;
@@ -68,7 +74,7 @@ body {
 }
 
 :where(input, select, textarea, button, a):focus-visible {
-  outline: 2px solid var(--hf-signal);
+  outline: 2px solid var(--hf-focus);
   outline-offset: 2px;
 }
 

@@ -13,7 +13,7 @@ export function ThemeToggle({ preference, onCycle }: ThemeToggleProps) {
       type="button"
       onClick={onCycle}
       title="Toggle theme: light / dark"
-      className="mono inline-flex items-center gap-2 border border-border-strong bg-transparent px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-text hover:bg-surface-alt"
+      className="mono inline-flex min-h-8 items-center gap-2 rounded-md border border-border-strong bg-transparent px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-text hover:bg-surface-alt"
     >
       <span aria-hidden>{icon}</span>
       <span className="relative inline-block">

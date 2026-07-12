@@ -938,7 +938,7 @@ function AppSourcePicker({
             />
           </Field>
           {error ? (
-            <div className="border border-danger bg-danger/10 p-3 text-sm text-danger">{error}</div>
+            <OperationalNotice title="Repositories could not be loaded" tone="danger">{error}</OperationalNotice>
           ) : loading ? (
             <div className="text-sm text-muted">Loading repositories…</div>
           ) : repos.length === 0 ? (
