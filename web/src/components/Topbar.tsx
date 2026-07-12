@@ -1,3 +1,4 @@
+import { Search, Sparkles } from "lucide-react";
 import { useCallback, useMemo, useRef } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import type { ThemePreference } from "../hooks/useUIPrefs";
@@ -20,33 +21,27 @@ function useBreadcrumbs(): Crumb[] {
   const { entry: projectEntry } = useProjectBreadcrumb();
   const segments = location.pathname.split("/").filter(Boolean);
 
-  const crumbs: Crumb[] = [{ label: "Overview", to: "/" }];
+  const crumbs: Crumb[] = [{ label: "Dashboard", to: "/" }];
 
   if (segments.length === 0) {
     return crumbs;
   }
 
   if (segments[0] === "projects") {
-    crumbs.push({ label: "Projects", to: "/projects" });
+    crumbs.push({ label: "Applications", to: "/projects" });
     if (segments[1] === "new") {
-      crumbs.push({ label: "New Project" });
+      crumbs.push({ label: "New application" });
     } else if (segments[1]) {
       const projectID = params.projectID || segments[1];
-      const projectLabel =
-        projectEntry?.projectID === projectID ? projectEntry.name : shortenID(projectID);
+      const projectLabel = projectEntry?.projectID === projectID ? projectEntry.name : shortenID(projectID);
       crumbs.push({ label: projectLabel, to: `/projects/${projectID}` });
       if (segments[2] === "deployments" && segments[3]) {
         const deploymentID = params.deploymentID || segments[3];
         crumbs.push({ label: `Deployment ${shortenID(deploymentID)}` });
       } else if (segments[2] === "settings") {
-        crumbs.push({ label: "Project settings" });
+        crumbs.push({ label: "Application settings" });
       }
     }
-    return crumbs;
-  }
-
-  if (segments[0] === "deployments") {
-    crumbs.push({ label: "Deployments", to: "/deployments" });
     return crumbs;
   }
 
@@ -88,45 +83,42 @@ export function Topbar({ theme, onThemeCycle, onLogout, onOpenCommandPalette }: 
   }, [onOpenCommandPalette]);
 
   return (
-    <header className="flex h-[4.75rem] items-center justify-between border-b border-border bg-surface px-6">
-      <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm">
-        {crumbs.map((crumb, idx) => {
-          const last = idx === crumbs.length - 1;
-          return (
-            <span key={`crumb-${idx}`} className="flex min-w-0 max-w-[18rem] items-center gap-2">
-              {idx > 0 && <span className="shrink-0 text-muted" aria-hidden>/</span>}
-              {crumb.to && !last ? (
-                <Link
-                  to={crumb.to}
-                  className="min-w-0 truncate text-muted hover:text-text"
-                  title={crumb.label}
-                >
-                  {crumb.label}
-                </Link>
-              ) : (
-                <span
-                  className={`min-w-0 truncate ${last ? "font-semibold text-text" : "text-muted"}`}
-                  title={crumb.label}
-                >
-                  {crumb.label}
-                </span>
-              )}
-            </span>
-          );
-        })}
-      </nav>
+    <header className="flex flex-col justify-between gap-4 rounded-[28px] border border-border bg-surface/80 px-5 py-4 shadow-[var(--hf-shadow-panel)] backdrop-blur-xl sm:px-6 lg:h-20 lg:flex-row lg:items-center">
+      <div className="min-w-0">
+        <div className="mono mb-2 inline-flex items-center gap-2 rounded-full border border-border bg-surface-alt/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-muted">
+          <Sparkles className="h-3.5 w-3.5" />
+          Application Workspace
+        </div>
+        <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-2 text-sm">
+          {crumbs.map((crumb, idx) => {
+            const last = idx === crumbs.length - 1;
+            return (
+              <span key={`crumb-${idx}`} className="flex min-w-0 max-w-[18rem] items-center gap-2">
+                {idx > 0 && <span className="shrink-0 text-muted/70" aria-hidden>/</span>}
+                {crumb.to && !last ? (
+                  <Link to={crumb.to} className="min-w-0 truncate text-muted transition-colors hover:text-text" title={crumb.label}>
+                    {crumb.label}
+                  </Link>
+                ) : (
+                  <span className={`min-w-0 truncate ${last ? "font-semibold text-text" : "text-muted"}`} title={crumb.label}>
+                    {crumb.label}
+                  </span>
+                )}
+              </span>
+            );
+          })}
+        </nav>
+      </div>
 
-      <div className="flex flex-1 justify-center px-8">
-        <label className="relative flex w-full max-w-md items-center">
-          <span className="mono pointer-events-none absolute left-3 text-[11px] font-semibold uppercase tracking-wider text-muted">
-            ⌕
-          </span>
+      <div className="flex flex-1 flex-col gap-3 lg:max-w-[42rem] lg:flex-row lg:items-center lg:justify-end">
+        <label className="relative flex min-w-0 flex-1 items-center">
+          <Search className="pointer-events-none absolute left-3 h-4 w-4 text-muted" />
           <input
             ref={searchFieldRef}
             type="text"
             readOnly
-            placeholder="Search projects and deployments"
-            className="mono w-full cursor-pointer border border-border bg-surface-alt px-3 py-2 pl-7 text-xs text-text placeholder:text-muted focus:border-border-strong focus:outline-none"
+            placeholder="Search applications, deployments, and settings"
+            className="w-full rounded-2xl border border-border bg-surface-alt/80 px-3 py-2.5 pl-9 pr-16 text-sm text-text placeholder:text-muted focus:border-border-strong focus:outline-none"
             aria-label="Open command palette"
             aria-haspopup="dialog"
             onClick={openPalette}
@@ -137,17 +129,17 @@ export function Topbar({ theme, onThemeCycle, onLogout, onOpenCommandPalette }: 
               }
             }}
           />
-          <span className="mono pointer-events-none absolute right-3 border border-border px-1.5 py-0.5 text-[10px] uppercase text-muted">
+          <span className="mono pointer-events-none absolute right-3 rounded-lg border border-border bg-surface px-2 py-1 text-[10px] uppercase tracking-[0.16em] text-muted">
             {modKey}K
           </span>
         </label>
-      </div>
 
-      <div className="flex items-center gap-2">
-        <ThemeToggle preference={theme} onCycle={onThemeCycle} />
-        <Button variant="ghost" size="sm" onClick={onLogout}>
-          Logout
-        </Button>
+        <div className="flex items-center gap-2 self-end lg:self-auto">
+          <ThemeToggle preference={theme} onCycle={onThemeCycle} />
+          <Button variant="ghost" size="sm" onClick={onLogout} className="rounded-xl">
+            Logout
+          </Button>
+        </div>
       </div>
     </header>
   );

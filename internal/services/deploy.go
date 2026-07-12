@@ -25,7 +25,6 @@ import (
 	"github.com/hostforge/hostforge/internal/docker"
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/models"
-	"github.com/hostforge/hostforge/internal/nixpacks"
 	"github.com/hostforge/hostforge/internal/obs"
 	"github.com/hostforge/hostforge/internal/platformdomain"
 	"github.com/hostforge/hostforge/internal/railpack"
@@ -101,48 +100,25 @@ func buildDockerEnvFromProject(ctx context.Context, log *slog.Logger, store *rep
 	return out, nil
 }
 
-// GitAuthResolver returns per-project git transport credentials. The server and
-// CLI pass an implementation that prefers App > PAT > SSH > public; callers that
-// pass nil fall back to the legacy PAT-only logic in legacyGitAuthFromProject.
+// GitAuthResolver returns GitHub App installation credentials for a project.
 type GitAuthResolver interface {
 	ResolveAuthOptions(ctx context.Context, project models.Project) (git.AuthOptions, error)
 }
 
-// resolveProjectGitAuth picks the resolver when non-nil, otherwise falls back
-// to the legacy sealed-PAT logic.
-func resolveProjectGitAuth(ctx context.Context, store *repository.Store, project models.Project, sealer *envcrypt.Sealer, resolver GitAuthResolver) (git.AuthOptions, error) {
-	if resolver != nil {
-		opts, err := resolver.ResolveAuthOptions(ctx, project)
-		if err != nil {
-			return git.AuthOptions{}, ErrCode("git_auth_prepare_failed", err)
-		}
-		return opts, nil
+// resolveProjectGitAuth requires a GitHub App installation resolver. PAT and
+// SSH credentials are intentionally not considered by the v2 deploy path.
+func resolveProjectGitAuth(ctx context.Context, project models.Project, resolver GitAuthResolver) (git.AuthOptions, error) {
+	if strings.TrimSpace(project.GitSource) != models.GitSourceGitHubApp || project.GitHubInstallationID <= 0 {
+		return git.AuthOptions{}, ErrCode("github_app_required", fmt.Errorf("project must be linked to a GitHub App installation"))
 	}
-	return legacyGitAuthFromProject(ctx, store, project.ID, sealer)
-}
-
-// legacyGitAuthFromProject decrypts per-project PAT credentials for clone/list
-// operations. It is retained as the default when no resolver is provided so
-// existing unit tests keep working.
-func legacyGitAuthFromProject(ctx context.Context, store *repository.Store, projectID string, sealer *envcrypt.Sealer) (git.AuthOptions, error) {
-	row, err := store.GetProjectGitAuthSealed(ctx, projectID)
+	if resolver == nil {
+		return git.AuthOptions{}, ErrCode("github_app_required", fmt.Errorf("GitHub App resolver is required"))
+	}
+	opts, err := resolver.ResolveAuthOptions(ctx, project)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return git.AuthOptions{}, nil
-		}
-		return git.AuthOptions{}, ErrCode("git_auth_lookup_failed", err)
+		return git.AuthOptions{}, ErrCode("git_auth_prepare_failed", err)
 	}
-	if sealer == nil {
-		return git.AuthOptions{}, ErrCode("env_encryption_key_missing", fmt.Errorf("project has stored git auth but encryption key is not configured"))
-	}
-	if strings.ToLower(strings.TrimSpace(row.Provider)) != "github" {
-		return git.AuthOptions{}, ErrCode("git_auth_provider_unsupported", fmt.Errorf("provider %q", row.Provider))
-	}
-	pt, err := sealer.Open(row.TokenCT)
-	if err != nil {
-		return git.AuthOptions{}, ErrCode("git_auth_decrypt_failed", err)
-	}
-	return git.AuthOptions{GitHubToken: string(pt)}, nil
+	return opts, nil
 }
 
 // PrepareDeploy creates a queued deployment row and returns execution metadata.
@@ -294,7 +270,7 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	t0 := time.Now()
 	log.Info("deploy step", "step", "clone_start", "repo_url", redact.RepoURLForLog(job.RepoURL), "worktree", job.Worktree)
 	_, _ = fmt.Fprintf(combinedOut, "hostforge: cloning url=%s worktree=%s\n", redact.RepoURLForLog(job.RepoURL), job.Worktree)
-	gitAuth, err := resolveProjectGitAuth(ctx, store, job.Project, sealer, authResolver)
+	gitAuth, err := resolveProjectGitAuth(ctx, job.Project, authResolver)
 	if err != nil {
 		e := ErrCode("git_auth_prepare_failed", err)
 		markFailed(e)
@@ -314,45 +290,8 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	log.Info("deploy step", "step", "clone_end", "status", "ok", "duration_ms", msClone)
 	recordDeployObs(ctx, log, job, "clone", "ok", t0, msClone, "")
 
-	if cfg.RailpackEnabled {
-		_, _ = fmt.Fprint(combinedOut, "\nhostforge: Railpack/BuildKit builder enabled; Nixpacks worktree overrides are skipped.\n\n")
-		log.Info("deploy step", "step", "railpack_prepare", "status", "selected")
-	} else {
-		if tomlBody, gen := RenderWorktreeNixpacksToml(job.Project); gen {
-			nxPath := filepath.Join(job.Worktree, "nixpacks.toml")
-			if err := os.WriteFile(nxPath, []byte(tomlBody), 0o644); err != nil {
-				e := ErrCode("nixpacks_config_write_failed", err)
-				markFailed(e)
-				_, _ = fmt.Fprintf(combinedOut, "hostforge: failed to write nixpacks.toml: %v\n", err)
-				return DeployResult{}, e
-			}
-			rt, ei, eb, es := effectiveNixpacksCommandsForLog(job.Project)
-			_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== generated worktree nixpacks.toml (%d bytes) =====\n", len(tomlBody))
-			_, _ = fmt.Fprintf(combinedOut, "hostforge: effective nixpacks settings runtime=%s install=%q build=%q start=%q\n", rt, ei, eb, es)
-			_, _ = fmt.Fprint(combinedOut, "hostforge: (repo nixpacks.toml, if any, is merged/overridden per Nixpacks rules; see README)\n")
-			_, _ = fmt.Fprint(combinedOut, "hostforge: ========================================================\n\n")
-			log.Info("deploy step", "step", "nixpacks_toml_written", "path", nxPath, "bytes", len(tomlBody), "runtime", rt)
-		} else {
-			_, _ = fmt.Fprintf(combinedOut, "\nhostforge: no generated nixpacks.toml (runtime=auto, no command overrides)\n\n")
-			log.Info("deploy step", "step", "nixpacks_toml_skipped", "reason", "auto_no_overrides")
-		}
-
-		tPlan := time.Now()
-		if raw, err := nixpacks.PlanJSON(ctx, job.Worktree); err != nil {
-			log.Warn("deploy step", "step", "nixpacks_plan", "status", "skipped", "error", err)
-			_, _ = fmt.Fprintf(combinedOut, "hostforge: nixpacks plan skipped: %v\n", err)
-		} else {
-			kind, label := nixpacks.SummarizePlanWithWorktree(job.Worktree, raw)
-			if err := store.UpdateDeploymentStack(ctx, job.Deployment.ID, kind, label); err != nil {
-				log.Warn("deploy step", "step", "deployment_stack_persist", "status", "failed", "error", err)
-			} else {
-				log.Info("deploy step", "step", "nixpacks_plan", "duration_ms", time.Since(tPlan).Milliseconds(), "stack_kind", kind, "stack_label", label)
-				if kind != "" || label != "" {
-					_, _ = fmt.Fprintf(combinedOut, "hostforge: detected stack kind=%q label=%q\n", kind, label)
-				}
-			}
-		}
-	}
+	_, _ = fmt.Fprint(combinedOut, "\nhostforge: Railpack/BuildKit builder selected.\n\n")
+	log.Info("deploy step", "step", "railpack_prepare", "status", "selected")
 
 	reservedPorts, err := store.ListAllocatedHostPorts(ctx, "")
 	if err != nil {
@@ -368,9 +307,8 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	}
 
 	t1 := time.Now()
-	buildStep := "nixpacks_build"
-	if cfg.RailpackEnabled {
-		buildStep = "railpack_build"
+	buildStep := "railpack_build"
+	{
 		log.Info("deploy step", "step", "railpack_build_start", "dir", job.Worktree, "image", job.ImageRef)
 		railpackBuilder, err := newRailpackAdapter(cfg)
 		var dockerfileBuilder builder.Builder
@@ -405,21 +343,6 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		msRailpack := time.Since(t1).Milliseconds()
 		log.Info("deploy step", "step", "railpack_build_end", "status", "ok", "duration_ms", msRailpack)
 		recordDeployObs(ctx, log, job, buildStep, "ok", t1, msRailpack, "")
-	} else {
-		log.Info("deploy step", "step", "nixpacks_build_start", "dir", job.Worktree, "image", job.ImageRef)
-		if err := nixpacks.BuildImageWithWriters(ctx, job.Worktree, job.ImageRef, combinedOut, combinedOut); err != nil {
-			e := ErrCode("nixpacks_build_failed", err)
-			markFailed(e)
-			_, _ = fmt.Fprintf(combinedOut, "hostforge: ===== NIXPACKS IMAGE BUILD FAILED =====\nhostforge: nixpacks failed: %v\n", err)
-			ms := time.Since(t1).Milliseconds()
-			log.Info("deploy step", "step", "nixpacks_build_end", "status", "failed", "duration_ms", ms)
-			recordDeployObs(ctx, log, job, buildStep, "failed", t1, ms, FirstPublicCode(e))
-			return DeployResult{}, e
-		}
-		_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== NIXPACKS IMAGE BUILD SUCCEEDED image=%s =====\n\n", job.ImageRef)
-		msNix := time.Since(t1).Milliseconds()
-		log.Info("deploy step", "step", "nixpacks_build_end", "status", "ok", "duration_ms", msNix)
-		recordDeployObs(ctx, log, job, buildStep, "ok", t1, msNix, "")
 	}
 
 	extraEnv, err := buildDockerEnvFromProject(ctx, log, store, job.Project.ID, sealer)
@@ -941,12 +864,11 @@ func railpackLogSink(out io.Writer) builder.EventSink {
 	}
 }
 
-// ValidateRailpackConfig validates the disabled-by-default Railpack/BuildKit
-// configuration without touching host services. It is safe to call in unit
-// tests and before HostForge creates its data directories.
+// ValidateRailpackConfig validates the required Railpack/BuildKit
+// configuration without touching host services.
 func ValidateRailpackConfig(cfg *config.Config) error {
-	if cfg == nil || !cfg.RailpackEnabled {
-		return nil
+	if cfg == nil {
+		return fmt.Errorf("railpack configuration is required")
 	}
 	if strings.TrimSpace(cfg.RailpackBin) == "" || strings.TrimSpace(cfg.RailpackVersion) == "" {
 		return fmt.Errorf("railpack is enabled but helper binary and version are required")
@@ -969,11 +891,9 @@ func ValidateRailpackConfig(cfg *config.Config) error {
 	return nil
 }
 
-// ValidateRailpackReadiness verifies the local dependencies when Railpack is
-// explicitly enabled. It is intentionally not called while the feature flag is
-// false, preserving the existing Nixpacks deployment baseline.
+// ValidateRailpackReadiness verifies the required local Railpack dependencies.
 func ValidateRailpackReadiness(ctx context.Context, cfg *config.Config) error {
-	if err := ValidateRailpackConfig(cfg); err != nil || cfg == nil || !cfg.RailpackEnabled {
+	if err := ValidateRailpackConfig(cfg); err != nil {
 		return err
 	}
 	for _, binary := range []string{cfg.RailpackBin, cfg.BuildKitBin} {

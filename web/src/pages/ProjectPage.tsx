@@ -22,7 +22,6 @@ import {
   fetchProjectDeployments,
   fetchProjectSSHKey,
   generateProjectSSHKey,
-  ProjectGitSource,
   restartProject,
   rollbackProject,
   stopProject,
@@ -72,10 +71,8 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
   const [dnsRefreshing, setDnsRefreshing] = useState(false);
   const [envNeedsRedeploy, setEnvNeedsRedeploy] = useState(false);
   const [gitAuth, setGitAuth] = useState<ApiProjectGitAuth | null>(null);
-  const [gitAuthError, setGitAuthError] = useState("");
   const [gitAuthBusy, setGitAuthBusy] = useState("");
   const [gitAuthTokenInput, setGitAuthTokenInput] = useState("");
-  const [credsTab, setCredsTab] = useState<ProjectGitSource>("url");
   const [sshKey, setSshKey] = useState<ApiProjectSSHKey | null>(null);
   const [sshKeyError, setSshKeyError] = useState("");
   const [sshKeyBusy, setSshKeyBusy] = useState("");
@@ -122,16 +119,14 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
   useEffect(() => {
     if (!projectID) return;
     let cancelled = false;
-    setGitAuthError("");
     setGitAuth(null);
     void fetchProjectGitAuth(projectID)
       .then((data) => {
         if (cancelled) return;
         setGitAuth(data);
       })
-      .catch((err) => {
+      .catch(() => {
         if (cancelled) return;
-        setGitAuthError(err instanceof Error ? err.message : "failed to load git auth");
       });
     return () => {
       cancelled = true;
@@ -170,13 +165,6 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
       cancelled = true;
     };
   }, []);
-
-  // Pick a reasonable default tab from the project's configured source.
-  useEffect(() => {
-    if (!project) return;
-    const src = (project.git_source as ProjectGitSource | undefined) || "url";
-    setCredsTab(src);
-  }, [project?.git_source]);
 
   useEffect(() => {
     if (!projectID || typeof window === "undefined") return;
@@ -359,7 +347,7 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
       />
       <ConfirmDialog
         open={deleteDialogOpen}
-        title="Delete project"
+        title="Delete application"
         description={
           project ? (
             <>
@@ -371,13 +359,13 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
           )
         }
         confirmLabel="Delete"
-        pendingLabel="Deleting project…"
+        pendingLabel="Deleting application…"
         cancelLabel="Cancel"
         confirmVariant="danger"
         typeConfirm={
           project
             ? {
-                prompt: "Type the project name exactly to enable Delete",
+                prompt: "Type the application name exactly to enable Delete",
                 expected: project.name.trim() || projectID,
               }
             : undefined
@@ -391,7 +379,7 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
       <header className="border border-border bg-surface">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border p-4">
           <div className="min-w-0">
-            <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Project</div>
+            <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Application</div>
             <h1 className="text-2xl font-semibold tracking-tight">{project?.name || "—"}</h1>
             <a
               href={project?.repo_url}
@@ -444,7 +432,7 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
             Domains (Caddy): <span className="mono text-text">{domainSummary}</span>
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setSettingsOpen(true)}>Project settings</Button>
+            <Button variant="secondary" size="sm" onClick={() => setSettingsOpen(true)}>Application settings</Button>
           </div>
         </div>
       </header>
@@ -541,9 +529,9 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
       <Sheet open={settingsOpen} onOpenChange={onSettingsOpenChange}>
         <SheetContent side="right">
           <SheetHeader>
-            <SheetTitle>Project settings</SheetTitle>
+            <SheetTitle>Application settings</SheetTitle>
             <SheetDescription>
-              Manage configuration that changes how this project is deployed and published.
+              Manage configuration that changes how this application is deployed and published.
             </SheetDescription>
           </SheetHeader>
           <div className="flex-1 overflow-y-auto p-5 sm:p-6">
@@ -556,39 +544,10 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
         <EnvVarsEditor mode="remote" projectID={projectID} onChange={markEnvPending} />
       </Panel>
 
-      <Panel title="Private repository credentials">
+      <Panel title="GitHub App access">
         <p className="mb-3 text-xs text-muted">
-          Pick one authentication method per project. HostForge tries them in this order at clone/pull time: GitHub
-          App installation → Personal Access Token → SSH deploy key → public.
+          Source access is GitHub App-only. HostForge mints a short-lived installation token for each clone.
         </p>
-        {gitAuthError ? (
-          <div className="mb-3 border border-danger/50 bg-danger/5 px-3 py-2 text-xs text-danger">
-            Could not load credential state: {gitAuthError}
-          </div>
-        ) : null}
-
-        <div role="tablist" aria-label="Credential method" className="mb-3 flex flex-wrap gap-1 border-b border-border">
-          <CredsTabButton
-            id="github_app"
-            label="GitHub App"
-            active={credsTab === "github_app"}
-            onClick={() => setCredsTab("github_app")}
-          />
-          <CredsTabButton
-            id="url"
-            label="Personal Access Token"
-            active={credsTab === "url"}
-            onClick={() => setCredsTab("url")}
-          />
-          <CredsTabButton
-            id="ssh"
-            label="SSH Deploy Key"
-            active={credsTab === "ssh"}
-            onClick={() => setCredsTab("ssh")}
-          />
-        </div>
-
-        {credsTab === "github_app" && (
           <GitHubAppCredsPanel
             project={project}
             installations={installations}
@@ -606,23 +565,8 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
                 setSourceBusy(false);
               }
             }}
-            onClear={async () => {
-              if (!projectID) return;
-              setSourceBusy(true);
-              try {
-                await updateProjectGitSource(projectID, "url");
-                toast.success("Cleared GitHub App link for this project.");
-                await load({ silent: true });
-              } catch (err) {
-                toast.error(err instanceof Error ? err.message : "could not clear installation");
-              } finally {
-                setSourceBusy(false);
-              }
-            }}
           />
-        )}
-
-        {credsTab === "url" && (
+        {false && (
           <PATPanel
             gitAuth={gitAuth}
             tokenInput={gitAuthTokenInput}
@@ -660,7 +604,7 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
           />
         )}
 
-        {credsTab === "ssh" && (
+        {false && (
           <SSHPanel
             sshKey={sshKey}
             error={sshKeyError}
@@ -910,7 +854,7 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
 
       <Panel title="Danger Zone" tone="danger">
         <p className="text-sm text-muted">
-          Deleting a project removes its deployments, domains, and Docker containers permanently.
+          Deleting an application removes its deployments, domains, and Docker containers permanently.
         </p>
         <div className="mt-4">
           <Button
@@ -919,7 +863,7 @@ export function ProjectPage({ view = "overview" }: { view?: "overview" | "settin
             onClick={() => setDeleteDialogOpen(true)}
             type="button"
           >
-            Delete project
+            Delete application
           </Button>
         </div>
       </Panel>
@@ -1340,48 +1284,16 @@ function DnsHintsBlock({
   );
 }
 
-function CredsTabButton({
-  id,
-  label,
-  active,
-  onClick,
-}: {
-  id: string;
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      id={`creds-tab-${id}`}
-      aria-selected={active}
-      onClick={onClick}
-      className={[
-        "-mb-px border-b-2 px-3 py-2 text-sm transition-colors",
-        active
-          ? "border-primary font-semibold text-text"
-          : "border-transparent text-muted hover:text-text",
-      ].join(" ")}
-    >
-      {label}
-    </button>
-  );
-}
-
 function GitHubAppCredsPanel({
   project,
   installations,
   busy,
   onLink,
-  onClear,
 }: {
   project: ApiProject | null;
   installations: ApiGitHubInstallation[];
   busy: boolean;
   onLink: (installationID: number) => void | Promise<void>;
-  onClear: () => void | Promise<void>;
 }) {
   const linkedID = project?.github_installation_id || 0;
   const linked = installations.find((i) => i.installation_id === linkedID) || null;
@@ -1450,11 +1362,6 @@ function GitHubAppCredsPanel({
         >
           {busy ? "Saving…" : usingApp ? "Change installation" : "Use this installation"}
         </Button>
-        {usingApp && (
-          <Button variant="danger" size="sm" disabled={busy} onClick={() => void onClear()}>
-            {busy ? "Clearing…" : "Clear App link"}
-          </Button>
-        )}
       </div>
       <p className="text-xs text-muted">
         When linked, HostForge mints a short-lived installation token for each clone or pull; nothing leaves the

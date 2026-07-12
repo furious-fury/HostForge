@@ -52,17 +52,27 @@ export function Shell({ children, onLogout }: ShellProps) {
 
   return (
     <ProjectBreadcrumbProvider>
-      <div className="grid h-screen grid-cols-[16rem_1fr] grid-rows-[4.75rem_1fr] bg-transparent text-text">
-        <Sidebar />
-        <Topbar
-          theme={prefs.theme}
-          onThemeCycle={onThemeCycle}
-          onLogout={onLogout}
-          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
-        />
-        <a className="skip-link" href="#main-content">Skip to content</a>
-        <main id="main-content" tabIndex={-1} className="overflow-y-auto bg-transparent p-6 sm:p-7 lg:p-9"><div className="mx-auto max-w-[1440px]">{children}</div></main>
-        <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
+      <div className="min-h-screen bg-transparent px-4 py-4 text-text sm:px-5 sm:py-5">
+        <div className="grid min-h-[calc(100vh-2rem)] grid-cols-1 gap-4 lg:grid-cols-[18rem_minmax(0,1fr)] lg:grid-rows-[5rem_minmax(0,1fr)]">
+          <Sidebar />
+          <Topbar
+            theme={prefs.theme}
+            onThemeCycle={onThemeCycle}
+            onLogout={onLogout}
+            onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+          />
+          <a className="skip-link" href="#main-content">
+            Skip to content
+          </a>
+          <main
+            id="main-content"
+            tabIndex={-1}
+            className="overflow-y-auto rounded-[28px] border border-border bg-surface/80 p-5 shadow-[var(--hf-shadow-panel)] backdrop-blur-xl sm:p-6 lg:p-8"
+          >
+            <div className="mx-auto max-w-[1480px]">{children}</div>
+          </main>
+          <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
+        </div>
       </div>
     </ProjectBreadcrumbProvider>
   );

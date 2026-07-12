@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle, ArrowRight, Boxes, Rocket, Server } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ApiDeployment, ApiProject, fetchOnboardingStatus } from "../api";
 import { hostDiskMounts, hostMem, hostNetIfaces, type HostDiskUsage, type HostSample } from "../api/host";
@@ -106,6 +107,16 @@ export function DashboardPage() {
   }, [projects, deployments, projectsReady, deploysReady]);
 
   const recent = useMemo(() => deployments.slice(0, 5), [deployments]);
+  const controlPlaneHealthy = useMemo(() => systemStatus?.checks?.every((check) => (check.status || "").toUpperCase() === "OK") ?? false, [systemStatus]);
+  const needsAttention = useMemo(
+    () =>
+      projects.filter(
+        (project) =>
+          project.latest_deployment?.status?.toUpperCase() === "FAILED" ||
+          project.current_container?.status?.toUpperCase() === "EXITED",
+      ),
+    [projects],
+  );
 
   const projectsError = projectsQ.isError
     ? projectsQ.error instanceof Error
@@ -114,7 +125,6 @@ export function DashboardPage() {
     : "";
 
   const recentLoading = deploysQ.isPending && deploysQ.data === undefined;
-  const systemLoading = systemQ.isPending && systemQ.data === undefined;
 
   const hostSnap = hostSnapQ.data;
   const hostHist = hostHistQ.data?.samples ?? [];
@@ -135,79 +145,74 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Overview</div>
-          <h1 className="text-2xl font-semibold tracking-tight">Fleet status</h1>
-          <p className="mt-1 text-sm text-muted">
-            KPIs and a quick snapshot of recent activity. Full deployment history lives on{" "}
-            <Link to="/projects" className="text-text underline decoration-border-strong underline-offset-2 hover:text-primary">
-              Deployments
-            </Link>
-            .
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <ButtonLink to="/projects" variant="secondary" size="sm">
-            Projects
-          </ButtonLink>
-          <ButtonLink to="/projects/new" variant="primary" size="sm">
-            + New Project
-          </ButtonLink>
-        </div>
-      </header>
-
-      {projectsError && <div className="border border-danger p-3 text-sm text-danger">{projectsError}</div>}
-      {onboardingQ.data?.bootstrap_enabled && !onboardingQ.data.bootstrap_complete && (
-        <Panel title="Onboarding progress">
-          <div className="grid gap-3 px-4 py-3 text-sm sm:grid-cols-3">
-            <div><span className={onboardingQ.data.github_app_complete ? "text-success" : "text-warning"}>{onboardingQ.data.github_app_complete ? "Complete" : "Pending"}</span><p className="mt-1 text-muted">GitHub App</p></div>
-            <div><span className={onboardingQ.data.platform_domain ? "text-success" : "text-warning"}>{onboardingQ.data.platform_domain || "Pending"}</span><p className="mt-1 text-muted">Platform domain</p></div>
-            <div><span className={onboardingQ.data.permanent_ingress_complete ? "text-success" : "text-warning"}>{onboardingQ.data.permanent_ingress_complete ? "Complete" : "Pending"}</span><p className="mt-1 text-muted">Permanent HTTPS</p></div>
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(22rem,0.85fr)]">
+        <Panel className="overflow-hidden" bodyClassName="p-0">
+          <div className="relative overflow-hidden px-6 py-6 sm:px-7">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.16),transparent_30%),radial-gradient(circle_at_left,rgba(249,115,22,0.18),transparent_26%)]" />
+            <div className="relative">
+              <div className="mono text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">Dashboard</div>
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-text">Operate the platform through applications.</h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
+                Start from application state, recent deployments, and platform health. Container-level details stay close,
+                but they no longer lead the experience.
+              </p>
+              <div className="mt-6 flex flex-wrap gap-3">
+                <ButtonLink to="/projects" variant="secondary" className="rounded-xl">
+                  <Boxes className="h-4 w-4" />
+                  View applications
+                </ButtonLink>
+                <ButtonLink to="/projects/new" variant="primary" className="rounded-xl">
+                  <Rocket className="h-4 w-4" />
+                  New application
+                </ButtonLink>
+              </div>
+            </div>
           </div>
         </Panel>
-      )}
+
+        <Panel title="Platform health">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+            <HealthRow icon={Server} label="Control plane" value={controlPlaneHealthy ? "Healthy" : "Degraded"} detail={effectiveBuildLabel(systemStatus?.version)} />
+            <HealthRow icon={AlertTriangle} label="Applications needing attention" value={String(needsAttention.length)} detail={needsAttention.length ? "Latest deploy failed or runtime exited" : "No urgent issues right now"} danger={needsAttention.length > 0} />
+          </div>
+          {onboardingQ.data?.bootstrap_enabled && !onboardingQ.data.bootstrap_complete ? (
+            <div className="mt-4 rounded-2xl border border-warning/30 bg-warning/10 p-4 text-sm text-muted">
+              <div className="font-medium text-text">Onboarding is still in progress</div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
+                <span>{onboardingQ.data.github_app_complete ? "GitHub App ready" : "GitHub App pending"}</span>
+                <span>{onboardingQ.data.platform_domain ? `Domain: ${onboardingQ.data.platform_domain}` : "Platform domain pending"}</span>
+                <span>{onboardingQ.data.permanent_ingress_complete ? "HTTPS ready" : "Permanent HTTPS pending"}</span>
+              </div>
+            </div>
+          ) : null}
+        </Panel>
+      </section>
+
+      {projectsError && <div className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">{projectsError}</div>}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <KpiTile label="Active Projects" value={dashOr(stats.activeProjects)} hint="Projects registered with the control plane" />
-        <KpiTile
-          label="Deploys (24h)"
-          value={dashOr(stats.deploys24)}
-          hint="Total deployments started in the last day"
-          tone={(stats.deploys24 ?? 0) > 0 ? "info" : "default"}
-        />
-        <KpiTile
-          label="Failed (24h)"
-          value={dashOr(stats.failed24)}
-          hint={(stats.failed24 ?? 0) === 0 ? "No failures detected" : "Investigate failed deploys"}
-          tone={(stats.failed24 ?? 0) > 0 ? "danger" : "success"}
-        />
-        <KpiTile
-          label="Containers Running"
-          value={dashOr(stats.runningContainers)}
-          hint="Currently active runtime containers"
-          tone={(stats.runningContainers ?? 0) > 0 ? "success" : "default"}
-        />
+        <KpiTile label="Applications" value={dashOr(stats.activeProjects)} hint="Applications registered in HostForge" />
+        <KpiTile label="Deployments (24h)" value={dashOr(stats.deploys24)} hint="Total deployments started in the last day" tone={(stats.deploys24 ?? 0) > 0 ? "info" : "default"} />
+        <KpiTile label="Failed (24h)" value={dashOr(stats.failed24)} hint={(stats.failed24 ?? 0) === 0 ? "No failures detected" : "Investigate recent deploy errors"} tone={(stats.failed24 ?? 0) > 0 ? "danger" : "success"} />
+        <KpiTile label="Running containers" value={dashOr(stats.runningContainers)} hint="Runtime containers currently online" tone={(stats.runningContainers ?? 0) > 0 ? "success" : "default"} />
       </div>
 
       {hostSnap?.supported === false ? null : (
         <Panel
-          title="Host"
+          title="Infrastructure capacity"
           actions={
-            <Link
-              to="/settings?tab=system"
-              className="mono text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-text"
-            >
-              System →
+            <Link to="/settings?tab=system" className="inline-flex items-center gap-2 text-sm text-muted transition-colors hover:text-text">
+              System details
+              <ArrowRight className="h-4 w-4" />
             </Link>
           }
         >
           {!hostSnap && !hostSnapQ.isPending ? (
-            <p className="px-4 py-3 text-sm text-muted">Host metrics unavailable.</p>
+            <p className="text-sm text-muted">Host metrics unavailable.</p>
           ) : hostSnap?.warming ? (
-            <p className="px-4 py-3 text-sm text-muted">Host metrics warming up (need two samples for rates)…</p>
+            <p className="text-sm text-muted">Host metrics warming up. We need two samples before rates become useful.</p>
           ) : snap ? (
-            <div className="grid grid-cols-1 gap-4 px-4 py-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <KpiTile
                 label="CPU"
                 value={formatPct(snap.cpu_pct, fmtLocale, 1)}
@@ -232,30 +237,25 @@ export function DashboardPage() {
               <KpiTile
                 label="Network"
                 value={formatBitsPerSec(totalNetBytesPerSec(snap), fmtLocale)}
-                hint="Σ interfaces (excl. lo / docker bridges)"
+                hint="Total throughput across primary interfaces"
                 tone="info"
                 footer={<Sparkline values={netSeries} width={240} height={52} className="w-full" strokeClassName="stroke-success" showGrid />}
               />
             </div>
           ) : (
-            <p className="px-4 py-3 text-sm text-muted">Loading host metrics…</p>
+            <p className="text-sm text-muted">Loading host metrics…</p>
           )}
         </Panel>
       )}
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.8fr)]">
         <Panel
-          className="xl:col-span-2"
-          title="Recent activity"
+          title="Recent deployments"
           actions={
-            <div className="flex flex-wrap items-center gap-3">
-              <Link
-                to="/projects"
-                className="mono text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-text"
-              >
-                Projects →
-              </Link>
-            </div>
+            <Link to="/projects" className="inline-flex items-center gap-2 text-sm text-muted transition-colors hover:text-text">
+              All applications
+              <ArrowRight className="h-4 w-4" />
+            </Link>
           }
           noBody
         >
@@ -265,48 +265,49 @@ export function DashboardPage() {
             <div className="p-4">
               <EmptyState
                 title="No deployments yet"
-                description="Start by creating a project from a GitHub repository. Deployments will stream here as they run."
-                action={<ButtonLink to="/projects/new" variant="primary" size="sm">+ New Project</ButtonLink>}
+                description="Create your first application and its deployment history will start streaming here."
+                action={
+                  <ButtonLink to="/projects/new" variant="primary" size="sm">
+                    New application
+                  </ButtonLink>
+                }
               />
             </div>
           ) : (
             <table className="w-full table-fixed text-sm">
               <thead>
                 <tr className="mono border-b border-border text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
-                  <th className="px-4 py-2 w-[24%]">Project</th>
-                  <th className="px-4 py-2 w-[10%]">Stack</th>
-                  <th className="px-4 py-2 w-[16%]">Commit</th>
-                  <th className="px-4 py-2 w-[16%]">Status</th>
-                  <th className="px-4 py-2 w-[16%]">Started</th>
-                  <th className="px-4 py-2 w-[18%]">Duration</th>
+                  <th className="w-[24%] px-4 py-2">Application</th>
+                  <th className="w-[10%] px-4 py-2">Stack</th>
+                  <th className="w-[16%] px-4 py-2">Commit</th>
+                  <th className="w-[16%] px-4 py-2">Status</th>
+                  <th className="w-[16%] px-4 py-2">Started</th>
+                  <th className="w-[18%] px-4 py-2">Duration</th>
                 </tr>
               </thead>
               <tbody>
-                {recent.map((d) => {
-                  const proj = projectByID.get(d.project_id);
-                  const projectName = proj?.name || shortHash(d.project_id, 8);
+                {recent.map((deployment) => {
+                  const project = deployment.project_id ? projectByID.get(deployment.project_id) : null;
                   return (
-                    <tr key={d.id} className="border-b border-border/60 hover:bg-surface-alt">
-                      <td className="px-4 py-3 align-middle truncate">
-                        <Link
-                          to={`/projects/${d.project_id}/deployments/${d.id}`}
-                          className="font-semibold text-text hover:underline"
-                        >
-                          {projectName}
-                        </Link>
-                        {proj?.repo_url && <div className="mono truncate text-[11px] text-muted">{proj.repo_url}</div>}
+                    <tr key={deployment.id} className="border-b border-border/60 hover:bg-surface-alt/60">
+                      <td className="px-4 py-3 align-middle">
+                        {project ? (
+                          <Link to={`/projects/${project.id}`} className="font-medium text-text hover:text-primary">
+                            {project.name}
+                          </Link>
+                        ) : (
+                          <span className="text-muted">Unknown application</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 align-middle">
-                        <StackBadge stackKind={d.stack_kind} stackLabel={d.stack_label} compact />
+                        <StackBadge stackKind={deployment.stack_kind} stackLabel={deployment.stack_label} compact />
                       </td>
+                      <td className="mono px-4 py-3 align-middle text-xs text-text">{shortHash(deployment.commit_hash, 7)}</td>
                       <td className="px-4 py-3 align-middle">
-                        <span className="mono text-xs text-text">{shortHash(d.commit_hash, 7)}</span>
+                        <StatusPill status={deployment.status} size="sm" />
                       </td>
-                      <td className="px-4 py-3 align-middle">
-                        <StatusPill status={d.status} size="sm" />
-                      </td>
-                      <td className="px-4 py-3 align-middle text-xs text-muted">{formatRelative(d.created_at, new Date(), fmtLocale)}</td>
-                      <td className="px-4 py-3 align-middle mono text-xs text-text">{formatDuration(d.created_at, d.updated_at)}</td>
+                      <td className="px-4 py-3 align-middle text-xs text-muted">{formatRelative(deployment.created_at, new Date(), fmtLocale)}</td>
+                      <td className="mono px-4 py-3 align-middle text-xs text-text">{formatDuration(deployment.created_at, deployment.updated_at)}</td>
                     </tr>
                   );
                 })}
@@ -315,55 +316,42 @@ export function DashboardPage() {
           )}
         </Panel>
 
-        <Panel title="System">
-          <p className="mb-3 text-[11px] leading-snug text-muted">
-            Health checks for this server, updated live. Codes are meant for support and docs; use server logs for timing
-            and request tracing.
-          </p>
-          <ul className="flex flex-col divide-y divide-border">
-            {systemStatus?.checks?.map((c) => (
-              <li
-                key={c.id}
-                className="py-2 text-sm"
-                title={[c.error_code, c.detail].filter(Boolean).join(" — ") || undefined}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <span className="text-muted">{c.label}</span>
-                  <StatusPill status={c.status} size="sm" />
-                </div>
-                {c.error_code ? (
-                  <p className="mt-1 font-mono text-[10px] leading-snug text-text">
-                    <span className="text-muted">code</span> {c.error_code}
-                  </p>
-                ) : null}
-                {c.detail ? (
-                  <p className="mt-1 line-clamp-3 font-mono text-[10px] leading-snug text-muted">{c.detail}</p>
-                ) : null}
-              </li>
-            ))}
-            {!systemStatus && !systemLoading ? (
-              <li className="py-2 text-xs text-muted">System status unavailable (retry by refreshing the page).</li>
-            ) : null}
-            {systemLoading ? <li className="py-2 text-xs text-muted">Loading system checks…</li> : null}
-            <li className="flex items-center justify-between py-2 text-sm">
-              <span className="text-muted">Build version</span>
-              <span className="mono text-xs text-text">
-                {effectiveBuildLabel(systemStatus?.version)}
-              </span>
-            </li>
-          </ul>
-          <div className="mt-4 border-t border-border pt-4">
-            <div className="mono mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Quick Actions</div>
-            <div className="flex flex-col gap-2">
-              <ButtonLink to="/projects/new" variant="primary" size="sm">
-                + New Project
-              </ButtonLink>
-              <ButtonLink to="/projects" variant="secondary" size="sm">
-                View projects
-              </ButtonLink>
+        <Panel title="Attention queue">
+          {needsAttention.length === 0 ? (
+            <div className="rounded-2xl border border-border bg-surface-alt/60 p-4 text-sm text-muted">No applications are currently flagged for attention.</div>
+          ) : (
+            <div className="space-y-3">
+              {needsAttention.slice(0, 4).map((project) => (
+                <Link key={project.id} to={`/projects/${project.id}`} className="block rounded-2xl border border-border bg-surface-alt/60 p-4 transition-colors hover:border-border-strong hover:bg-surface-alt">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-medium text-text">{project.name}</div>
+                      <div className="mt-1 text-xs text-muted">{project.latest_deployment?.error_message || project.repo_url}</div>
+                    </div>
+                    <StatusPill status={project.latest_deployment?.status || project.current_container?.status || "UNKNOWN"} size="sm" />
+                  </div>
+                </Link>
+              ))}
             </div>
-          </div>
+          )}
         </Panel>
+      </div>
+    </div>
+  );
+}
+
+function HealthRow({ icon: Icon, label, value, detail, danger = false }: { icon: typeof Server; label: string; value: string; detail: string; danger?: boolean }) {
+  return (
+    <div className="rounded-2xl border border-border bg-surface-alt/60 p-4">
+      <div className="flex items-start gap-3">
+        <div className={danger ? "flex h-10 w-10 items-center justify-center rounded-xl bg-danger/10 text-danger" : "flex h-10 w-10 items-center justify-center rounded-xl bg-surface text-info"}>
+          <Icon className="h-4 w-4" />
+        </div>
+        <div>
+          <div className="text-sm font-medium text-text">{label}</div>
+          <div className={danger ? "mt-1 text-lg font-semibold text-danger" : "mt-1 text-lg font-semibold text-text"}>{value}</div>
+          <div className="mt-1 text-xs text-muted">{detail}</div>
+        </div>
       </div>
     </div>
   );

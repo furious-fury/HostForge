@@ -271,32 +271,23 @@ func (s *server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_repository_clone_url"})
 		return
 	}
-	gitSource := strings.TrimSpace(req.GitSource)
-	if gitSource == "" {
-		gitSource = models.GitSourceURL
-	}
-	switch gitSource {
-	case models.GitSourceURL, models.GitSourceGitHubApp, models.GitSourceSSH:
-	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_git_source"})
+	gitSource := models.GitSourceGitHubApp
+	if requested := strings.TrimSpace(req.GitSource); requested != "" && requested != models.GitSourceGitHubApp {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "github_app_required"})
 		return
 	}
 	installationID := req.GitHubInstallationID
-	if gitSource == models.GitSourceGitHubApp {
-		if installationID <= 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "github_installation_id_required"})
+	if installationID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "github_installation_id_required"})
+		return
+	}
+	if _, err := s.store.GetGitHubInstallation(r.Context(), installationID); err != nil {
+		if errorsIsNoRows(err) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "installation_not_found"})
 			return
 		}
-		if _, err := s.store.GetGitHubInstallation(r.Context(), installationID); err != nil {
-			if errorsIsNoRows(err) {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "installation_not_found"})
-				return
-			}
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "installation_lookup_failed"})
-			return
-		}
-	} else {
-		installationID = 0
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "installation_lookup_failed"})
+		return
 	}
 
 	branchAuth := git.AuthOptions{}
