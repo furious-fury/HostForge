@@ -70,6 +70,7 @@ type apiProject struct {
 	// StackKind and StackLabel mirror the latest deployment row when present (convenience for list UIs).
 	StackKind        string           `json:"stack_kind,omitempty"`
 	StackLabel       string           `json:"stack_label,omitempty"`
+	BuilderKind      string           `json:"builder_kind,omitempty"`
 	LatestDeployment *apiDeployment   `json:"latest_deployment,omitempty"`
 	Domains          []apiDomain      `json:"domains,omitempty"`
 	DNSGuidance      *dnsops.Guidance `json:"dns_guidance,omitempty"`
@@ -89,6 +90,7 @@ type apiDeployment struct {
 	ErrorMessage string        `json:"error_message"`
 	StackKind    string        `json:"stack_kind,omitempty"`
 	StackLabel   string        `json:"stack_label,omitempty"`
+	BuilderKind  string        `json:"builder_kind,omitempty"`
 	CreatedAt    string        `json:"created_at"`
 	UpdatedAt    string        `json:"updated_at"`
 	Container    *apiContainer `json:"container,omitempty"`
@@ -1034,6 +1036,7 @@ func (s *server) attachProjectSummary(ctx context.Context, out *apiProject, full
 	latest := deploymentToAPI(deployments[0])
 	out.StackKind = latest.StackKind
 	out.StackLabel = latest.StackLabel
+	out.BuilderKind = latest.BuilderKind
 	if containerRec, err := s.store.GetContainerByDeploymentID(ctx, deployments[0].ID); err == nil {
 		c := containerToAPI(containerRec)
 		latest.Container = &c
@@ -1106,6 +1109,7 @@ func deploymentToAPI(d models.Deployment) apiDeployment {
 		ErrorMessage: d.ErrorMessage,
 		StackKind:    d.StackKind,
 		StackLabel:   d.StackLabel,
+		BuilderKind:  d.BuilderKind,
 		CreatedAt:    formatTime(d.CreatedAt),
 		UpdatedAt:    formatTime(d.UpdatedAt),
 	}

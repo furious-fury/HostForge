@@ -33,6 +33,7 @@ import {
 import { projectAccessLinks } from "../accessUrls";
 import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
 import { Button } from "../components/Button";
+import { BuildMethodBadge } from "../components/BuildMethodBadge";
 import { EnvVarsEditor } from "../components/EnvVarsEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/ToastProvider";
@@ -295,10 +296,10 @@ export function ProjectPage() {
 
   const displayStack = useMemo(() => {
     const ok = deployments.find((d) => d.status?.toUpperCase() === "SUCCESS" && (d.stack_kind || d.stack_label));
-    if (ok) return { kind: ok.stack_kind, label: ok.stack_label };
+    if (ok) return { kind: ok.stack_kind, label: ok.stack_label, builderKind: ok.builder_kind };
     const ld = project?.latest_deployment;
     if (ld && (ld.stack_kind || ld.stack_label)) {
-      return { kind: ld.stack_kind, label: ld.stack_label };
+      return { kind: ld.stack_kind, label: ld.stack_label, builderKind: ld.builder_kind };
     }
     return null;
   }, [deployments, project?.latest_deployment]);
@@ -390,7 +391,10 @@ export function ProjectPage() {
           </div>
           <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
             {displayStack ? (
-              <StackBadge stackKind={displayStack.kind} stackLabel={displayStack.label} className="max-w-[12rem]" />
+              <>
+                <StackBadge stackKind={displayStack.kind} stackLabel={displayStack.label} className="max-w-[12rem]" />
+                <BuildMethodBadge kind={displayStack.builderKind} />
+              </>
             ) : null}
             <StatusPill status={latest?.status || "UNKNOWN"} />
           </div>
@@ -509,7 +513,10 @@ export function ProjectPage() {
           HostForge does not apply Nixpacks runtime overrides.
         </p>
         {displayStack && (displayStack.kind || displayStack.label) ? (
-          <StackBadge stackKind={displayStack.kind} stackLabel={displayStack.label} />
+          <div className="flex flex-wrap items-center gap-2">
+            <StackBadge stackKind={displayStack.kind} stackLabel={displayStack.label} />
+            <BuildMethodBadge kind={displayStack.builderKind} />
+          </div>
         ) : (
           <p className="text-xs text-muted">The stack will appear after a successful Railpack deployment.</p>
         )}

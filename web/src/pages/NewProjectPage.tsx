@@ -17,6 +17,7 @@ import {
   syncGitHubInstallations,
 } from "../api";
 import { Button, ButtonLink } from "../components/Button";
+import { BuildMethodBadge } from "../components/BuildMethodBadge";
 import { Panel } from "../components/Panel";
 import { StatusPill } from "../components/StatusPill";
 import { StackBadge } from "../components/StackBadge";
@@ -541,6 +542,7 @@ export function NewProjectPage() {
                 <div className="flex items-center gap-2 text-xs text-muted">
                   <span>Detected stack</span>
                   <StackBadge stackKind={deployment.stack_kind} stackLabel={deployment.stack_label} />
+                  <BuildMethodBadge kind={deployment.builder_kind} />
                 </div>
               ) : null}
               {errorMessage && (

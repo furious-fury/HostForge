@@ -395,7 +395,7 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 			recordDeployObs(ctx, log, job, buildStep, "failed", t1, ms, FirstPublicCode(e))
 			return DeployResult{}, e
 		}
-		if err := store.UpdateDeploymentStack(ctx, job.Deployment.ID, buildResult.StackKind, buildResult.StackLabel); err != nil {
+		if err := store.UpdateDeploymentBuilder(ctx, job.Deployment.ID, string(buildResult.Kind), buildResult.StackKind, buildResult.StackLabel); err != nil {
 			log.Warn("deploy step", "step", "deployment_stack_persist", "status", "failed", "error", err)
 		} else {
 			log.Info("deploy step", "step", "deployment_stack_persist", "status", "ok", "stack_kind", buildResult.StackKind, "stack_label", buildResult.StackLabel, "builder", buildResult.Kind)

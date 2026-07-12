@@ -93,6 +93,16 @@ func TestListDeploymentsWithEmptyStack(t *testing.T) {
 	if err := store.UpdateDeploymentStack(ctx, d.ID, "node", "Node"); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.UpdateDeploymentBuilder(ctx, d.ID, "railpack", "node", "Node.js"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetDeploymentByID(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.BuilderKind != "railpack" || stored.StackKind != "node" || stored.StackLabel != "Node.js" {
+		t.Fatalf("builder metadata mismatch: %+v", stored)
+	}
 	empty2, err := store.ListDeploymentsWithEmptyStack(ctx, 10)
 	if err != nil {
 		t.Fatal(err)

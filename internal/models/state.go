@@ -153,6 +153,8 @@ type Deployment struct {
 	ImageRef     string // Docker image reference built for this attempt
 	Worktree     string // on-disk clone path for this deploy
 	ErrorMessage string // set when Status is DeploymentFailed
+	// BuilderKind identifies the selected image builder (railpack or dockerfile); empty for legacy rows.
+	BuilderKind string
 	// StackKind is a builder-neutral stable slug (e.g. node, go, dockerfile) for UI icons; empty if not captured.
 	StackKind string
 	// StackLabel is a short human summary (e.g. "Node · SPA"); empty if not captured.

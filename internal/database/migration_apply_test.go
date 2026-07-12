@@ -59,6 +59,12 @@ func TestApplyMigrationsIncludesProjectDeployColumns(t *testing.T) {
 	if n != 4 {
 		t.Fatalf("expected 4 deploy_* columns on projects, got count=%d", n)
 	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('deployments') WHERE name = 'builder_kind'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected builder_kind column on deployments, got count=%d", n)
+	}
 }
 
 func TestApplyMigrationsIncludesObservabilityTables(t *testing.T) {

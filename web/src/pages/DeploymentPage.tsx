@@ -9,6 +9,7 @@ import { useProjectBreadcrumb } from "../ProjectBreadcrumbContext";
 import { Button, ButtonLink } from "../components/Button";
 import { Panel } from "../components/Panel";
 import { StackBadge } from "../components/StackBadge";
+import { buildMethodLabel } from "../components/BuildMethodBadge";
 import { isOperationallyActive, StatusPill } from "../components/StatusPill";
 import { Terminal } from "../components/Terminal";
 import { OperationalNotice, RetryNotice } from "../components/OperationalFeedback";
@@ -195,6 +196,7 @@ export function DeploymentPage() {
           <Stat label="Commit" value={shortHash(deployment?.commit_hash || "", 12)} mono />
           <Stat label="Image" value={deployment?.image_ref || "—"} mono />
           <Stat label="Stack" value={stackStatValue(deployment)} />
+          <Stat label="Builder" value={deployment?.builder_kind ? buildMethodLabel(deployment.builder_kind) : "—"} />
           <Stat label="Started" value={formatRelative(deployment?.created_at, new Date(), fmtLocale)} />
           <Stat label="Duration" value={formatDuration(deployment?.created_at, deployment?.updated_at)} mono />
         </dl>

@@ -43,6 +43,7 @@ export type ApiProject = {
   /** Mirrors the latest deployment's builder-neutral stack metadata (when set). */
   stack_kind?: string;
   stack_label?: string;
+  builder_kind?: string;
   latest_deployment?: ApiDeployment;
   domains?: ApiDomain[];
   dns_guidance?: DnsGuidance;
@@ -63,6 +64,8 @@ export type ApiDeployment = {
   /** Builder-neutral stable stack slug for the UI icon (for example node, go, or dockerfile). */
   stack_kind?: string;
   stack_label?: string;
+  /** Selected image builder: `railpack` or `dockerfile`; omitted for legacy deployments. */
+  builder_kind?: string;
   created_at: string;
   updated_at: string;
   container?: ApiContainer;
