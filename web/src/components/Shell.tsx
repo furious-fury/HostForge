@@ -52,25 +52,17 @@ export function Shell({ children, onLogout }: ShellProps) {
 
   return (
     <ProjectBreadcrumbProvider>
-      <div className="min-h-screen bg-bg text-text">
-        <a className="skip-link" href="#main-content">
-          Skip to content
-        </a>
-        <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)]">
-          <Sidebar />
-          <div className="min-w-0">
-            <Topbar
-              theme={prefs.theme}
-              onThemeCycle={onThemeCycle}
-              onLogout={onLogout}
-              onOpenCommandPalette={() => setCommandPaletteOpen(true)}
-            />
-            <main id="main-content" tabIndex={-1} className="min-w-0 p-4 sm:p-5 lg:p-6">
-              <div className="mx-auto max-w-[1440px]">{children}</div>
-            </main>
-          </div>
-          <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
-        </div>
+      <div className="grid h-screen grid-cols-[16rem_1fr] grid-rows-[4.75rem_1fr] bg-transparent text-text">
+        <Sidebar />
+        <Topbar
+          theme={prefs.theme}
+          onThemeCycle={onThemeCycle}
+          onLogout={onLogout}
+          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+        />
+        <a className="skip-link" href="#main-content">Skip to content</a>
+        <main id="main-content" tabIndex={-1} className="overflow-y-auto bg-transparent p-6 sm:p-7 lg:p-9"><div className="mx-auto max-w-[1440px]">{children}</div></main>
+        <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
       </div>
     </ProjectBreadcrumbProvider>
   );

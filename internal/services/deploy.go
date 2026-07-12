@@ -870,6 +870,9 @@ func ValidateRailpackConfig(cfg *config.Config) error {
 	if cfg == nil {
 		return fmt.Errorf("railpack configuration is required")
 	}
+	if !cfg.RailpackEnabled {
+		return nil
+	}
 	if strings.TrimSpace(cfg.RailpackBin) == "" || strings.TrimSpace(cfg.RailpackVersion) == "" {
 		return fmt.Errorf("railpack is enabled but helper binary and version are required")
 	}
@@ -893,6 +896,9 @@ func ValidateRailpackConfig(cfg *config.Config) error {
 
 // ValidateRailpackReadiness verifies the required local Railpack dependencies.
 func ValidateRailpackReadiness(ctx context.Context, cfg *config.Config) error {
+	if cfg == nil || !cfg.RailpackEnabled {
+		return nil
+	}
 	if err := ValidateRailpackConfig(cfg); err != nil {
 		return err
 	}

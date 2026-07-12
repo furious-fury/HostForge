@@ -1,64 +1,95 @@
-import { Activity, Blocks, LayoutDashboard, Plus, Settings2 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { RELEASE_LABEL } from "../uiVersion";
 import { BrandMark } from "./BrandMark";
-import { ButtonLink } from "./Button";
 
 type NavItem = {
   to: string;
   label: string;
-  icon: typeof LayoutDashboard;
   end?: boolean;
+  disabled?: boolean;
 };
 
-const items: NavItem[] = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/projects", label: "Applications", icon: Blocks },
-  { to: "/observability", label: "Observability", icon: Activity },
-  { to: "/settings", label: "Settings", icon: Settings2 },
+type NavGroup = {
+  label: string;
+  items: NavItem[];
+};
+
+const groups: NavGroup[] = [
+  {
+    label: "Main",
+    items: [
+      { to: "/", label: "Overview", end: true },
+      { to: "/projects", label: "Projects" },
+    ],
+  },
+  {
+    label: "Observe",
+    items: [
+      { to: "/observability", label: "Observability" },
+      { to: "/logs", label: "Logs", disabled: true },
+      { to: "/domains", label: "Domains", disabled: true },
+    ],
+  },
+  {
+    label: "System",
+    items: [{ to: "/settings", label: "Settings" }],
+  },
 ];
 
 export function Sidebar() {
   return (
-    <aside className="border-b border-border bg-surface lg:min-h-screen lg:border-b-0 lg:border-r">
-      <div className="flex h-full flex-col px-4 py-4">
-        <div className="flex items-center justify-between gap-3 px-2 py-2">
-          <BrandMark size="md" className="leading-tight" />
+    <aside className="row-span-2 flex h-screen flex-col border-r border-border bg-surface">
+      <div className="flex h-[4.75rem] shrink-0 flex-col justify-center gap-0.5 border-b border-border px-4">
+        <BrandMark size="md" className="leading-tight" />
+        <div className="mono text-[10px] font-semibold uppercase leading-tight tracking-[0.2em] text-muted">
+          Control Plane
         </div>
+      </div>
 
-        <ButtonLink to="/projects/new" variant="primary" size="sm" className="mt-4 w-full justify-center">
-          <Plus className="h-4 w-4" />
-          New application
-        </ButtonLink>
-
-        <nav className="mt-6 flex-1 space-y-1">
-          {items.map((item) => {
-            const Icon = item.icon;
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                className={({ isActive }) =>
-                  [
-                    "flex items-center gap-3 rounded-md px-3 py-2.5 text-sm transition-colors",
-                    isActive ? "bg-surface-alt text-text" : "text-muted hover:bg-surface-alt hover:text-text",
-                  ].join(" ")
-                }
-              >
-                <Icon className="h-4 w-4" />
-                <span>{item.label}</span>
-              </NavLink>
-            );
-          })}
-        </nav>
-
-        <div className="border-t border-border px-2 pt-4 text-xs text-muted">
-          <div className="mono text-[10px] uppercase tracking-[0.18em]">{RELEASE_LABEL}</div>
-          <div className="mt-2 flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-success" aria-hidden />
-            <span>Platform online</span>
+      <nav className="flex-1 overflow-y-auto py-2">
+        {groups.map((group) => (
+          <div key={group.label} className="px-2 py-2">
+            <div className="px-3 pb-1 mono text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">
+              {group.label}
+            </div>
+            <ul className="flex flex-col gap-1">
+              {group.items.map((item) =>
+                item.disabled ? (
+                  <li key={item.to}>
+                    <span className="block cursor-not-allowed rounded-md px-3 py-2.5 text-sm text-muted opacity-50">
+                      {item.label}
+                    </span>
+                  </li>
+                ) : (
+                  <li key={item.to}>
+                    <NavLink
+                      to={item.to}
+                      end={item.end}
+                      className={({ isActive }) =>
+                        `block rounded-md px-3 py-2.5 text-sm transition-colors ${
+                          isActive
+                            ? "bg-primary font-medium text-primary-ink shadow-sm"
+                            : "text-muted hover:bg-surface-alt hover:text-text"
+                        }`
+                      }
+                    >
+                      {item.label}
+                    </NavLink>
+                  </li>
+                ),
+              )}
+            </ul>
           </div>
+        ))}
+      </nav>
+
+      <div className="border-t border-border px-4 py-3 text-[11px] text-muted">
+        <div className="flex items-center justify-between">
+          <span className="mono uppercase tracking-wider">{RELEASE_LABEL}</span>
+          <span className="mono inline-flex items-center gap-1 border border-success px-1.5 py-0.5 text-success">
+            <span aria-hidden>Ã¢â€”Â</span>
+            <span>online</span>
+          </span>
         </div>
       </div>
     </aside>

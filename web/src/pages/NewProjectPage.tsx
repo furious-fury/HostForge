@@ -84,8 +84,8 @@ export function NewProjectPage() {
   /** Wall-clock anchor when the user starts this deploy (independent of log chunks). */
   const [deployStartedAtMs, setDeployStartedAtMs] = useState<number | null>(null);
 
-  // GitHub App is the sole source-access path.
-  const sourceTab = "app" as const;
+  // Source tabs: GitHub App picker vs. raw URL paste.
+  const [sourceTab, setSourceTab] = useState<"app" | "url">("url");
   const [app, setApp] = useState<ApiGitHubApp | null>(null);
   const [installations, setInstallations] = useState<ApiGitHubInstallation[]>([]);
   const [selectedInstallationID, setSelectedInstallationID] = useState<number>(0);
@@ -102,6 +102,7 @@ export function NewProjectPage() {
         const cfg = await fetchGitHubApp();
         if (!cancelled) {
           setApp(cfg);
+          if (cfg.configured) setSourceTab("app");
         }
       } catch {
         if (!cancelled) setApp({ configured: false });
@@ -211,6 +212,12 @@ export function NewProjectPage() {
   useEffect(() => {
     if (phase === "form" && errorMessage) formErrorRef.current?.focus();
   }, [errorMessage, phase]);
+
+  function suggestName(url: string) {
+    const trimmed = url.trim().replace(/\/$/, "");
+    const piece = trimmed.split("/").pop() || "project";
+    return piece.replace(/\.git$/, "");
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -363,6 +370,28 @@ export function NewProjectPage() {
                 </OperationalNotice>
               </div>
             ) : null}
+            <div
+              role="tablist"
+              aria-label="Source"
+              className="flex flex-wrap items-center gap-1 border-b border-border"
+            >
+              <SourceTab
+                id="app"
+                label="GitHub App"
+                active={sourceTab === "app"}
+                disabled={!app?.configured}
+                onClick={() => setSourceTab("app")}
+                hint={!app?.configured ? "Not connected" : undefined}
+              />
+              <SourceTab
+                id="url"
+                label="Public URL or PAT"
+                active={sourceTab === "url"}
+                onClick={() => setSourceTab("url")}
+              />
+            </div>
+
+            {sourceTab === "app" ? (
               <AppSourcePicker
                 appConfigured={Boolean(app?.configured)}
                 installations={installations}
@@ -382,6 +411,28 @@ export function NewProjectPage() {
                 loading={installLoading}
                 error={installError}
               />
+            ) : (
+              <Field label="Repo URL" required>
+                <input
+                  className="mono w-full border border-border bg-surface-alt px-3 py-2 text-sm text-text focus:border-border-strong focus:outline-none"
+                  value={repoURL}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setRepoURL(next);
+                    setBranchTouched(false);
+                    if (!nameTouched) {
+                      setProjectName(suggestName(next));
+                    }
+                  }}
+                  placeholder="https://github.com/user/repo"
+                  required={sourceTab === "url"}
+                />
+                <span className="mono mt-1 text-[10px] uppercase tracking-wider text-muted">
+                  Public repositories deploy as-is. For a private repo via PAT or SSH deploy key, open the project page
+                  after creation.
+                </span>
+              </Field>
+            )}
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Field label="Branch">
                 {availableBranches.length > 0 ? (
@@ -691,6 +742,47 @@ function Field({
       </span>
       {children}
     </label>
+  );
+}
+
+function SourceTab({
+  id,
+  label,
+  active,
+  onClick,
+  disabled,
+  hint,
+}: {
+  id: string;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+  hint?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      id={`source-tab-${id}`}
+      aria-selected={active}
+      onClick={onClick}
+      disabled={disabled}
+      className={[
+        "relative -mb-px border-b-2 px-3 py-2 text-sm transition-colors",
+        active
+          ? "border-primary font-semibold text-text"
+          : "border-transparent text-muted hover:text-text",
+        disabled ? "cursor-not-allowed opacity-60" : "",
+      ].join(" ")}
+    >
+      {label}
+      {hint && (
+        <span className="mono ml-2 rounded-sm border border-border bg-surface-alt px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted">
+          {hint}
+        </span>
+      )}
+    </button>
   );
 }
 

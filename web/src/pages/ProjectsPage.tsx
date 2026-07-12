@@ -1,5 +1,4 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiProject, deleteProject } from "../api";
@@ -7,10 +6,10 @@ import { projectReachSummary } from "../accessUrls";
 import { Button, ButtonLink } from "../components/Button";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyState } from "../components/EmptyState";
-import { LoadingState, RetryNotice } from "../components/OperationalFeedback";
 import { Panel } from "../components/Panel";
 import { StackBadge } from "../components/StackBadge";
 import { StatusPill } from "../components/StatusPill";
+import { LoadingState, RetryNotice } from "../components/OperationalFeedback";
 import { useToast } from "../components/ToastProvider";
 import { formatRelative } from "../format";
 import { fleetKeys, useProjectsQuery } from "../hooks/fleetQueries";
@@ -29,7 +28,7 @@ export function ProjectsPage() {
   const error = projectsQ.isError
     ? projectsQ.error instanceof Error
       ? projectsQ.error.message
-      : "failed to load applications"
+      : "failed to load projects"
     : "";
   const [filter, setFilter] = useState<Filter>("all");
   const [deletingId, setDeletingId] = useState("");
@@ -67,7 +66,7 @@ export function ProjectsPage() {
     try {
       await deleteProject(project.id);
       await invalidateFleetProjectsAndDeployments(queryClient);
-      toast.success(`Deleted application "${project.name}".`);
+      toast.success(`Deleted project "${project.name}".`);
       setDeleteTarget(null);
     } catch (err) {
       if (prev !== undefined) {
@@ -75,22 +74,23 @@ export function ProjectsPage() {
       } else {
         void queryClient.invalidateQueries({ queryKey: fleetKeys.projects });
       }
-      toast.error(err instanceof Error ? err.message : "Delete failed.");
+      const msg = err instanceof Error ? err.message : "Delete failed.";
+      toast.error(msg);
     } finally {
       setDeletingId("");
     }
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
       <ConfirmDialog
         open={deleteTarget !== null}
-        title="Delete application"
+        title="Delete project"
         description={
           deleteTarget ? (
             <>
-              <span className="font-semibold text-text">{`"${deleteTarget.name}"`}</span> will be removed permanently.
-              This stops and removes Docker containers, deletes deployments and domain records, and cannot be undone.
+              <span className="font-semibold text-text">{`"${deleteTarget.name}"`}</span> will be removed permanently. This
+              stops and removes Docker containers, deletes all deployments and domain records, and cannot be undone.
             </>
           ) : null
         }
@@ -100,7 +100,7 @@ export function ProjectsPage() {
         typeConfirm={
           deleteTarget
             ? {
-                prompt: "Type the application name exactly to enable Delete",
+                prompt: "Type the project name exactly to enable Delete",
                 expected: deleteTarget.name.trim() || deleteTarget.id,
               }
             : undefined
@@ -109,163 +109,144 @@ export function ProjectsPage() {
           if (!deletingId) setDeleteTarget(null);
         }}
         onConfirm={async () => {
-          if (deleteTarget) await executeDelete(deleteTarget);
+          if (deleteTarget) {
+            await executeDelete(deleteTarget);
+          }
         }}
       />
 
-      <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Applications</div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-text">Application fleet</h1>
-          <p className="mt-1 text-sm text-muted">Deploy, monitor, and manage applications from a single workspace.</p>
+          <div className="mono text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">Projects</div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {projects.length} project{projects.length === 1 ? "" : "s"}
+          </h1>
+          <p className="mt-1 text-sm text-muted">Status, last deploy, and how to reach each project.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <ButtonLink to="/projects/new" variant="primary" size="sm">
-            <Plus className="h-4 w-4" />
-            New application
-          </ButtonLink>
-        </div>
+        <ButtonLink to="/projects/new" variant="primary">
+          + New Project
+        </ButtonLink>
       </header>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <SummaryCard label="Total applications" value={counts.all} />
-        <SummaryCard label="Healthy" value={counts.running} />
-        <SummaryCard label="Failed deployments" value={counts.failed} tone={counts.failed > 0 ? "danger" : "default"} />
+      <div className="flex flex-wrap items-center gap-1 self-start border border-border bg-surface p-1">
+        <FilterTab current={filter} value="all" onChange={setFilter} count={counts.all}>
+          All
+        </FilterTab>
+        <FilterTab current={filter} value="running" onChange={setFilter} count={counts.running}>
+          Running
+        </FilterTab>
+        <FilterTab current={filter} value="failed" onChange={setFilter} count={counts.failed}>
+          Failed
+        </FilterTab>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <FilterTab current={filter} value="all" onChange={setFilter} count={counts.all}>All</FilterTab>
-          <FilterTab current={filter} value="running" onChange={setFilter} count={counts.running}>Healthy</FilterTab>
-          <FilterTab current={filter} value="failed" onChange={setFilter} count={counts.failed}>Failed</FilterTab>
-        </div>
-        <div className="text-sm text-muted">{filtered.length} applications</div>
-      </div>
-
-      {error && <RetryNotice title="Applications could not be refreshed" detail={error} onRetry={() => void projectsQ.refetch()} />}
-      {loading && projects.length === 0 && <Panel noBody><LoadingState label="Loading applications" /></Panel>}
+      {error && <RetryNotice title="Projects could not be refreshed" detail={error} onRetry={() => void projectsQ.refetch()} />}
+      {loading && projects.length === 0 && <Panel noBody><LoadingState label="Loading projects" /></Panel>}
 
       {!loading && filtered.length === 0 && projects.length === 0 && (
         <EmptyState
-          title="No applications yet"
-          description="Create your first application from a GitHub repository or image."
-          action={<ButtonLink to="/projects/new" variant="primary" size="sm"><Plus className="h-4 w-4" />New application</ButtonLink>}
+          title="No projects yet"
+          description="Connect a GitHub repository and HostForge will build, deploy, and route traffic for it."
+          action={
+            <ButtonLink to="/projects/new" variant="primary" size="sm">
+              + New Project
+            </ButtonLink>
+          }
         />
       )}
 
       {!loading && filtered.length === 0 && projects.length > 0 && (
-        <EmptyState title={`No ${filter} applications`} description="Try a different filter to see other applications." />
+        <EmptyState title={`No ${filter} projects`} description="Try a different filter to see other projects." />
       )}
 
       {filtered.length > 0 && (
-        <Panel title="Applications" noBody>
+        <Panel title="Project Fleet" noBody>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] table-fixed text-left text-sm">
+            <table className="w-full min-w-[720px] table-fixed border-collapse text-left text-sm">
               <thead>
                 <tr className="mono border-b border-border bg-surface-alt text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
-                  <th className="w-[24%] px-4 py-3">Application</th>
-                  <th className="w-[12%] px-4 py-3">Branch</th>
-                  <th className="w-[16%] px-4 py-3">Stack</th>
-                  <th className="w-[18%] px-4 py-3">Reach</th>
-                  <th className="w-[12%] px-4 py-3">Runtime</th>
-                  <th className="w-[12%] px-4 py-3">Deploy</th>
-                  <th className="w-[12%] px-4 py-3 text-right">Actions</th>
+                  <th className="px-4 py-3 w-[28%]">Project</th>
+                  <th className="px-4 py-3 w-[10%]">Branch</th>
+                  <th className="px-4 py-3 w-[14%]">Last deploy</th>
+                  <th className="px-4 py-3 w-[22%]">Reach</th>
+                  <th className="px-4 py-3 w-[14%]">Status</th>
+                  <th className="px-4 py-3 w-[10%] text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((project) => {
-                  const latest = project.latest_deployment;
-                  return (
-                    <tr key={project.id} className="border-b border-border align-top hover:bg-surface-alt/60">
-                      <td className="px-4 py-4">
-                        <div className="min-w-0">
-                          <Link to={`/projects/${project.id}`} className="font-medium text-text hover:text-primary">
+                {filtered.map((project) => (
+                  <tr key={project.id} className="border-b border-border hover:bg-surface-alt">
+                    <td className="px-4 py-3 align-middle">
+                      <div className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1">
+                          <Link to={`/projects/${project.id}`} className="block font-semibold text-text hover:underline">
                             {project.name}
                           </Link>
-                          <div className="mono mt-1 truncate text-[11px] text-muted">{project.repo_url}</div>
+                          <div className="mono mt-0.5 truncate text-[11px] text-muted">{project.repo_url}</div>
                         </div>
-                      </td>
-                      <td className="mono px-4 py-4 text-xs text-text">{project.branch || "main"}</td>
-                      <td className="px-4 py-4">
                         <StackBadge
-                          stackKind={project.stack_kind || latest?.stack_kind}
-                          stackLabel={project.stack_label || latest?.stack_label}
+                          stackKind={project.stack_kind || project.latest_deployment?.stack_kind}
+                          stackLabel={project.stack_label || project.latest_deployment?.stack_label}
                           compact
+                          className="shrink-0"
                         />
-                      </td>
-                      <td className="px-4 py-4">
-                        <div className="mono break-all text-xs text-text">{projectReachSummary(project)}</div>
-                      </td>
-                      <td className="px-4 py-4">
-                        <div className="text-xs text-text">{project.current_container?.status || "Unknown"}</div>
-                      </td>
-                      <td className="px-4 py-4">
-                        <div className="flex flex-col gap-2">
-                          <StatusPill status={latest?.status || "UNKNOWN"} size="sm" />
-                          <span className="text-xs text-muted">{formatRelative(latest?.created_at, new Date(), fmtLocale)}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-4">
-                        <div className="flex justify-end gap-2">
-                          <ButtonLink to={`/projects/${project.id}`} variant="secondary" size="sm">
-                            Open
-                          </ButtonLink>
-                          <Button variant="danger" size="sm" disabled={deletingId !== ""} onClick={() => setDeleteTarget(project)}>
-                            {deletingId === project.id ? "..." : "Delete"}
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 align-middle font-mono text-xs text-text">{project.branch || "main"}</td>
+                    <td className="px-4 py-3 align-middle text-xs text-text">
+                      {formatRelative(project.latest_deployment?.created_at, new Date(), fmtLocale)}
+                    </td>
+                    <td className="px-4 py-3 align-middle">
+                      <div className="mono break-all text-xs text-text">{projectReachSummary(project)}</div>
+                    </td>
+                    <td className="px-4 py-3 align-middle">
+                      <StatusPill status={project.latest_deployment?.status || "UNKNOWN"} size="sm" />
+                    </td>
+                    <td className="px-4 py-3 align-middle text-right">
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        disabled={deletingId !== ""}
+                        onClick={() => setDeleteTarget(project)}
+                      >
+                        {deletingId === project.id ? "…" : "Delete"}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         </Panel>
       )}
-
-      <Panel title="Create flow">
-        <div className="grid gap-3 md:grid-cols-3">
-          <FlowStep title="1. Create application" description="Connect a Git repository or container image." />
-          <FlowStep title="2. Add services" description="Attach web, worker, database, cache, or cron services." />
-          <FlowStep title="3. Deploy and monitor" description="Watch deployments, logs, and observability in one workspace." />
-        </div>
-      </Panel>
     </div>
   );
 }
 
-function FilterTab({ current, value, onChange, count, children }: { current: Filter; value: Filter; onChange: (next: Filter) => void; count: number; children: string }) {
+function FilterTab({
+  current,
+  value,
+  onChange,
+  count,
+  children,
+}: {
+  current: Filter;
+  value: Filter;
+  onChange: (next: Filter) => void;
+  count: number;
+  children: string;
+}) {
   const active = current === value;
   return (
     <button
       type="button"
       onClick={() => onChange(value)}
-      className={[
-        "rounded-md border px-3 py-2 text-sm transition-colors",
-        active ? "border-border-strong bg-surface-alt text-text" : "border-border bg-surface text-muted hover:bg-surface-alt hover:text-text",
-      ].join(" ")}
+      className={`mono px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider ${
+        active ? "bg-primary text-primary-ink" : "text-muted hover:bg-surface-alt hover:text-text"
+      }`}
     >
       {children}
-      <span className="mono ml-2 text-[11px] text-muted">{count}</span>
+      <span className="ml-2 opacity-70">{count}</span>
     </button>
-  );
-}
-
-function SummaryCard({ label, value, tone = "default" }: { label: string; value: number; tone?: "default" | "danger" }) {
-  return (
-    <div className="rounded-[12px] border border-border bg-surface p-4">
-      <div className="mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">{label}</div>
-      <div className={tone === "danger" ? "mt-2 text-2xl font-semibold text-danger" : "mt-2 text-2xl font-semibold text-text"}>{value}</div>
-    </div>
-  );
-}
-
-function FlowStep({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="rounded-[12px] border border-border bg-surface-alt p-4">
-      <div className="font-medium text-text">{title}</div>
-      <div className="mt-1 text-sm text-muted">{description}</div>
-    </div>
   );
 }
