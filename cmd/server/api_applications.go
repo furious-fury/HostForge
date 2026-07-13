@@ -51,6 +51,40 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if len(parts) == 2 && parts[1] == "services" && r.Method == http.MethodPost {
+		in, ok := decodeServiceRequest(w, r, app.ID, nil)
+		if !ok {
+			return
+		}
+		item, err := s.store.CreateService(r.Context(), in)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"status": "created", "service": item})
+		return
+	}
+	if len(parts) == 3 && parts[1] == "environments" && r.Method == http.MethodPatch {
+		environment, err := s.store.GetEnvironment(r.Context(), parts[2])
+		if err != nil || environment.ApplicationID != app.ID {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "environment_not_found"})
+			return
+		}
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_json_payload"})
+			return
+		}
+		item, err := s.store.UpdateEnvironment(r.Context(), environment.ID, req.Name)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "update_environment_failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "environment": item})
+		return
+	}
 	if len(parts) == 1 && r.Method == http.MethodGet {
 		envs, _ := s.store.ListApplicationEnvironments(r.Context(), app.ID)
 		services, _ := s.store.ListApplicationServices(r.Context(), app.ID)

@@ -189,6 +189,7 @@ func runServer(log *slog.Logger, args []string) int {
 	mux.HandleFunc("/api/github/", handler.withRequestContext(handler.requireManagementAuth(handler.handleGitHubAppRoutes)))
 	mux.HandleFunc("/api/applications", handler.withRequestContext(handler.requireManagementAuth(handler.handleApplications)))
 	mux.HandleFunc("/api/applications/", handler.withRequestContext(handler.requireManagementAuth(handler.handleApplications)))
+	mux.HandleFunc("/api/services/", handler.withRequestContext(handler.requireManagementAuth(handler.handleServices)))
 	mux.HandleFunc("/api/projects", handler.withRequestContext(handler.requireManagementAuth(handler.handleProjectsCollection)))
 	mux.HandleFunc("/api/projects/", handler.withRequestContext(handler.requireManagementAuth(handler.handleProjectRoutes)))
 	mux.HandleFunc("/api/deployments", handler.withRequestContext(handler.requireManagementAuth(handler.handleDeploymentsCollection)))
