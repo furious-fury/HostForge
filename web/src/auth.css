@@ -1,0 +1,9 @@
+.hf-auth-surface {
+  display: grid;
+  min-height: 100svh;
+  place-items: center;
+  padding: 1.5rem;
+  background:
+    radial-gradient(circle at 20% 15%, color-mix(in oklch, var(--accent) 7%, transparent), transparent 28rem),
+    linear-gradient(135deg, var(--background), color-mix(in oklch, var(--muted) 72%, var(--background)));
+}

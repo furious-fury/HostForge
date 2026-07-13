@@ -1,0 +1,20 @@
+.hf-observe-summary {
+  min-height: 7.6rem;
+  border-right: 1px solid var(--border);
+  padding: 1rem;
+}
+
+.hf-observe-summary:last-child { border-right: 0; }
+
+@media (max-width: 1279px) {
+  .hf-observe-summary { border-bottom: 1px solid var(--border); }
+  .hf-observe-summary:nth-child(3n) { border-right: 0; }
+  .hf-observe-summary:nth-last-child(-n + 3) { border-bottom: 0; }
+}
+
+@media (max-width: 767px) {
+  .hf-observe-summary:nth-child(3n) { border-right: 1px solid var(--border); }
+  .hf-observe-summary:nth-child(even) { border-right: 0; }
+  .hf-observe-summary:nth-last-child(-n + 3) { border-bottom: 1px solid var(--border); }
+  .hf-observe-summary:nth-last-child(-n + 2) { border-bottom: 0; }
+}

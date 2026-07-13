@@ -1,0 +1,59 @@
+import { useEffect, useState } from "react"
+import { Link } from "react-router-dom"
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  CheckCircleIcon,
+  CheckIcon,
+  CubeIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  GithubLogoIcon,
+  GlobeIcon,
+  KeyIcon,
+  LockKeyIcon,
+  RocketLaunchIcon,
+  ShieldCheckIcon,
+  UserIcon,
+} from "@phosphor-icons/react"
+
+import { Button } from "@/components/ui/button"
+import { navigateTo } from "@/navigation"
+import "@/auth.css"
+
+export function LoginScreen() {
+  const [showPassword, setShowPassword] = useState(false)
+  return <main className="hf-auth-surface"><section className="w-full max-w-md overflow-hidden rounded-2xl border bg-card shadow-[0_22px_70px_rgb(28_28_24_/_0.09)]"><header className="flex items-center gap-3 border-b bg-muted/75 px-6 py-5"><span className="grid size-9 place-items-center rounded-lg bg-accent text-accent-foreground"><CubeIcon size={19} weight="fill" /></span><div><p className="text-sm font-semibold">HostForge</p><p className="mt-0.5 text-[11px] text-muted-foreground">Control plane</p></div><span className="ml-auto flex items-center gap-1.5 text-[10px] font-medium text-emerald-700"><span className="size-1.5 rounded-full bg-emerald-500" />Host connected</span></header><form className="space-y-5 p-6" onSubmit={(event) => { event.preventDefault(); navigateTo("/") }}><div><h1 className="text-2xl font-semibold tracking-[-0.035em]">Sign in to your control plane</h1><p className="mt-2 text-xs leading-5 text-muted-foreground">Use the local operator credentials configured for this HostForge installation.</p></div><Field label="Username"><div className="relative"><UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><input className="hf-field pl-9" autoComplete="username" defaultValue="mr_fury" /></div></Field><Field label="Password"><div className="relative"><LockKeyIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><input className="hf-field px-9" type={showPassword ? "text" : "password"} autoComplete="current-password" placeholder="Enter password" /><button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeSlashIcon size={15} /> : <EyeIcon size={15} />}</button></div></Field><Button className="w-full" type="submit">Sign in <ArrowRightIcon /></Button></form><footer className="flex items-center justify-between border-t bg-muted/30 px-6 py-3 text-[10px] text-muted-foreground"><span>127.0.0.1:8080</span><span>HostForge v0.9.4</span></footer></section></main>
+}
+
+const onboardingSteps = [
+  { title: "Create admin password", description: "Secure the local operator account.", icon: LockKeyIcon },
+  { title: "Configure platform URL", description: "Choose the public control-plane hostname.", icon: GlobeIcon },
+  { title: "Connect GitHub App", description: "Install repository access and webhooks.", icon: GithubLogoIcon },
+  { title: "Verify Caddy and DNS", description: "Validate routing and certificate readiness.", icon: ShieldCheckIcon },
+  { title: "Create first application", description: "Create the first product container.", icon: CubeIcon },
+  { title: "Add and deploy service", description: "Connect source and launch the first workload.", icon: RocketLaunchIcon },
+]
+
+export function OnboardingScreen() {
+  const [step, setStep] = useState(() => {
+    const saved = Number(window.localStorage.getItem("hostforge-onboarding-step"))
+    return saved >= 1 && saved <= 6 ? saved : 1
+  })
+
+  useEffect(() => {
+    window.localStorage.setItem("hostforge-onboarding-step", String(step))
+  }, [step])
+
+  return <main className="min-h-svh bg-background text-foreground"><header className="flex h-16 items-center border-b bg-card px-5 sm:px-8"><Link to="/" className="flex items-center gap-3"><span className="grid size-8 place-items-center rounded-lg bg-accent text-accent-foreground"><CubeIcon size={17} weight="fill" /></span><span className="text-sm font-semibold">HostForge</span></Link><button onClick={() => navigateTo("/")} className="ml-auto text-xs font-medium text-muted-foreground hover:text-foreground">Finish later</button></header><div className="mx-auto grid w-full max-w-6xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[300px_minmax(0,1fr)] lg:px-8 lg:py-12"><aside className="h-fit overflow-hidden rounded-xl border bg-card"><header className="border-b bg-muted/75 p-5"><p className="text-sm font-semibold">Set up HostForge</p><p className="mt-1 text-xs text-muted-foreground">Step {step} of 6 · progress saves locally</p><div className="mt-4 h-1.5 rounded-full bg-background"><div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${step / 6 * 100}%` }} /></div></header><nav className="p-2">{onboardingSteps.map((item, index) => { const number = index + 1; const StepIcon = item.icon; const complete = number < step; return <button key={item.title} onClick={() => number <= step && setStep(number)} className={`flex w-full items-start gap-3 rounded-lg px-3 py-3 text-left ${number === step ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted"}`}><span className={`grid size-7 shrink-0 place-items-center rounded-md ${number === step ? "bg-white/15" : complete ? "bg-emerald-50 text-emerald-700" : "border bg-card"}`}>{complete ? <CheckIcon size={13} weight="bold" /> : <StepIcon size={14} />}</span><span><span className="block text-[11px] font-semibold">{item.title}</span><span className={`mt-0.5 hidden text-[9px] leading-4 sm:block ${number === step ? "text-white/65" : "text-muted-foreground"}`}>{item.description}</span></span></button> })}</nav></aside><section className="h-fit overflow-hidden rounded-xl border bg-card"><header className="border-b bg-muted/75 px-6 py-5"><p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Step {step} of 6</p><h1 className="mt-2 text-xl font-semibold tracking-tight">{onboardingSteps[step - 1].title}</h1><p className="mt-1 text-xs text-muted-foreground">{onboardingSteps[step - 1].description}</p></header><div className="min-h-[340px] p-6">{step === 1 && <AdminStep />}{step === 2 && <PlatformStep />}{step === 3 && <GithubStep />}{step === 4 && <CaddyStep />}{step === 5 && <ApplicationStep />}{step === 6 && <ServiceStep />}</div><footer className="flex items-center justify-between border-t bg-muted/30 px-6 py-4"><Button variant="outline" disabled={step === 1} onClick={() => setStep(Math.max(1, step - 1))}><ArrowLeftIcon />Back</Button>{step < 6 ? <Button onClick={() => setStep(step + 1)}>Continue <ArrowRightIcon /></Button> : <Button onClick={() => { window.localStorage.removeItem("hostforge-onboarding-step"); navigateTo("/") }}><CheckIcon />Complete setup</Button>}</footer></section></div></main>
+}
+
+function AdminStep() { return <div className="space-y-5"><div className="grid gap-5 sm:grid-cols-2"><Field label="Admin username"><input className="hf-field" defaultValue="mr_fury" /></Field><Field label="Display name"><input className="hf-field" defaultValue="Mr Fury" /></Field></div><Field label="Admin password"><div className="relative"><KeyIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><input className="hf-field pl-9" type="password" placeholder="Enter password" /></div></Field><div className="rounded-lg border bg-muted/35 p-4"><p className="text-xs font-semibold">Local administrator</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">This account controls deployments, domains, credentials, and host-level configuration.</p></div></div> }
+function PlatformStep() { return <div className="space-y-5"><Field label="Platform URL"><div className="flex"><span className="flex items-center rounded-l-md border border-r-0 bg-muted px-3 text-xs text-muted-foreground">https://</span><input className="hf-field rounded-l-none" defaultValue="hostforge.example.com" /></div></Field><div className="grid gap-3 sm:grid-cols-2"><StatusCard title="Detected public IPv4" value="197.210.53.184" /><StatusCard title="Required record" value="A · hostforge.example.com" /></div></div> }
+function GithubStep() { return <div className="space-y-5"><div className="flex items-start gap-4 rounded-lg border p-5"><span className="grid size-11 place-items-center rounded-lg bg-accent text-accent-foreground"><GithubLogoIcon size={22} /></span><div><p className="text-sm font-semibold">Create and install GitHub App</p><p className="mt-1 text-xs leading-5 text-muted-foreground">HostForge uses a GitHub App for repository access, automatic deployments, and webhook events.</p><Button className="mt-4"><GithubLogoIcon />Open GitHub manifest</Button></div></div><div className="grid gap-3 sm:grid-cols-2"><StatusCard title="Repository access" value="Not connected" /><StatusCard title="Webhook secret" value="Generated during setup" /></div></div> }
+function CaddyStep() { return <div className="space-y-3"><CheckRow title="Caddy installed" detail="Version 2.9.1 detected" complete /><CheckRow title="Configuration valid" detail="Caddyfile syntax check passed" complete /><CheckRow title="Platform DNS" detail="A record resolves to 197.210.53.184" complete /><CheckRow title="TLS certificate" detail="Certificate will provision after route activation" /></div> }
+function ApplicationStep() { return <div className="space-y-5"><Field label="Application name"><input className="hf-field" defaultValue="TaxIO" /></Field><Field label="Description"><textarea className="hf-field min-h-24 resize-none" defaultValue="Nigerian personal income tax platform" /></Field><Field label="Environment"><select className="hf-field"><option>Production</option><option>Staging</option></select></Field></div> }
+function ServiceStep() { return <div className="space-y-5"><div className="grid gap-5 sm:grid-cols-2"><Field label="Repository"><select className="hf-field"><option>mr-fury/taxio</option></select></Field><Field label="Branch"><input className="hf-field font-mono" defaultValue="main" /></Field><Field label="Service name"><input className="hf-field" defaultValue="api" /></Field><Field label="Internal port"><input className="hf-field font-mono" defaultValue="3000" /></Field></div><div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4"><RocketLaunchIcon className="mt-0.5 text-emerald-700" size={19} /><div><p className="text-xs font-semibold text-emerald-900">Ready for first deployment</p><p className="mt-1 text-[11px] leading-5 text-emerald-700">Completing setup will create TaxIO/api and begin streaming its build.</p></div></div></div> }
+function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="mb-2 block text-xs font-semibold">{label}</span>{children}</label> }
+function StatusCard({ title, value }: { title: string; value: string }) { return <div className="rounded-lg border bg-muted/30 p-4"><p className="text-[10px] text-muted-foreground">{title}</p><p className="mt-1.5 font-mono text-xs font-semibold">{value}</p></div> }
+function CheckRow({ title, detail, complete = false }: { title: string; detail: string; complete?: boolean }) { return <div className="flex items-center gap-3 rounded-lg border p-4"><span className={`grid size-8 place-items-center rounded-full ${complete ? "bg-emerald-50 text-emerald-700" : "bg-muted text-muted-foreground"}`}><CheckCircleIcon size={17} weight={complete ? "fill" : "regular"} /></span><div><p className="text-xs font-semibold">{title}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{detail}</p></div><span className={`ml-auto text-[10px] font-semibold ${complete ? "text-emerald-700" : "text-muted-foreground"}`}>{complete ? "Verified" : "Pending"}</span></div> }

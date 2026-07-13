@@ -1,0 +1,5 @@
+.hf-settings-note {
+  border-left: 3px solid var(--accent);
+  background: var(--muted);
+  padding: 0.9rem 1rem;
+}

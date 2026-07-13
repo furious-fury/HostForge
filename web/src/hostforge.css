@@ -1,0 +1,133 @@
+@import "@fontsource-variable/manrope";
+
+body {
+  font-family: "Manrope Variable", sans-serif;
+}
+
+.hf-sidebar {
+  position: fixed;
+  inset-block: 0;
+  left: 0;
+  z-index: 50;
+  display: flex;
+  width: 15rem;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: color-mix(in oklch, var(--muted) 76%, var(--background));
+  transition: transform 200ms ease;
+  box-shadow: 8px 0 28px rgb(31 35 30 / 0.045);
+}
+
+.hf-nav-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.65rem;
+  border-radius: 0.45rem;
+  padding: 0.55rem 0.6rem;
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  font-weight: 500;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.hf-nav-item:hover {
+  background: color-mix(in oklch, var(--muted) 84%, transparent);
+  color: var(--foreground);
+}
+
+.hf-nav-item-active {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+
+.hf-nav-item-active:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.hf-command {
+  height: 2.25rem;
+  width: clamp(16rem, 26vw, 25rem);
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--card);
+  padding-inline: 0.7rem;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  box-shadow: 0 2px 10px rgb(31 35 30 / 0.045);
+}
+
+.hf-command kbd {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--muted);
+  padding: 0.1rem 0.3rem;
+  font-family: inherit;
+  font-size: 0.6rem;
+}
+
+.hf-metric-card {
+  min-height: 8.8rem;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 1.15rem;
+}
+
+.hf-metric-card:last-child {
+  border-right: 0;
+}
+
+@media (min-width: 1280px) {
+  .hf-metric-card {
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 1279px) {
+  .hf-metric-card:nth-child(3) {
+    border-right: 0;
+  }
+}
+
+@media (max-width: 639px) {
+  .hf-metric-card:nth-child(3) {
+    border-right: 1px solid var(--border);
+  }
+
+  .hf-metric-card:nth-child(even) {
+    border-right: 0;
+  }
+}
+
+.hf-command-overlay { position: fixed; inset: 0; z-index: 100; display: flex; justify-content: center; align-items: flex-start; background: rgb(20 22 19 / 0.24); padding: 16vh 1rem 1rem; backdrop-filter: blur(3px); }
+.hf-command-dialog { width: min(42rem, 100%); overflow: hidden; border: 1px solid var(--border); border-radius: 0.85rem; background: var(--card); box-shadow: 0 24px 70px rgb(20 22 19 / 0.18), 0 4px 16px rgb(20 22 19 / 0.08); }
+.hf-command-input { display: flex; height: 3.75rem; align-items: center; gap: 0.8rem; border-bottom: 1px solid var(--border); padding: 0 1rem; color: var(--muted-foreground); }
+.hf-command-input input { min-width: 0; flex: 1; background: transparent; color: var(--foreground); font-size: 0.9rem; outline: none; }
+.hf-command-input button { display: grid; width: 2rem; height: 2rem; place-items: center; border-radius: 0.4rem; }
+.hf-command-input button:hover { background: var(--muted); color: var(--foreground); }
+.hf-command-results { max-height: 23rem; overflow-y: auto; padding: 0.6rem; }
+.hf-command-results > p { padding: 0.4rem 0.6rem; color: var(--muted-foreground); font-size: 0.61rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+.hf-command-results a { display: grid; gap: 0.2rem; border-radius: 0.55rem; padding: 0.7rem 0.75rem; }
+.hf-command-results a:hover { background: var(--muted); }
+.hf-command-results a span { font-size: 0.78rem; font-weight: 650; }
+.hf-command-results a small { color: var(--muted-foreground); font-size: 0.66rem; }
+.hf-command-empty { padding: 2.5rem 1rem; text-align: center; color: var(--muted-foreground); font-size: 0.75rem; }
+.hf-command-dialog > footer { display: flex; gap: 1rem; border-top: 1px solid var(--border); background: color-mix(in oklch, var(--muted) 48%, var(--card)); padding: 0.6rem 1rem; color: var(--muted-foreground); font-size: 0.62rem; }
+.hf-command-dialog kbd { border: 1px solid var(--border); border-radius: 0.25rem; background: var(--card); padding: 0.08rem 0.3rem; }
+
+.hf-topbar {
+  background: color-mix(in oklch, var(--muted) 66%, var(--background));
+  box-shadow: 0 3px 14px rgb(31 35 30 / 0.035);
+}
+
+.dark .hf-topbar {
+  background: color-mix(in oklch, var(--muted) 58%, var(--background));
+}

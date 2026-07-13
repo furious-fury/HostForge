@@ -1,0 +1,23 @@
+.hf-service-summary {
+  min-height: 7.4rem;
+  border-right: 1px solid var(--border);
+  padding: 1rem 1.15rem;
+}
+
+.hf-service-summary:last-child {
+  border-right: 0;
+}
+
+@media (max-width: 1023px) {
+  .hf-service-summary {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .hf-service-summary:nth-child(even) {
+    border-right: 0;
+  }
+
+  .hf-service-summary:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+}

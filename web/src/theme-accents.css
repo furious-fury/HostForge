@@ -1,0 +1,49 @@
+:root[data-accent="neutral"] {
+  --accent: oklch(0.3 0.008 70);
+  --accent-foreground: oklch(0.99 0 0);
+}
+
+:root[data-accent="ocean"] {
+  --accent: oklch(0.58 0.12 250);
+  --accent-foreground: oklch(0.99 0 0);
+}
+
+:root[data-accent="forest"] {
+  --accent: oklch(0.54 0.1 155);
+  --accent-foreground: oklch(0.99 0 0);
+}
+
+:root[data-accent="amber"] {
+  --accent: oklch(0.68 0.11 70);
+  --accent-foreground: oklch(0.18 0.02 65);
+}
+
+:root[data-accent="rose"] {
+  --accent: oklch(0.62 0.12 15);
+  --accent-foreground: oklch(0.99 0 0);
+}
+
+:root.dark[data-accent="neutral"] {
+  --accent: oklch(0.82 0.008 80);
+  --accent-foreground: oklch(0.18 0.006 70);
+}
+
+:root.dark[data-accent="ocean"] {
+  --accent: oklch(0.7 0.1 250);
+  --accent-foreground: oklch(0.16 0.03 250);
+}
+
+:root.dark[data-accent="forest"] {
+  --accent: oklch(0.69 0.095 155);
+  --accent-foreground: oklch(0.15 0.025 155);
+}
+
+:root.dark[data-accent="amber"] {
+  --accent: oklch(0.75 0.1 75);
+  --accent-foreground: oklch(0.18 0.025 65);
+}
+
+:root.dark[data-accent="rose"] {
+  --accent: oklch(0.72 0.105 15);
+  --accent-foreground: oklch(0.16 0.025 15);
+}

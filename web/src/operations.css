@@ -1,0 +1,41 @@
+.hf-operation-summary {
+  min-height: 7.5rem;
+  border-right: 1px solid var(--border);
+  padding: 1rem 1.15rem;
+}
+
+.hf-operation-summary:last-child { border-right: 0; }
+
+.hf-runtime-log {
+  min-height: 31rem;
+  overflow: auto;
+  background: #171916;
+  padding: 0.75rem 1rem;
+}
+
+.hf-runtime-log-line {
+  display: grid;
+  min-width: 800px;
+  grid-template-columns: 96px 54px 78px 1fr;
+  align-items: baseline;
+  gap: 0.75rem;
+  border-bottom: 1px solid rgb(255 255 255 / 0.045);
+  padding-block: 0.48rem;
+}
+
+.hf-level {
+  font-family: "Cascadia Code", monospace;
+  font-size: 0.58rem;
+  font-weight: 700;
+}
+
+.hf-level-info { color: #79d39b; }
+.hf-level-debug { color: #7fb7e8; }
+.hf-level-warn { color: #e7c76b; }
+.hf-level-error { color: #ef8f86; }
+
+@media (max-width: 1023px) {
+  .hf-operation-summary { border-bottom: 1px solid var(--border); }
+  .hf-operation-summary:nth-child(even) { border-right: 0; }
+  .hf-operation-summary:nth-last-child(-n + 2) { border-bottom: 0; }
+}

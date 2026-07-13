@@ -1,0 +1,79 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: oklch(0.995 0.001 90);
+  --foreground: oklch(0.19 0.006 70);
+  --card: oklch(1 0 0);
+  --card-foreground: var(--foreground);
+  --muted: oklch(0.95 0.004 80);
+  --muted-foreground: oklch(0.52 0.008 70);
+  --border: oklch(0.89 0.005 80);
+  --body-pattern: oklch(0.35 0.008 75 / 14%);
+  --ring: var(--accent);
+
+  /* One token controls primary actions, charts, and active UI states. */
+  --accent: oklch(0.19 0.006 70);
+  --accent-foreground: oklch(0.99 0 0);
+
+  --radius: 0.625rem;
+}
+
+.dark {
+  --background: oklch(0.17 0.006 70);
+  --foreground: oklch(0.96 0.004 80);
+  --card: oklch(0.21 0.006 70);
+  --card-foreground: var(--foreground);
+  --muted: oklch(0.26 0.006 70);
+  --muted-foreground: oklch(0.7 0.008 75);
+  --border: oklch(1 0 0 / 12%);
+  --body-pattern: oklch(1 0 0 / 8%);
+  --ring: var(--accent);
+  --accent: oklch(0.93 0.006 80);
+  --accent-foreground: oklch(0.18 0.006 70);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body,
+  .min-h-svh.bg-background {
+    @apply min-w-80 bg-background text-foreground antialiased;
+    margin: 0;
+    background-image: radial-gradient(circle, var(--body-pattern) 0.9px, transparent 1px);
+    background-position: 0 0;
+    background-size: 20px 20px;
+    background-attachment: fixed;
+  }
+
+  button,
+  [role="button"] {
+    cursor: pointer;
+  }
+}
+
+@layer components {
+  .hf-surface, section.rounded-xl.border.bg-card, nav.rounded-xl.border.bg-card, div.rounded-xl.border.bg-card { box-shadow: 0 5px 18px rgb(31 35 30 / 0.045), 0 1px 3px rgb(31 35 30 / 0.035); }
+  .dark .hf-surface, .dark section.rounded-xl.border.bg-card, .dark nav.rounded-xl.border.bg-card, .dark div.rounded-xl.border.bg-card { box-shadow: 0 7px 22px rgb(0 0 0 / 0.16); }
+}
