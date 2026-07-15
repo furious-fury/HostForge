@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,36 @@ import (
 	"github.com/hostforge/hostforge/internal/repository"
 	platformservices "github.com/hostforge/hostforge/internal/services"
 )
+
+func (s *server) serviceEnvironmentStates(r *http.Request, service repository.Service, bindings []repository.ServiceEnvironment) []map[string]any {
+	states := make([]map[string]any, 0, len(bindings))
+	for _, binding := range bindings {
+		state := map[string]any{
+			"environment_id": binding.EnvironmentID, "branch": binding.Branch, "auto_deploy": binding.AutoDeploy,
+			"desired_state": binding.DesiredState, "active_deployment_id": binding.ActiveDeploymentID,
+		}
+		if environment, err := s.store.GetEnvironment(r.Context(), binding.EnvironmentID); err == nil {
+			state["environment_name"] = environment.Name
+			state["environment_kind"] = environment.Kind
+		}
+		if binding.ActiveDeploymentID != "" {
+			if deployment, err := s.store.GetServiceDeployment(r.Context(), binding.ActiveDeploymentID); err == nil {
+				state["active_deployment"] = deploymentToV2(deployment)
+			}
+			if container, err := s.store.GetContainerByDeploymentID(r.Context(), binding.ActiveDeploymentID); err == nil {
+				state["current_container"] = map[string]any{"id": container.ID, "docker_container_id": container.DockerContainerID, "internal_port": container.InternalPort, "host_port": container.HostPort, "status": container.Status, "updated_at": container.UpdatedAt}
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				state["container_error"] = "container_lookup_failed"
+			}
+		}
+		if domains, err := s.store.ListServiceDomains(r.Context(), service.ApplicationID, binding.EnvironmentID, service.ID); err == nil && len(domains) > 0 {
+			state["public_url"] = "https://" + domains[0].DomainName
+			state["domains"] = domains
+		}
+		states = append(states, state)
+	}
+	return states
+}
 
 type serviceRequest struct {
 	Name                 string `json:"name"`
@@ -78,6 +109,10 @@ func decodeServiceRequest(w http.ResponseWriter, r *http.Request, applicationID 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": code})
 		return repository.CreateServiceInput{}, false
 	}
+	if _, err := platformservices.ResolveServiceBuildDirectory("/repository", req.RootDirectory); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_root_directory"})
+		return repository.CreateServiceInput{}, false
+	}
 	if req.InternalPort < 1 || req.InternalPort > 65535 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_internal_port"})
 		return repository.CreateServiceInput{}, false
@@ -101,7 +136,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/services/"), "/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
-		http.NotFound(w, r)
+		writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "route_not_found"})
 		return
 	}
 	service, err := s.store.GetService(r.Context(), parts[0])
@@ -112,7 +147,12 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodGet:
-			writeJSON(w, http.StatusOK, map[string]any{"service": service})
+			bindings, err := s.store.ListServiceEnvironments(r.Context(), service.ID)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "list_service_environments_failed"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"service": service, "bindings": bindings, "environment_states": s.serviceEnvironmentStates(r, service, bindings)})
 		case http.MethodPatch:
 			in, ok := decodeServiceRequest(w, r, service.ApplicationID, &service)
 			if !ok {
@@ -123,15 +163,45 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 				writeServiceError(w, err)
 				return
 			}
+			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: item.ApplicationID, ServiceID: item.ID, EventType: "service", Status: "updated", Actor: "operator", Message: "Service updated", Detail: item.Name})
 			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "service": item})
 		case http.MethodDelete:
-			if err := s.store.DeleteService(r.Context(), service.ID); err != nil {
-				writeServiceError(w, err)
+			result, err := platformservices.DeleteServiceAndRuntime(r.Context(), s.log, s.cfg, s.store, service.ID)
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": publicAPIError(err, "delete_service_failed")})
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+			response := map[string]any{"status": "deleted"}
+			if result.CaddySyncError != "" {
+				response["routing_warning"] = result.CaddySyncError
+			}
+			writeJSON(w, http.StatusOK, response)
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+		}
+		return
+	}
+	if len(parts) == 4 && parts[1] == "environments" {
+		if parts[3] == "metrics" {
+			s.handleServiceMetricsV2(w, r, service.ID, parts[2])
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+			return
+		}
+		environment, err := s.store.GetEnvironment(r.Context(), parts[2])
+		if err != nil || environment.ApplicationID != service.ApplicationID {
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "environment_not_found"})
+			return
+		}
+		switch parts[3] {
+		case "deployments":
+			s.handleServiceDeployActionV2(w, r, service.ID, environment.ID)
+		case "stop", "restart":
+			s.handleServiceRuntimeActionV2(w, r, service.ID, environment.ID, parts[3])
+		default:
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "route_not_found"})
 		}
 		return
 	}
@@ -169,11 +239,39 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 				writeServiceError(w, err)
 				return
 			}
+			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: service.ApplicationID, ServiceID: service.ID, EnvironmentID: environment.ID, EventType: "configuration", Status: "updated", Actor: "operator", Message: "Service environment updated", Detail: item.Branch})
 			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "binding": item})
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
 		}
 		return
 	}
-	http.NotFound(w, r)
+	writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "route_not_found"})
+}
+
+func (s *server) handleServiceRuntimeActionV2(w http.ResponseWriter, r *http.Request, serviceID, environmentID, action string) {
+	var (
+		result platformservices.ServiceRuntimeResult
+		err    error
+	)
+	if action == "stop" {
+		result, err = platformservices.StopServiceEnvironment(r.Context(), s.store, serviceID, environmentID)
+	} else {
+		result, err = platformservices.RestartServiceEnvironment(r.Context(), s.store, serviceID, environmentID)
+	}
+	if err != nil {
+		code := publicAPIError(err, action+"_failed")
+		status := http.StatusBadGateway
+		if code == "runtime_no_active_deployment" || code == "runtime_active_container_lookup_failed" {
+			status = http.StatusConflict
+		}
+		writeJSON(w, status, map[string]string{"status": "error", "error": code})
+		return
+	}
+	service, _ := s.store.GetService(r.Context(), serviceID)
+	_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: service.ApplicationID, ServiceID: serviceID, EnvironmentID: environmentID, DeploymentID: result.DeploymentID, EventType: "runtime", Status: result.Status, Actor: "operator", Message: "Service " + result.Status, Detail: action})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": result.Status, "service_id": serviceID, "environment_id": environmentID,
+		"deployment_id": result.DeploymentID, "container_id": result.ContainerID,
+	})
 }

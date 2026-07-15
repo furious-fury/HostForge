@@ -8,6 +8,7 @@ import (
 
 	"github.com/hostforge/hostforge/internal/caddy"
 	"github.com/hostforge/hostforge/internal/dnsops"
+	"github.com/hostforge/hostforge/internal/repository"
 )
 
 type onboardingCompleteRequest struct {
@@ -29,7 +30,7 @@ func (s *server) handleOnboardingRoutes(w http.ResponseWriter, r *http.Request) 
 			"platform_domain": state.PlatformDomain, "permanent_ingress_complete": state.PermanentIngressComplete,
 			"bootstrap_complete": state.BootstrapComplete, "completed_at": state.CompletedAt,
 		}})
-	case http.MethodPost:
+	case http.MethodPatch:
 		s.handleOnboardingComplete(w, r)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
@@ -78,5 +79,6 @@ func (s *server) handleOnboardingComplete(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "onboarding_completion_failed"})
 		return
 	}
+	_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "configuration", Status: "completed", Actor: "operator", Message: "Onboarding completed", Detail: domain})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "bootstrap_disabled": true, "platform_domain": domain})
 }

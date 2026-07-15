@@ -14,6 +14,7 @@ import (
 	"github.com/hostforge/hostforge/internal/caddy"
 	"github.com/hostforge/hostforge/internal/config"
 	"github.com/hostforge/hostforge/internal/dnsops"
+	"github.com/hostforge/hostforge/internal/repository"
 	"github.com/hostforge/hostforge/internal/services"
 	"github.com/hostforge/hostforge/internal/sysstatus"
 	"github.com/hostforge/hostforge/internal/version"
@@ -48,11 +49,11 @@ func (s *server) handleSettingsRoutes(w http.ResponseWriter, r *http.Request) {
 		case "detect-public-ipv4":
 			s.handleSettingsActionDetectPublicIPv4(w, r)
 		default:
-			http.NotFound(w, r)
+			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "route_not_found"})
 		}
 		return
 	}
-	http.NotFound(w, r)
+	writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "route_not_found"})
 }
 
 func (s *server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
@@ -251,9 +252,9 @@ func (s *server) handleSettingsActionCaddyValidate(w http.ResponseWriter, r *htt
 	root := strings.TrimSpace(s.cfg.CaddyRootConfig)
 	if root == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"ok":     false,
-			"error":  "caddy_root_config_not_set",
-			"detail": "Set " + config.CaddyRootConfigEnv + " to your root Caddyfile path.",
+			"status":  "error",
+			"error":   "caddy_root_config_not_set",
+			"message": "Set " + config.CaddyRootConfigEnv + " to your root Caddyfile path.",
 		})
 		return
 	}
@@ -271,7 +272,11 @@ func (s *server) handleSettingsActionCaddyValidate(w http.ResponseWriter, r *htt
 		"root":    root,
 	}
 	if err != nil {
-		resp["error"] = err.Error()
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"status": "error", "error": "caddy_validation_failed", "message": strings.TrimSpace(stderr),
+			"stdout": strings.TrimSpace(stdout), "stderr": strings.TrimSpace(stderr), "took_ms": ms, "root": root,
+		})
+		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -280,9 +285,8 @@ func (s *server) handleSettingsActionCaddySync(w http.ResponseWriter, r *http.Re
 	root := strings.TrimSpace(s.cfg.CaddyRootConfig)
 	if root == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"attempted": false,
-			"ok":        false,
-			"error":     "caddy_root_config_not_set",
+			"status": "error",
+			"error":  "caddy_root_config_not_set",
 		})
 		return
 	}
@@ -293,13 +297,14 @@ func (s *server) handleSettingsActionCaddySync(w http.ResponseWriter, r *http.Re
 		out.OK = false
 		out.Error = publicAPIError(err, "caddy_sync_failed")
 		s.requestLog(r).Warn("settings caddy sync failed", "error", err, "duration_ms", time.Since(t0).Milliseconds())
-		writeJSON(w, http.StatusOK, map[string]any{
-			"caddy_sync":  out,
-			"duration_ms": time.Since(t0).Milliseconds(),
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"status": "error", "error": out.Error, "message": "Caddy routes were not synchronized.",
+			"caddy_sync": out, "duration_ms": time.Since(t0).Milliseconds(),
 		})
 		return
 	}
 	out.OK = true
+	_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "configuration", Status: "updated", Actor: "operator", Message: "Caddy routes synchronized"})
 	s.requestLog(r).Info("settings caddy sync complete", "duration_ms", time.Since(t0).Milliseconds())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"caddy_sync":  out,

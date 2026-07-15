@@ -5,14 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 
-	githubapp "github.com/hostforge/hostforge/internal/github/app"
 	"github.com/hostforge/hostforge/internal/git"
 	"github.com/hostforge/hostforge/internal/git/authresolver"
-	"github.com/hostforge/hostforge/internal/models"
+	githubapp "github.com/hostforge/hostforge/internal/github/app"
 )
 
 // appClientHolder lazily loads the per-App RSA key from the sealed DB row and
@@ -101,21 +99,9 @@ func (a appTokenAdapter) MintInstallationToken(ctx context.Context, installation
 	return authresolver.InstallationToken{Token: tok.Token}, nil
 }
 
-// newGitAuthResolver builds a resolver wired with the current App + sealer
-// state. It implements services.GitAuthResolver.
+// newGitAuthResolver builds a resolver wired with the current GitHub App.
 func (s *server) newGitAuthResolver(ctx context.Context) *authresolver.Resolver {
-	var sealer authresolver.Sealer
-	if s.envSealer != nil {
-		sealer = s.envSealer
-	}
-	return authresolver.New(s.store, sealer, s.appTokenProviderFor(ctx))
-}
-
-// resolveGitAuthForProject returns the best credentials for project. This is
-// used by endpoints that need git.AuthOptions before calling ExecuteDeploy or
-// listing remote branches.
-func (s *server) resolveGitAuthForProject(ctx context.Context, project models.Project) (git.AuthOptions, error) {
-	return s.newGitAuthResolver(ctx).ResolveAuthOptions(ctx, project)
+	return authresolver.New(s.appTokenProviderFor(ctx))
 }
 
 // resolveGitAuthForInstallation mints credentials for a raw installation id,
@@ -126,13 +112,4 @@ func (s *server) resolveGitAuthForInstallation(ctx context.Context, installation
 		return git.AuthOptions{}, err
 	}
 	return res.Auth, nil
-}
-
-// redactToken masks an oauth-like token value for logs.
-func redactToken(t string) string {
-	t = strings.TrimSpace(t)
-	if len(t) <= 8 {
-		return "***"
-	}
-	return t[:4] + "…" + t[len(t)-4:]
 }

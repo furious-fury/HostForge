@@ -1,59 +1,113 @@
-import { useEffect, useState } from "react"
-import { Link } from "react-router-dom"
+import { useState } from "react"
+import { Link, useNavigate, useSearchParams } from "react-router-dom"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import {
-  ArrowLeftIcon,
   ArrowRightIcon,
   CheckCircleIcon,
-  CheckIcon,
   CubeIcon,
-  EyeIcon,
-  EyeSlashIcon,
   GithubLogoIcon,
   GlobeIcon,
   KeyIcon,
-  LockKeyIcon,
-  RocketLaunchIcon,
   ShieldCheckIcon,
-  UserIcon,
+  WarningCircleIcon,
 } from "@phosphor-icons/react"
 
 import { Button } from "@/components/ui/button"
-import { navigateTo } from "@/navigation"
+import { Input } from "@/components/ui/input"
+import { APIError, api, queryKeys } from "@/api"
+import { queryClient } from "@/query-client"
 import "@/auth.css"
 
-export function LoginScreen() {
-  const [showPassword, setShowPassword] = useState(false)
-  return <main className="hf-auth-surface"><section className="w-full max-w-md overflow-hidden rounded-2xl border bg-card shadow-[0_22px_70px_rgb(28_28_24_/_0.09)]"><header className="flex items-center gap-3 border-b bg-muted/75 px-6 py-5"><span className="grid size-9 place-items-center rounded-lg bg-accent text-accent-foreground"><CubeIcon size={19} weight="fill" /></span><div><p className="text-sm font-semibold">HostForge</p><p className="mt-0.5 text-[11px] text-muted-foreground">Control plane</p></div><span className="ml-auto flex items-center gap-1.5 text-[10px] font-medium text-emerald-700"><span className="size-1.5 rounded-full bg-emerald-500" />Host connected</span></header><form className="space-y-5 p-6" onSubmit={(event) => { event.preventDefault(); navigateTo("/") }}><div><h1 className="text-2xl font-semibold tracking-[-0.035em]">Sign in to your control plane</h1><p className="mt-2 text-xs leading-5 text-muted-foreground">Use the local operator credentials configured for this HostForge installation.</p></div><Field label="Username"><div className="relative"><UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><input className="hf-field pl-9" autoComplete="username" defaultValue="mr_fury" /></div></Field><Field label="Password"><div className="relative"><LockKeyIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><input className="hf-field px-9" type={showPassword ? "text" : "password"} autoComplete="current-password" placeholder="Enter password" /><button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeSlashIcon size={15} /> : <EyeIcon size={15} />}</button></div></Field><Button className="w-full" type="submit">Sign in <ArrowRightIcon /></Button></form><footer className="flex items-center justify-between border-t bg-muted/30 px-6 py-3 text-[10px] text-muted-foreground"><span>127.0.0.1:8080</span><span>HostForge v0.9.4</span></footer></section></main>
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return <label className="block"><span className="mb-2 block text-xs font-semibold">{label}</span>{children}</label>
 }
 
-const onboardingSteps = [
-  { title: "Create admin password", description: "Secure the local operator account.", icon: LockKeyIcon },
-  { title: "Configure platform URL", description: "Choose the public control-plane hostname.", icon: GlobeIcon },
-  { title: "Connect GitHub App", description: "Install repository access and webhooks.", icon: GithubLogoIcon },
-  { title: "Verify Caddy and DNS", description: "Validate routing and certificate readiness.", icon: ShieldCheckIcon },
-  { title: "Create first application", description: "Create the first product container.", icon: CubeIcon },
-  { title: "Add and deploy service", description: "Connect source and launch the first workload.", icon: RocketLaunchIcon },
-]
+export function LoginScreen() {
+  const [token, setToken] = useState("")
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const login = useMutation({
+    mutationFn: api.login,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.session })
+      const requested = searchParams.get("returnTo") || "/"
+      navigate(requested.startsWith("/") ? requested : "/", { replace: true })
+    },
+  })
+  const message = login.error instanceof APIError && login.error.status === 401 ? "The access token is not valid." : login.isError ? "HostForge could not complete sign in. Check the server and try again." : ""
+
+  return <main className="hf-auth-surface"><section className="w-full max-w-md overflow-hidden rounded-2xl border bg-card shadow-[0_22px_70px_rgb(28_28_24_/_0.09)]"><header className="flex items-center gap-3 border-b bg-muted/75 px-6 py-5"><span className="grid size-9 place-items-center rounded-lg bg-accent text-accent-foreground"><CubeIcon size={19} weight="fill" /></span><div><p className="text-sm font-semibold">HostForge</p><p className="mt-0.5 text-[11px] text-muted-foreground">Control plane</p></div></header><form className="space-y-5 p-6" onSubmit={(event) => { event.preventDefault(); if (token.trim()) login.mutate(token) }}><div><h1 className="text-2xl font-semibold tracking-[-0.035em]">Sign in to your control plane</h1><p className="mt-2 text-xs leading-5 text-muted-foreground">Enter the management API token configured on this HostForge server.</p></div><Field label="Access token"><div className="relative"><KeyIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><Input value={token} onChange={(event) => setToken(event.target.value)} className="h-10 w-full bg-background pl-9 text-xs" type="password" autoComplete="current-password" placeholder="HOSTFORGE_API_TOKEN" aria-invalid={Boolean(message)} /></div></Field>{message && <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-medium text-red-700">{message}</p>}<Button className="w-full" type="submit" disabled={!token.trim() || login.isPending}>{login.isPending ? "Signing in..." : "Sign in"} <ArrowRightIcon /></Button></form><footer className="border-t bg-muted/30 px-6 py-3 text-[10px] font-medium text-muted-foreground">Session credentials remain in an HTTP-only cookie.</footer></section></main>
+}
+
+function submitManifest(postURL: string, manifest: Record<string, unknown>) {
+  const form = document.createElement("form")
+  form.method = "POST"
+  form.action = postURL
+  const input = document.createElement("input")
+  input.type = "hidden"
+  input.name = "manifest"
+  input.value = JSON.stringify(manifest)
+  form.append(input)
+  document.body.append(form)
+  form.submit()
+}
 
 export function OnboardingScreen() {
-  const [step, setStep] = useState(() => {
-    const saved = Number(window.localStorage.getItem("hostforge-onboarding-step"))
-    return saved >= 1 && saved <= 6 ? saved : 1
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const [domain, setDomain] = useState("")
+  const onboardingQuery = useQuery({ queryKey: queryKeys.onboarding, queryFn: ({ signal }) => api.onboarding(signal) })
+  const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: ({ signal }) => api.settings(signal) })
+  const statusQuery = useQuery({ queryKey: queryKeys.systemStatus, queryFn: ({ signal }) => api.systemStatus(signal) })
+  const applicationsQuery = useQuery({ queryKey: queryKeys.applications, queryFn: ({ signal }) => api.applications(signal) })
+  const appQuery = useQuery({ queryKey: queryKeys.githubApp, queryFn: ({ signal }) => api.githubApp(signal) })
+  const installationsQuery = useQuery({ queryKey: queryKeys.githubInstallations, queryFn: ({ signal }) => api.githubInstallations(signal), enabled: appQuery.data?.app.configured })
+  const manifest = useMutation({
+    mutationFn: () => {
+      const origin = window.location.origin
+      return api.githubManifest({ name: "HostForge", url: origin, callback_url: origin + "/onboarding" })
+    },
+    onSuccess: (result) => submitManifest(result.post_url, result.manifest),
   })
+  const exchange = useMutation({
+    mutationFn: api.githubManifestExchange,
+    onSuccess: async (result) => {
+      await Promise.all([queryClient.invalidateQueries({ queryKey: queryKeys.githubApp }), queryClient.invalidateQueries({ queryKey: queryKeys.githubInstallations }), queryClient.invalidateQueries({ queryKey: queryKeys.onboarding })])
+      if (result.install_url) window.location.assign(result.install_url)
+      else navigate("/onboarding", { replace: true })
+    },
+  })
+  const complete = useMutation({
+    mutationFn: () => api.completeOnboarding(domain),
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.onboarding }); navigate("/", { replace: true }) },
+  })
+  const code = searchParams.get("code")
 
-  useEffect(() => {
-    window.localStorage.setItem("hostforge-onboarding-step", String(step))
-  }, [step])
+  if (onboardingQuery.isPending || settingsQuery.isPending || statusQuery.isPending || applicationsQuery.isPending || appQuery.isPending) return <main className="grid min-h-svh place-items-center bg-background"><div className="h-64 w-full max-w-3xl animate-pulse rounded-xl border bg-card" /></main>
+  const failed = onboardingQuery.isError || settingsQuery.isError || statusQuery.isError || applicationsQuery.isError || appQuery.isError
+  if (failed) return <main className="grid min-h-svh place-items-center bg-background p-5"><section className="w-full max-w-lg rounded-xl border bg-card p-8 text-center"><WarningCircleIcon className="mx-auto text-destructive" size={24} /><h1 className="mt-3 text-sm font-semibold">Setup state could not be loaded</h1><p className="mt-2 text-xs text-muted-foreground">The onboarding screen only uses server-reported state.</p><Button className="mt-4" variant="outline" onClick={() => { onboardingQuery.refetch(); settingsQuery.refetch(); statusQuery.refetch(); applicationsQuery.refetch(); appQuery.refetch() }}>Retry</Button></section></main>
 
-  return <main className="min-h-svh bg-background text-foreground"><header className="flex h-16 items-center border-b bg-card px-5 sm:px-8"><Link to="/" className="flex items-center gap-3"><span className="grid size-8 place-items-center rounded-lg bg-accent text-accent-foreground"><CubeIcon size={17} weight="fill" /></span><span className="text-sm font-semibold">HostForge</span></Link><button onClick={() => navigateTo("/")} className="ml-auto text-xs font-medium text-muted-foreground hover:text-foreground">Finish later</button></header><div className="mx-auto grid w-full max-w-6xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[300px_minmax(0,1fr)] lg:px-8 lg:py-12"><aside className="h-fit overflow-hidden rounded-xl border bg-card"><header className="border-b bg-muted/75 p-5"><p className="text-sm font-semibold">Set up HostForge</p><p className="mt-1 text-xs text-muted-foreground">Step {step} of 6 · progress saves locally</p><div className="mt-4 h-1.5 rounded-full bg-background"><div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${step / 6 * 100}%` }} /></div></header><nav className="p-2">{onboardingSteps.map((item, index) => { const number = index + 1; const StepIcon = item.icon; const complete = number < step; return <button key={item.title} onClick={() => number <= step && setStep(number)} className={`flex w-full items-start gap-3 rounded-lg px-3 py-3 text-left ${number === step ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted"}`}><span className={`grid size-7 shrink-0 place-items-center rounded-md ${number === step ? "bg-white/15" : complete ? "bg-emerald-50 text-emerald-700" : "border bg-card"}`}>{complete ? <CheckIcon size={13} weight="bold" /> : <StepIcon size={14} />}</span><span><span className="block text-[11px] font-semibold">{item.title}</span><span className={`mt-0.5 hidden text-[9px] leading-4 sm:block ${number === step ? "text-white/65" : "text-muted-foreground"}`}>{item.description}</span></span></button> })}</nav></aside><section className="h-fit overflow-hidden rounded-xl border bg-card"><header className="border-b bg-muted/75 px-6 py-5"><p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Step {step} of 6</p><h1 className="mt-2 text-xl font-semibold tracking-tight">{onboardingSteps[step - 1].title}</h1><p className="mt-1 text-xs text-muted-foreground">{onboardingSteps[step - 1].description}</p></header><div className="min-h-[340px] p-6">{step === 1 && <AdminStep />}{step === 2 && <PlatformStep />}{step === 3 && <GithubStep />}{step === 4 && <CaddyStep />}{step === 5 && <ApplicationStep />}{step === 6 && <ServiceStep />}</div><footer className="flex items-center justify-between border-t bg-muted/30 px-6 py-4"><Button variant="outline" disabled={step === 1} onClick={() => setStep(Math.max(1, step - 1))}><ArrowLeftIcon />Back</Button>{step < 6 ? <Button onClick={() => setStep(step + 1)}>Continue <ArrowRightIcon /></Button> : <Button onClick={() => { window.localStorage.removeItem("hostforge-onboarding-step"); navigateTo("/") }}><CheckIcon />Complete setup</Button>}</footer></section></div></main>
+  const state = onboardingQuery.data.onboarding
+  const settings = settingsQuery.data
+  const checksReady = statusQuery.data.checks.every((check) => ["RUNNING", "READY"].includes(check.status))
+  const githubConfigured = appQuery.data.app.configured || state.github_app_complete
+  const hasInstallation = Boolean(installationsQuery.data?.installations.length)
+  const hasApplication = applicationsQuery.data.applications.length > 0
+  const rows = [
+    { title: "Management authentication", detail: settings.auth.scheme === "session" ? "Authenticated session active" : "API token authentication active", complete: true, icon: KeyIcon, action: null },
+    { title: "GitHub App credentials", detail: githubConfigured ? `${appQuery.data.app.slug || "GitHub App"} configured` : "Create the GitHub App and seal its credentials", complete: githubConfigured, icon: GithubLogoIcon, action: !githubConfigured ? <Button size="sm" disabled={manifest.isPending} onClick={() => manifest.mutate()}>{manifest.isPending ? "Preparing..." : "Create GitHub App"}</Button> : null },
+    { title: "GitHub installation", detail: hasInstallation ? `${installationsQuery.data?.installations.length} installation(s) connected` : "Install the configured App on an account or organization", complete: hasInstallation, icon: GithubLogoIcon, action: githubConfigured && !hasInstallation && appQuery.data.app.html_url ? <Button asChild size="sm" variant="outline"><a href={appQuery.data.app.html_url + "/installations/new"}>Install App</a></Button> : null },
+    { title: "Docker, Caddy, and webhooks", detail: checksReady ? "All dependency checks ready" : "Review diagnostics before permanent cutover", complete: checksReady, icon: ShieldCheckIcon, action: <Button asChild size="sm" variant="outline"><Link to="/status">Diagnostics</Link></Button> },
+    { title: "First application", detail: hasApplication ? `${applicationsQuery.data.applications.length} application(s) created` : "Create the first product and its production/staging environments", complete: hasApplication, icon: CubeIcon, action: !hasApplication ? <Button asChild size="sm"><Link to="/applications/new">Create application</Link></Button> : null },
+    { title: "Permanent platform ingress", detail: state.bootstrap_complete ? `Active at ${state.platform_domain}` : `Point an A record to ${state.bootstrap_public_ip || settings.dns.detected_ipv4 || "this host"}`, complete: state.bootstrap_complete, icon: GlobeIcon, action: null },
+  ]
+
+  return <main className="min-h-svh bg-background text-foreground"><header className="flex h-16 items-center border-b bg-card px-5 sm:px-8"><Link to="/" className="flex items-center gap-3"><span className="grid size-8 place-items-center rounded-lg bg-accent text-accent-foreground"><CubeIcon size={17} weight="fill" /></span><span className="text-sm font-semibold">HostForge</span></Link><Link to="/" className="ml-auto text-xs font-medium text-muted-foreground hover:text-foreground">Finish later</Link></header><div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 lg:px-8 lg:py-12">
+    <div className="mb-7"><p className="text-[10px] font-semibold uppercase tracking-[.15em] text-muted-foreground">Server-guided setup</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.035em]">Set up HostForge</h1><p className="mt-2 text-sm text-muted-foreground">Complete only the steps the server reports as pending. There are no local fixture states.</p></div>
+    {code && !githubConfigured && <section className="mb-5 rounded-xl border bg-card p-5"><h2 className="text-sm font-semibold">Complete GitHub App exchange</h2><p className="mt-1 text-xs text-muted-foreground">GitHub returned a one-time manifest code. Exchange it to store encrypted App credentials.</p><Button className="mt-4" disabled={exchange.isPending} onClick={() => exchange.mutate(code)}>{exchange.isPending ? "Connecting..." : "Connect GitHub App"}</Button>{exchange.isError && <p className="mt-3 text-xs text-destructive">The manifest exchange failed. Generate a new manifest and try again.</p>}</section>}
+    <section className="overflow-hidden rounded-xl border bg-card"><header className="border-b bg-muted/75 px-5 py-4"><h2 className="text-sm font-semibold">Readiness checklist</h2><p className="mt-1 text-xs text-muted-foreground">{rows.filter((row) => row.complete).length} of {rows.length} completed</p></header><div className="divide-y">{rows.map((row) => { const Icon = row.icon; return <div key={row.title} className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center"><span className={`grid size-9 shrink-0 place-items-center rounded-lg ${row.complete ? "bg-emerald-50 text-emerald-700" : "border bg-muted text-muted-foreground"}`}>{row.complete ? <CheckCircleIcon size={18} weight="fill" /> : <Icon size={18} />}</span><div><p className="text-xs font-semibold">{row.title}</p><p className="mt-1 text-[11px] text-muted-foreground">{row.detail}</p></div>{row.action && <div className="sm:ml-auto">{row.action}</div>}</div> })}</div></section>
+    {!state.bootstrap_complete && <section className="mt-5 overflow-hidden rounded-xl border bg-card"><header className="border-b bg-muted/75 px-5 py-4"><h2 className="text-sm font-semibold">Activate permanent HTTPS ingress</h2><p className="mt-1 text-xs text-muted-foreground">HostForge verifies DNS and Caddy before disabling temporary bootstrap access.</p></header><form className="space-y-4 p-5" onSubmit={(event) => { event.preventDefault(); if (domain.trim()) complete.mutate() }}><Field label="Platform domain"><div className="flex"><span className="flex items-center rounded-l-md border border-r-0 bg-muted px-3 text-xs text-muted-foreground">https://</span><Input value={domain} onChange={(event) => setDomain(event.target.value)} className="h-10 rounded-l-none bg-background text-xs" placeholder="hostforge.example.com" /></div></Field><p className="text-[11px] text-muted-foreground">Required A record: <span className="font-mono">{domain || "your-domain"} -&gt; {state.bootstrap_public_ip || settings.dns.detected_ipv4 || "server IPv4"}</span></p><Button disabled={!domain.trim() || complete.isPending || !githubConfigured}>{complete.isPending ? "Verifying DNS and Caddy..." : "Verify and complete setup"}</Button>{complete.isError && <p role="alert" className="text-xs text-destructive">{complete.error instanceof APIError ? complete.error.message.replaceAll("_", " ") : "Setup completion failed."}</p>}</form></section>}
+    {state.bootstrap_complete && <section className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-emerald-900"><div className="flex items-start gap-3"><CheckCircleIcon size={20} weight="fill" /><div><h2 className="text-sm font-semibold">Setup complete</h2><p className="mt-1 text-xs">Permanent ingress is active at {state.platform_domain}. Bootstrap access is disabled.</p><Button className="mt-4" onClick={() => navigate("/")}>Open overview</Button></div></div></section>}
+    {(manifest.isError || settings.dns.detected_ipv4_warning) && <p className="mt-4 text-xs text-amber-700">{manifest.isError ? "GitHub manifest preparation failed. Verify the public URL and encryption configuration." : settings.dns.detected_ipv4_warning}</p>}
+  </div></main>
 }
-
-function AdminStep() { return <div className="space-y-5"><div className="grid gap-5 sm:grid-cols-2"><Field label="Admin username"><input className="hf-field" defaultValue="mr_fury" /></Field><Field label="Display name"><input className="hf-field" defaultValue="Mr Fury" /></Field></div><Field label="Admin password"><div className="relative"><KeyIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><input className="hf-field pl-9" type="password" placeholder="Enter password" /></div></Field><div className="rounded-lg border bg-muted/35 p-4"><p className="text-xs font-semibold">Local administrator</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">This account controls deployments, domains, credentials, and host-level configuration.</p></div></div> }
-function PlatformStep() { return <div className="space-y-5"><Field label="Platform URL"><div className="flex"><span className="flex items-center rounded-l-md border border-r-0 bg-muted px-3 text-xs text-muted-foreground">https://</span><input className="hf-field rounded-l-none" defaultValue="hostforge.example.com" /></div></Field><div className="grid gap-3 sm:grid-cols-2"><StatusCard title="Detected public IPv4" value="197.210.53.184" /><StatusCard title="Required record" value="A · hostforge.example.com" /></div></div> }
-function GithubStep() { return <div className="space-y-5"><div className="flex items-start gap-4 rounded-lg border p-5"><span className="grid size-11 place-items-center rounded-lg bg-accent text-accent-foreground"><GithubLogoIcon size={22} /></span><div><p className="text-sm font-semibold">Create and install GitHub App</p><p className="mt-1 text-xs leading-5 text-muted-foreground">HostForge uses a GitHub App for repository access, automatic deployments, and webhook events.</p><Button className="mt-4"><GithubLogoIcon />Open GitHub manifest</Button></div></div><div className="grid gap-3 sm:grid-cols-2"><StatusCard title="Repository access" value="Not connected" /><StatusCard title="Webhook secret" value="Generated during setup" /></div></div> }
-function CaddyStep() { return <div className="space-y-3"><CheckRow title="Caddy installed" detail="Version 2.9.1 detected" complete /><CheckRow title="Configuration valid" detail="Caddyfile syntax check passed" complete /><CheckRow title="Platform DNS" detail="A record resolves to 197.210.53.184" complete /><CheckRow title="TLS certificate" detail="Certificate will provision after route activation" /></div> }
-function ApplicationStep() { return <div className="space-y-5"><Field label="Application name"><input className="hf-field" defaultValue="TaxIO" /></Field><Field label="Description"><textarea className="hf-field min-h-24 resize-none" defaultValue="Nigerian personal income tax platform" /></Field><Field label="Environment"><select className="hf-field"><option>Production</option><option>Staging</option></select></Field></div> }
-function ServiceStep() { return <div className="space-y-5"><div className="grid gap-5 sm:grid-cols-2"><Field label="Repository"><select className="hf-field"><option>mr-fury/taxio</option></select></Field><Field label="Branch"><input className="hf-field font-mono" defaultValue="main" /></Field><Field label="Service name"><input className="hf-field" defaultValue="api" /></Field><Field label="Internal port"><input className="hf-field font-mono" defaultValue="3000" /></Field></div><div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4"><RocketLaunchIcon className="mt-0.5 text-emerald-700" size={19} /><div><p className="text-xs font-semibold text-emerald-900">Ready for first deployment</p><p className="mt-1 text-[11px] leading-5 text-emerald-700">Completing setup will create TaxIO/api and begin streaming its build.</p></div></div></div> }
-function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="mb-2 block text-xs font-semibold">{label}</span>{children}</label> }
-function StatusCard({ title, value }: { title: string; value: string }) { return <div className="rounded-lg border bg-muted/30 p-4"><p className="text-[10px] text-muted-foreground">{title}</p><p className="mt-1.5 font-mono text-xs font-semibold">{value}</p></div> }
-function CheckRow({ title, detail, complete = false }: { title: string; detail: string; complete?: boolean }) { return <div className="flex items-center gap-3 rounded-lg border p-4"><span className={`grid size-8 place-items-center rounded-full ${complete ? "bg-emerald-50 text-emerald-700" : "bg-muted text-muted-foreground"}`}><CheckCircleIcon size={17} weight={complete ? "fill" : "regular"} /></span><div><p className="text-xs font-semibold">{title}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{detail}</p></div><span className={`ml-auto text-[10px] font-semibold ${complete ? "text-emerald-700" : "text-muted-foreground"}`}>{complete ? "Verified" : "Pending"}</span></div> }

@@ -190,9 +190,8 @@ func runServer(log *slog.Logger, args []string) int {
 	mux.HandleFunc("/api/applications", handler.withRequestContext(handler.requireManagementAuth(handler.handleApplications)))
 	mux.HandleFunc("/api/applications/", handler.withRequestContext(handler.requireManagementAuth(handler.handleApplications)))
 	mux.HandleFunc("/api/services/", handler.withRequestContext(handler.requireManagementAuth(handler.handleServices)))
-	mux.HandleFunc("/api/projects", handler.withRequestContext(handler.requireManagementAuth(handler.handleProjectsCollection)))
-	mux.HandleFunc("/api/projects/", handler.withRequestContext(handler.requireManagementAuth(handler.handleProjectRoutes)))
-	mux.HandleFunc("/api/deployments", handler.withRequestContext(handler.requireManagementAuth(handler.handleDeploymentsCollection)))
+	mux.HandleFunc("/api/events", handler.withRequestContext(handler.requireManagementAuth(handler.handlePlatformEvents)))
+	mux.HandleFunc("/api/deployments", handler.withRequestContext(handler.requireManagementAuth(handler.handleDeploymentsV2Collection)))
 	mux.HandleFunc("/api/deployments/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDeploymentRoutes)))
 	mux.HandleFunc("/api/observability/", handler.withRequestContext(handler.requireManagementAuth(handler.handleObservabilityRoutes)))
 	registerStaticUIRoutes(mux, log)
@@ -214,14 +213,16 @@ func runServer(log *slog.Logger, args []string) int {
 }
 
 type server struct {
-	log            *slog.Logger
-	cfg            *config.Config
-	store          *repository.Store
-	webhookLimiter *fixedWindowLimiter
-	hostSampler    *hostmetrics.Sampler
-	hostSnapCache  hostSnapshotCache
-	envSealer      *envcrypt.Sealer
-	appCache       *appClientHolder
+	log                *slog.Logger
+	cfg                *config.Config
+	store              *repository.Store
+	webhookLimiter     *fixedWindowLimiter
+	hostSampler        *hostmetrics.Sampler
+	hostSnapCache      hostSnapshotCache
+	envSealer          *envcrypt.Sealer
+	appCache           *appClientHolder
+	deploymentCancelMu sync.Mutex
+	deploymentCancels  map[string]context.CancelFunc
 }
 
 type githubPushPayload struct {
@@ -364,107 +365,62 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project, err := findProjectByRepoAndBranch(r.Context(), s.store, repoURL, payload.Repository.CloneURL, branch)
+	targets, err := s.store.ListAutoDeployTargets(r.Context())
 	if err != nil {
-		if errorsIsNoRows(err) {
-			repoExists, lookupErr := repoExistsForAnyBranch(r.Context(), s.store, repoURL, payload.Repository.CloneURL)
-			if lookupErr != nil {
-				log.Error("repo existence lookup failed", "repo_url", redact.RepoURLForLog(repoURL), "error", lookupErr)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{
-					"status":     "error",
-					"request_id": requestID,
-					"error":      "project_lookup_failed",
-				})
-				return
-			}
-			if repoExists {
-				log.Info("ignoring push for non-matching branch", "repo_url", redact.RepoURLForLog(repoURL), "branch", branch)
-				writeJSON(w, http.StatusOK, map[string]string{
-					"status":     "ignored",
-					"request_id": requestID,
-					"reason":     "branch_mismatch",
-				})
-				return
-			}
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"status":     "error",
-				"request_id": requestID,
-				"error":      "project_not_found_for_repo_branch",
-			})
-			return
+		log.Error("service environment lookup failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"status": "error", "request_id": requestID, "error": "service_environment_lookup_failed",
+		})
+		return
+	}
+	matches := make([]repository.AutoDeployTarget, 0)
+	for _, candidate := range targets {
+		canonical, canonicalErr := services.CanonicalRepoURL(candidate.RepoURL)
+		if canonicalErr == nil && canonical == repoURL && candidate.Branch == branch {
+			matches = append(matches, candidate)
 		}
-		log.Error("project lookup failed", "repo_url", redact.RepoURLForLog(repoURL), "branch", branch, "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{
-			"status":     "error",
-			"request_id": requestID,
-			"error":      "project_lookup_failed",
-		})
-		return
 	}
-	if strings.TrimSpace(project.Branch) == "" {
+	if len(matches) == 0 {
+		log.Info("ignoring push without matching auto-deploy binding", "repo_url", redact.RepoURLForLog(repoURL), "branch", branch)
 		writeJSON(w, http.StatusOK, map[string]string{
-			"status":     "ignored",
-			"request_id": requestID,
-			"reason":     "project_branch_not_configured",
+			"status": "ignored", "request_id": requestID, "reason": "no_matching_service_environment",
 		})
 		return
 	}
 
-	job, err := services.PrepareDeploy(r.Context(), s.cfg, s.store, services.DeployPrepareInput{
-		Project:    project,
-		RepoURL:    repoURL,
-		Branch:     branch,
-		CommitHash: strings.TrimSpace(payload.After),
-	})
-	if err != nil {
-		log.Error("failed to accept deployment", "project_id", project.ID, "error", err, "public_code", publicAPIError(err, "failed_to_accept_deployment"))
-		writeJSON(w, http.StatusInternalServerError, map[string]string{
-			"status":     "error",
-			"request_id": requestID,
-			"error":      publicAPIError(err, "failed_to_accept_deployment"),
-		})
-		return
-	}
-
-	deployLog := log.With("project_id", project.ID, "deployment_id", job.Deployment.ID, "repo_url", redact.RepoURLForLog(repoURL), "branch", branch)
-	if s.cfg.WebhookAsync {
-		resolver := s.newGitAuthResolver(r.Context())
-		go func(job services.DeployJob) {
-			bg := obs.WithStore(context.Background(), s.store)
-			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer, resolver)
-			if execErr != nil {
-				deployLog.Error("async deployment failed", "error", execErr)
+	deploymentIDs := make([]string, 0, len(matches))
+	for _, match := range matches {
+		target, resolveErr := services.ResolveDeployTarget(r.Context(), s.store, match.ServiceID, match.EnvironmentID)
+		if resolveErr != nil {
+			log.Error("matched service environment could not be resolved", "service_id", match.ServiceID, "environment_id", match.EnvironmentID, "error", resolveErr)
+			continue
+		}
+		job, prepareErr := services.PrepareServiceDeploy(r.Context(), s.cfg, s.store, target, "github_push", "github", strings.TrimSpace(payload.After), "")
+		if prepareErr != nil {
+			log.Error("failed to accept webhook deployment", "service_id", match.ServiceID, "environment_id", match.EnvironmentID, "error", prepareErr)
+			continue
+		}
+		deploymentIDs = append(deploymentIDs, job.Deployment.ID)
+		ctx, cancel := context.WithCancel(context.Background())
+		s.registerDeploymentCancel(job.Deployment.ID, cancel)
+		deployLog := log.With("service_id", match.ServiceID, "environment_id", match.EnvironmentID, "deployment_id", job.Deployment.ID, "repo_url", redact.RepoURLForLog(repoURL), "branch", branch)
+		go func(job services.DeployJob, deployLog *slog.Logger) {
+			defer s.unregisterDeploymentCancel(job.Deployment.ID)
+			bg := obs.WithStore(ctx, s.store)
+			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer, s.newGitAuthResolver(context.Background()))
+			if execErr != nil && !errors.Is(execErr, context.Canceled) {
+				deployLog.Error("async webhook deployment failed", "error", execErr)
 			}
-		}(job)
-		writeJSON(w, http.StatusAccepted, map[string]string{
-			"status":        "accepted",
-			"request_id":    requestID,
-			"deployment_id": job.Deployment.ID,
-			"mode":          "async",
+		}(job, deployLog)
+	}
+	if len(deploymentIDs) == 0 {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"status": "error", "request_id": requestID, "error": "failed_to_accept_deployments",
 		})
 		return
 	}
-
-	deployWall := time.Now()
-	result, err := services.ExecuteDeploy(r.Context(), deployLog, s.cfg, s.store, job, s.envSealer, s.newGitAuthResolver(r.Context()))
-	if err != nil {
-		deployLog.Error("synchronous deployment failed", "error", err, "public_code", publicAPIError(err, "deployment_failed"), "duration_ms", time.Since(deployWall).Milliseconds())
-		writeJSON(w, http.StatusOK, map[string]string{
-			"status":        "failed",
-			"request_id":    requestID,
-			"deployment_id": job.Deployment.ID,
-			"error":         publicAPIError(err, "deployment_failed"),
-		})
-		return
-	}
-	deployLog.Info("webhook synchronous deployment finished", "deployment_id", result.DeploymentID, "duration_ms", time.Since(deployWall).Milliseconds())
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status":        "success",
-		"request_id":    requestID,
-		"deployment_id": result.DeploymentID,
-		"container_id":  result.ContainerID,
-		"url":           result.URL,
-		"mode":          "sync",
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status": "accepted", "request_id": requestID, "deployment_ids": deploymentIDs, "count": len(deploymentIDs), "mode": "async",
 	})
 }
 
@@ -558,16 +514,43 @@ func (s *server) withRequestContext(next http.HandlerFunc) http.HandlerFunc {
 		rw := &responseWriterStatus{ResponseWriter: w, status: http.StatusOK}
 		next(rw, r)
 		dur := time.Since(start).Milliseconds()
+		applicationID, serviceID, environmentID := s.requestResourceScope(r.Context(), r.URL.Path)
 		s.log.Info("http_request", "request_id", rid, "method", r.Method, "path", r.URL.Path, "status", rw.status, "duration_ms", dur)
 		obs.RecordHTTPRequest(r.Context(), s.log, models.HTTPRequestRecord{
-			RequestID:  rid,
-			Method:     r.Method,
-			Path:       r.URL.Path,
-			Status:     rw.status,
-			DurationMS: dur,
-			StartedAt:  start.UTC(),
+			RequestID: rid, ApplicationID: applicationID, ServiceID: serviceID, EnvironmentID: environmentID,
+			Method: r.Method, Path: r.URL.Path, Status: rw.status, DurationMS: dur, StartedAt: start.UTC(),
 		})
 	}
+}
+
+func (s *server) requestResourceScope(ctx context.Context, path string) (applicationID, serviceID, environmentID string) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "api" {
+		return "", "", ""
+	}
+	switch parts[1] {
+	case "applications":
+		applicationID = parts[2]
+		if len(parts) >= 5 && parts[3] == "environments" {
+			environmentID = parts[4]
+		}
+	case "services":
+		serviceID = parts[2]
+		if service, err := s.store.GetService(ctx, serviceID); err == nil {
+			applicationID = service.ApplicationID
+		}
+		if len(parts) >= 5 && parts[3] == "environments" {
+			environmentID = parts[4]
+		}
+	case "deployments":
+		if deployment, err := s.store.GetServiceDeployment(ctx, parts[2]); err == nil {
+			serviceID, environmentID = deployment.ServiceID, deployment.EnvironmentID
+			if service, err := s.store.GetService(ctx, serviceID); err == nil {
+				applicationID = service.ApplicationID
+			}
+		}
+	}
+	return applicationID, serviceID, environmentID
 }
 
 func (s *server) requestLog(r *http.Request) *slog.Logger {
@@ -679,11 +662,26 @@ func (l *fixedWindowLimiter) Allow(ip string, now time.Time) bool {
 func (s *server) handleDeploymentRoutes(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/deployments/")
 	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
-	if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" {
-		http.NotFound(w, r)
+	if len(parts) < 1 || strings.TrimSpace(parts[0]) == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "route_not_found"})
 		return
 	}
 	deploymentID := strings.TrimSpace(parts[0])
+	if len(parts) == 1 && s.handleDeploymentV2Detail(w, r, deploymentID) {
+		return
+	}
+	if len(parts) == 2 && parts[1] == "redeploy" {
+		s.handleDeploymentRedeployV2(w, r, deploymentID)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "cancel" {
+		s.handleDeploymentCancelV2(w, r, deploymentID)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "rollback" {
+		s.handleDeploymentRollbackV2(w, r, deploymentID)
+		return
+	}
 	switch {
 	case len(parts) == 2 && parts[1] == "logs":
 		if r.Method != http.MethodGet {
@@ -700,7 +698,7 @@ func (s *server) handleDeploymentRoutes(w http.ResponseWriter, r *http.Request) 
 	case len(parts) == 2 && parts[1] == "steps":
 		s.handleDeploymentSteps(w, r, deploymentID)
 	default:
-		http.NotFound(w, r)
+		writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "route_not_found"})
 	}
 }
 
@@ -751,49 +749,6 @@ func (s *server) handleDeploymentLogsTail(w http.ResponseWriter, r *http.Request
 
 var logUpgrader = websocket.Upgrader{
 	CheckOrigin: func(_ *http.Request) bool { return true },
-}
-
-func findProjectByRepoAndBranch(ctx context.Context, store *repository.Store, canonicalRepoURL, rawRepoURL, branch string) (models.Project, error) {
-	candidates := []string{strings.TrimSpace(canonicalRepoURL)}
-	raw := strings.TrimSpace(rawRepoURL)
-	if raw != "" && raw != canonicalRepoURL {
-		candidates = append(candidates, raw)
-	}
-
-	var lastErr error
-	for _, candidate := range candidates {
-		project, err := store.GetProjectByRepoAndBranch(ctx, candidate, branch)
-		if err == nil {
-			return project, nil
-		}
-		lastErr = err
-		if !errorsIsNoRows(err) {
-			return models.Project{}, err
-		}
-	}
-	if lastErr == nil {
-		lastErr = sql.ErrNoRows
-	}
-	return models.Project{}, lastErr
-}
-
-func repoExistsForAnyBranch(ctx context.Context, store *repository.Store, canonicalRepoURL, rawRepoURL string) (bool, error) {
-	candidates := []string{strings.TrimSpace(canonicalRepoURL)}
-	raw := strings.TrimSpace(rawRepoURL)
-	if raw != "" && raw != canonicalRepoURL {
-		candidates = append(candidates, raw)
-	}
-
-	for _, candidate := range candidates {
-		projects, err := store.ListProjectsByRepoURL(ctx, candidate)
-		if err != nil {
-			return false, err
-		}
-		if len(projects) > 0 {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func errorsIsNoRows(err error) bool {

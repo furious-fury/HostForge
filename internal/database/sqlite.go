@@ -19,7 +19,7 @@ func OpenSQLite(ctx context.Context, dbPath string) (*sql.DB, error) {
 	if err := backupBeforeApplicationModelMigration(dbPath); err != nil {
 		return nil, err
 	}
-	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_journal_mode=WAL", dbPath)
+	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_journal_mode=WAL&_pragma=foreign_keys(1)", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)

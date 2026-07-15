@@ -165,3 +165,35 @@ func TestBuildKitExecutor_RejectsMismatchedPreparation(t *testing.T) {
 		t.Fatalf("got err=%v calls=%d", err, len(runner.calls))
 	}
 }
+
+func TestMaterializeBuildSecretsUsesPrivateFilesAndCleansUp(t *testing.T) {
+	t.Parallel()
+	args, cleanup, err := materializeBuildSecrets(map[string]string{"TOKEN": "super-secret", "DATABASE_URL": "postgres://db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(args) != 4 || args[0] != "--secret" || args[2] != "--secret" {
+		t.Fatalf("unexpected secret args: %#v", args)
+	}
+	var paths []string
+	for _, value := range []string{args[1], args[3]} {
+		parts := strings.SplitN(value, ",src=", 2)
+		if len(parts) != 2 || strings.Contains(value, "super-secret") || strings.Contains(value, "postgres://db") {
+			t.Fatalf("secret leaked into arguments: %q", value)
+		}
+		info, err := os.Stat(parts[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("secret mode=%o", info.Mode().Perm())
+		}
+		paths = append(paths, parts[1])
+	}
+	cleanup()
+	for _, path := range paths {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("secret file remains at %s: %v", path, err)
+		}
+	}
+}

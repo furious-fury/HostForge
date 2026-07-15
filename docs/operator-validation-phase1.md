@@ -381,7 +381,7 @@ Expected results:
 Use unauthenticated requests against management endpoints (adjust URL paths if customized):
 
 ```bash
-curl -sS -o /dev/null -w "%{http_code}\n" "$HF_SERVER_URL/api/projects"
+curl -sS -o /dev/null -w "%{http_code}\n" "$HF_SERVER_URL/api/applications"
 curl -sS -o /dev/null -w "%{http_code}\n" "$HF_SERVER_URL/api/deployments"
 ```
 
@@ -390,7 +390,7 @@ Expected results: `401` or `403` without token.
 Optional authenticated control:
 
 ```bash
-curl -sS -H "Authorization: Bearer $HF_TOKEN" "$HF_SERVER_URL/api/projects"
+curl -sS -H "Authorization: Bearer $HF_TOKEN" "$HF_SERVER_URL/api/applications"
 ```
 
 Expected results: authenticated request succeeds.

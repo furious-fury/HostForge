@@ -1,4 +1,4 @@
-// Package envcrypt seals/opens small blobs (project env values) with AES-GCM.
+// Package envcrypt seals and opens small control-plane secrets with AES-GCM.
 package envcrypt
 
 import (

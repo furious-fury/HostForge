@@ -3,11 +3,13 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -192,4 +194,48 @@ func shortID(id string) string {
 		return id
 	}
 	return id[:12]
+}
+
+type ContainerMetric struct {
+	CPUPercent  float64
+	MemoryBytes int64
+	NetworkRX   int64
+	NetworkTX   int64
+	SampledAt   time.Time
+}
+
+func CollectContainerMetric(ctx context.Context, cli *client.Client, containerID string) (ContainerMetric, error) {
+	result, err := cli.ContainerStats(ctx, containerID, client.ContainerStatsOptions{Stream: false, IncludePreviousSample: true})
+	if err != nil {
+		return ContainerMetric{}, fmt.Errorf("container stats: %w", err)
+	}
+	defer result.Body.Close()
+	var stats container.StatsResponse
+	if err := json.NewDecoder(result.Body).Decode(&stats); err != nil {
+		return ContainerMetric{}, fmt.Errorf("decode container stats: %w", err)
+	}
+	cpuDelta := float64(stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage)
+	systemDelta := float64(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage)
+	cpus := stats.CPUStats.OnlineCPUs
+	if cpus == 0 {
+		cpus = uint32(len(stats.CPUStats.CPUUsage.PercpuUsage))
+	}
+	cpuPercent := 0.0
+	if systemDelta > 0 && cpuDelta >= 0 && cpus > 0 {
+		cpuPercent = cpuDelta / systemDelta * float64(cpus) * 100
+	}
+	memory := stats.MemoryStats.Usage
+	if cache := stats.MemoryStats.Stats["inactive_file"]; cache > 0 && memory >= cache {
+		memory -= cache
+	}
+	var rx, tx uint64
+	for _, network := range stats.Networks {
+		rx += network.RxBytes
+		tx += network.TxBytes
+	}
+	at := stats.Read.UTC()
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	return ContainerMetric{CPUPercent: cpuPercent, MemoryBytes: int64(memory), NetworkRX: int64(rx), NetworkTX: int64(tx), SampledAt: at}, nil
 }

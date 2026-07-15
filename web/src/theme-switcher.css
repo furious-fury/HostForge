@@ -1,8 +1,7 @@
-.hf-theme-switcher { position: relative; }
 .hf-theme-trigger { position: relative; display: grid; width: 2.25rem; height: 2.25rem; place-items: center; border: 1px solid var(--border); border-radius: 0.4rem; background: var(--card); color: var(--muted-foreground); transition: color 120ms ease, background-color 120ms ease; }
 .hf-theme-trigger:hover, .hf-theme-trigger[aria-expanded="true"] { background: var(--muted); color: var(--foreground); }
 .hf-theme-trigger-dot { position: absolute; right: 0.28rem; bottom: 0.28rem; width: 0.38rem; height: 0.38rem; border: 1px solid var(--card); border-radius: 999px; background: var(--accent); }
-.hf-theme-popover { position: absolute; z-index: 80; top: calc(100% + 0.55rem); right: 0; width: min(20rem, calc(100vw - 2rem)); overflow: hidden; border: 1px solid var(--border); border-radius: 0.75rem; background: var(--card); box-shadow: 0 18px 48px rgb(20 20 18 / 0.16); }
+.hf-theme-popover { width: min(20rem, calc(100vw - 2rem)); overflow: hidden; border: 1px solid var(--border); border-radius: 0.75rem; background: var(--card); box-shadow: 0 18px 48px rgb(20 20 18 / 0.16); }
 .hf-theme-popover > header { border-bottom: 1px solid var(--border); background: color-mix(in oklch, var(--muted) 72%, var(--card)); padding: 0.9rem 1rem; }
 .hf-theme-popover > header p { font-size: 0.78rem; font-weight: 700; }
 .hf-theme-popover > header span { display: block; margin-top: 0.18rem; color: var(--muted-foreground); font-size: 0.62rem; }

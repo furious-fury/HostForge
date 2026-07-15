@@ -4,171 +4,171 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
 
-func TestApplyMigrationsIncludesCertColumns(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "t.db")
-	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath))
-	db, err := sql.Open("sqlite", dsn)
+func openFullyMigratedDB(t *testing.T, name string) (*sql.DB, context.Context) {
+	t.Helper()
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), name)
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	ctx := context.Background()
+	t.Cleanup(func() { _ = db.Close() })
 	if err := ApplyMigrations(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	var n int
-	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('domains') WHERE name IN ('last_cert_message', 'cert_checked_at')`).Scan(&n)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 2 {
-		t.Fatalf("expected cert columns on domains, got count=%d", n)
-	}
+	return db, ctx
 }
 
-func TestApplyMigrationsIncludesProjectDeployColumns(t *testing.T) {
+func TestApplyMigrationsCreatesFinalServiceSchema(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "deploycfg.db")
-	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath))
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	ctx := context.Background()
-	if err := ApplyMigrations(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-	var n int
-	err = db.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name IN ('deploy_runtime','deploy_install_cmd','deploy_build_cmd','deploy_start_cmd')`,
-	).Scan(&n)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 4 {
-		t.Fatalf("expected 4 deploy_* columns on projects, got count=%d", n)
-	}
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('deployments') WHERE name = 'builder_kind'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("expected builder_kind column on deployments, got count=%d", n)
-	}
-}
+	db, ctx := openFullyMigratedDB(t, "final.db")
 
-func TestApplyMigrationsIncludesObservabilityTables(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "obs.db")
-	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath))
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		t.Fatal(err)
+	for table, columns := range map[string][]string{
+		"deployments":  {"service_id", "environment_id", "builder_kind", "trigger_kind", "rollback_of", "branch"},
+		"domains":      {"application_id", "environment_id", "service_id", "last_cert_message", "cert_checked_at"},
+		"deploy_steps": {"deployment_id", "service_id", "environment_id", "request_id"},
+	} {
+		for _, column := range columns {
+			var count int
+			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 1 {
+				t.Fatalf("expected %s.%s", table, column)
+			}
+		}
+		var projectColumns int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name='project_id'`, table).Scan(&projectColumns); err != nil {
+			t.Fatal(err)
+		}
+		if projectColumns != 0 {
+			t.Fatalf("legacy project_id remains on %s", table)
+		}
 	}
-	defer db.Close()
-	ctx := context.Background()
-	if err := ApplyMigrations(ctx, db); err != nil {
-		t.Fatal(err)
+
+	for _, table := range []string{"projects", "project_env_vars", "project_git_auth", "project_ssh_keys"} {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("legacy table %s remains", table)
+		}
 	}
-	for _, tbl := range []string{"deploy_steps", "http_requests"} {
-		var name string
-		err := db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name=?`, tbl).Scan(&name)
-		if err != nil || name != tbl {
-			t.Fatalf("missing table %s: %v", tbl, err)
+	for _, table := range []string{"applications", "environments", "services", "service_environments", "environment_variables", "platform_events", "service_metric_samples", "github_app", "github_app_installations", "http_requests"} {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("required table %s missing: count=%d err=%v", table, count, err)
+		}
+	}
+	for _, column := range []string{"application_id", "service_id", "environment_id"} {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('http_requests') WHERE name=?`, column).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("expected http_requests.%s: count=%d err=%v", column, count, err)
 		}
 	}
 }
 
-func TestApplyMigrationsIncludesGitHubAppTables(t *testing.T) {
-	t.Parallel()
+func TestPopulatedProjectCutoverCreatesBackupAndPreservesRelationships(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "gh-app.db")
-	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath))
-	db, err := sql.Open("sqlite", dsn)
+	dbPath := filepath.Join(dir, "legacy.db")
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
 	ctx := context.Background()
-	if err := ApplyMigrations(ctx, db); err != nil {
+	if _, err := db.ExecContext(ctx, `CREATE TABLE schema_migrations(version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
 		t.Fatal(err)
 	}
-	for _, tbl := range []string{"github_app", "github_app_installations", "project_ssh_keys"} {
-		var name string
-		err := db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name=?`, tbl).Scan(&name)
-		if err != nil || name != tbl {
-			t.Fatalf("missing table %s: %v", tbl, err)
+	entries, err := fs.ReadDir(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() >= "0014_application_service_environments.sql" {
+			continue
+		}
+		body, err := migrationFiles.ReadFile("migrations/" + entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := applyMigration(ctx, db, entry.Name(), string(body)); err != nil {
+			t.Fatal(err)
 		}
 	}
-	var n int
-	err = db.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name IN ('git_source','github_installation_id')`,
-	).Scan(&n)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 2 {
-		t.Fatalf("expected git_source + github_installation_id on projects, got count=%d", n)
-	}
-	err = db.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*) FROM pragma_table_info('github_app') WHERE name IN ('app_id','slug','html_url','client_id','client_secret_ct','private_key_ct','webhook_secret_ct','created_at','updated_at')`,
-	).Scan(&n)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 9 {
-		t.Fatalf("expected 9 core columns on github_app, got count=%d", n)
-	}
-	err = db.QueryRowContext(
-		ctx,
-		`SELECT COUNT(*) FROM pragma_table_info('github_app_installations') WHERE name IN ('installation_id','account_login','account_type','target_type','repo_selection','suspended_at','last_synced_at','created_at')`,
-	).Scan(&n)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 8 {
-		t.Fatalf("expected 8 core columns on github_app_installations, got count=%d", n)
-	}
-}
 
-func TestApplyMigrationsIncludesProjectGitAuthTable(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "git-auth.db")
-	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath))
-	db, err := sql.Open("sqlite", dsn)
+	stamp := "2026-01-02T03:04:05Z"
+	statements := []string{
+		`INSERT INTO projects(id,name,repo_url,branch,git_source,github_installation_id,created_at,updated_at) VALUES('project-1','Legacy API','https://github.com/acme/legacy.git','main','github_app',42,?,?)`,
+		`INSERT INTO deployments(id,project_id,status,commit_hash,image_ref,created_at,updated_at) VALUES('deploy-1','project-1','SUCCESS','abc123','hostforge/legacy:1',?,?)`,
+		`INSERT INTO containers(id,deployment_id,docker_container_id,internal_port,host_port,status,created_at,updated_at) VALUES('container-1','deploy-1','docker-1',3000,32000,'RUNNING',?,?)`,
+		`INSERT INTO domains(id,project_id,domain_name,ssl_status,created_at,updated_at) VALUES('domain-1','project-1','legacy.example.test','ACTIVE',?,?)`,
+		`INSERT INTO project_env_vars(id,project_id,key,value_ct,value_last4,created_at,updated_at) VALUES('var-1','project-1','DATABASE_URL',X'0102','last',?,?)`,
+		`INSERT INTO deploy_steps(deployment_id,project_id,request_id,step,status,duration_ms,started_at,ended_at) VALUES('deploy-1','project-1','request-1','deploy_total','ok',120,?,?)`,
+	}
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := OpenSQLite(ctx, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	ctx := context.Background()
-	if err := ApplyMigrations(ctx, db); err != nil {
+	defer migrated.Close()
+	if _, err := os.Stat(dbPath + ".pre-application-model.bak"); err != nil {
+		t.Fatalf("migration backup missing: %v", err)
+	}
+
+	var appID, serviceID, productionBranch, stagingBranch, activeDeployment string
+	if err := migrated.QueryRowContext(ctx, `SELECT id FROM applications WHERE id='project-1'`).Scan(&appID); err != nil {
 		t.Fatal(err)
 	}
-	var name string
-	err = db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name='project_git_auth'`).Scan(&name)
-	if err != nil || name != "project_git_auth" {
-		t.Fatalf("missing table project_git_auth: %v", err)
-	}
-	var n int
-	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('project_git_auth') WHERE name IN ('project_id','provider','token_ct','token_last4','created_at','updated_at')`).Scan(&n)
-	if err != nil {
+	if err := migrated.QueryRowContext(ctx, `SELECT id FROM services WHERE id='project-1' AND application_id='project-1'`).Scan(&serviceID); err != nil {
 		t.Fatal(err)
 	}
-	if n != 6 {
-		t.Fatalf("expected 6 core columns on project_git_auth, got count=%d", n)
+	if err := migrated.QueryRowContext(ctx, `SELECT branch,active_deployment_id FROM service_environments WHERE service_id='project-1' AND environment_id='project-1_production'`).Scan(&productionBranch, &activeDeployment); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrated.QueryRowContext(ctx, `SELECT branch FROM service_environments WHERE service_id='project-1' AND environment_id='project-1_staging'`).Scan(&stagingBranch); err != nil {
+		t.Fatal(err)
+	}
+	if appID != "project-1" || serviceID != "project-1" || productionBranch != "main" || stagingBranch != "" || activeDeployment != "deploy-1" {
+		t.Fatalf("cutover mismatch app=%q service=%q production=%q staging=%q active=%q", appID, serviceID, productionBranch, stagingBranch, activeDeployment)
+	}
+
+	for table, id := range map[string]string{"deployments": "deploy-1", "containers": "container-1", "domains": "domain-1", "environment_variables": "var-1"} {
+		var count int
+		if err := migrated.QueryRowContext(ctx, "SELECT COUNT(1) FROM "+table+" WHERE id=?", id).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("%s relationship not preserved: count=%d err=%v", table, count, err)
+		}
+	}
+	var deploymentService, deploymentEnvironment, deploymentBranch, stepService, stepEnvironment string
+	if err := migrated.QueryRowContext(ctx, `SELECT service_id,environment_id,branch FROM deployments WHERE id='deploy-1'`).Scan(&deploymentService, &deploymentEnvironment, &deploymentBranch); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrated.QueryRowContext(ctx, `SELECT service_id,environment_id FROM deploy_steps WHERE deployment_id='deploy-1'`).Scan(&stepService, &stepEnvironment); err != nil {
+		t.Fatal(err)
+	}
+	if deploymentService != "project-1" || deploymentEnvironment != "project-1_production" || deploymentBranch != "main" || stepService != deploymentService || stepEnvironment != deploymentEnvironment {
+		t.Fatalf("ownership not reassociated deployment=%s/%s branch=%s step=%s/%s", deploymentService, deploymentEnvironment, deploymentBranch, stepService, stepEnvironment)
+	}
+	for _, table := range []string{"projects", "project_env_vars", "project_git_auth", "project_ssh_keys"} {
+		var count int
+		if err := migrated.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("legacy table %s remains: count=%d err=%v", table, count, err)
+		}
 	}
 }

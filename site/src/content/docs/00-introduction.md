@@ -1,28 +1,25 @@
 ---
 title: Introduction
-description: What HostForge is, how it fits on one machine, and how to read these docs.
+description: HostForge's application, service, deployment, and host-management model.
 slug: introduction
 group: Getting Started
 order: 1
 ---
 
-HostForge is a **self-hosted PaaS** for a single machine: **Git → [Nixpacks](https://github.com/railwayapp/nixpacks) → Docker**, plus a management **API**, **browser UI**, **GitHub `push` webhooks**, optional **Caddy** for public TLS routing, and **SQLite** persistence.
+HostForge is a private, self-hosted application platform for one Linux server: **GitHub App -> Railpack/BuildKit -> Docker -> Caddy**. The browser UI and authenticated management API own the product workflow; SQLite stores control-plane state and bounded observability.
 
-## Who it is for
+## Resource model
 
-Operators who want Vercel-style ergonomics **on their own metal**: one host running Docker, a reverse proxy (typically Caddy on 80/443), and DNS pointed at that host.
+- An **application** groups related services and owns production and staging environments.
+- A **service** selects a GitHub App repository plus build, runtime, port, and health configuration.
+- A **service-environment binding** selects the branch, automatic deployment behavior, desired runtime state, and active release.
+- A **deployment** is an immutable build/run attempt for one service environment.
+- A **domain** routes one application environment hostname to a selected service.
 
-## What ships in this repository
+## Repository surfaces
 
-- **`hostforge` CLI** (`cmd/cli`) — deploy, domain management, `caddy sync`, `validate`, `version`.
-- **`hostforge-server`** (`cmd/server`) — REST + embedded UI, webhooks, cookie-backed UI login, bounded observability (`deploy_steps`, `http_requests`).
-- **Web UI** (`web/`) — projects, deployments (REST + WebSocket logs), domains, dashboard system/host panels, settings.
+- **`hostforge-server`** (`cmd/server`) serves the REST API, browser UI, GitHub webhooks, live logs, metrics, and system diagnostics.
+- **Web UI** (`web/`) provides authenticated application, service, deployment, domain, variable, observability, onboarding, and settings workflows.
+- **`hostforge` CLI** (`cmd/cli`) is intentionally operator-only: validation, Caddy synchronization, and version output.
 
-## Agent-friendly docs
-
-Every doc page is also published as **raw Markdown** at `/docs/<slug>.md` after `npm run build`. A generated **`/llms.txt`** lists all pages for LLM crawlers; **`/llms-full.txt`** concatenates bodies for offline ingestion.
-
-## Next steps
-
-- [Installation](/docs/installation) — install binaries and optional systemd layout.
-- [Quickstart](/docs/quickstart) — run the golden-path deploy and open the UI.
+Private repositories use GitHub App installation tokens only. PAT and SSH credential management are not supported.

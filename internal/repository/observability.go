@@ -12,34 +12,62 @@ import (
 )
 
 const (
-	observabilityMaxRows    = 5000
+	observabilityMaxRows   = 5000
 	observabilityTrimBatch = 1000
 )
 
 // DeployStepRow is a row returned for API/UI.
 type DeployStepRow struct {
-	ID           int64  `json:"id"`
-	DeploymentID string `json:"deployment_id"`
-	ProjectID    string `json:"project_id"`
-	RequestID    string `json:"request_id"`
-	Step         string `json:"step"`
-	Status       string `json:"status"`
-	DurationMS   int64  `json:"duration_ms"`
-	ErrorCode    string `json:"error_code"`
-	StartedAt    string `json:"started_at"`
-	EndedAt      string `json:"ended_at"`
-	ProjectName  string `json:"project_name,omitempty"`
+	ID              int64  `json:"id"`
+	DeploymentID    string `json:"deployment_id"`
+	ServiceID       string `json:"service_id"`
+	EnvironmentID   string `json:"environment_id"`
+	RequestID       string `json:"request_id"`
+	Step            string `json:"step"`
+	Status          string `json:"status"`
+	DurationMS      int64  `json:"duration_ms"`
+	ErrorCode       string `json:"error_code"`
+	StartedAt       string `json:"started_at"`
+	EndedAt         string `json:"ended_at"`
+	ServiceName     string `json:"service_name,omitempty"`
+	EnvironmentName string `json:"environment_name,omitempty"`
 }
 
 // HTTPRequestRow is a row returned for API/UI.
 type HTTPRequestRow struct {
-	ID          int64  `json:"id"`
-	RequestID   string `json:"request_id"`
-	Method      string `json:"method"`
-	Path        string `json:"path"`
-	Status      int    `json:"status"`
-	DurationMS  int64  `json:"duration_ms"`
-	StartedAt   string `json:"started_at"`
+	ID            int64  `json:"id"`
+	RequestID     string `json:"request_id"`
+	ApplicationID string `json:"application_id,omitempty"`
+	ServiceID     string `json:"service_id,omitempty"`
+	EnvironmentID string `json:"environment_id,omitempty"`
+	Method        string `json:"method"`
+	Path          string `json:"path"`
+	Status        int    `json:"status"`
+	DurationMS    int64  `json:"duration_ms"`
+	StartedAt     string `json:"started_at"`
+}
+
+type HTTPRequestFilter struct {
+	ApplicationID string
+	ServiceID     string
+	EnvironmentID string
+	Method        string
+	StatusClass   string
+	DateFrom      string
+	DateTo        string
+	Cursor        int64
+	Limit         int
+}
+
+type DeployStepFilter struct {
+	ApplicationID string
+	ServiceID     string
+	EnvironmentID string
+	Status        string
+	DateFrom      string
+	DateTo        string
+	Cursor        int64
+	Limit         int
 }
 
 // ObservabilitySummary aggregates the last windowHours of data.
@@ -67,10 +95,11 @@ func formatObsTime(t time.Time) string {
 // InsertDeployStep appends a deploy step span and trims old rows if over cap.
 func (s *Store) InsertDeployStep(ctx context.Context, in models.DeployStepRecord) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO deploy_steps (deployment_id, project_id, request_id, step, status, duration_ms, error_code, started_at, ended_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+INSERT INTO deploy_steps (deployment_id, service_id, environment_id, request_id, step, status, duration_ms, error_code, started_at, ended_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		strings.TrimSpace(in.DeploymentID),
-		strings.TrimSpace(in.ProjectID),
+		strings.TrimSpace(in.ServiceID),
+		strings.TrimSpace(in.EnvironmentID),
 		strings.TrimSpace(in.RequestID),
 		in.Step,
 		in.Status,
@@ -88,9 +117,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 // InsertHTTPRequest records one HTTP request sample and trims if over cap.
 func (s *Store) InsertHTTPRequest(ctx context.Context, in models.HTTPRequestRecord) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO http_requests (request_id, method, path, status, duration_ms, started_at)
-VALUES (?, ?, ?, ?, ?, ?)`,
+INSERT INTO http_requests (request_id, application_id, service_id, environment_id, method, path, status, duration_ms, started_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		strings.TrimSpace(in.RequestID),
+		strings.TrimSpace(in.ApplicationID),
+		strings.TrimSpace(in.ServiceID),
+		strings.TrimSpace(in.EnvironmentID),
 		strings.TrimSpace(in.Method),
 		strings.TrimSpace(in.Path),
 		in.Status,
@@ -139,7 +171,7 @@ func (s *Store) ListDeployStepsByDeployment(ctx context.Context, deploymentID st
 		limit = 200
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, deployment_id, project_id, request_id, step, status, duration_ms, error_code, started_at, ended_at
+SELECT id, deployment_id, service_id, environment_id, request_id, step, status, duration_ms, error_code, started_at, ended_at
 FROM deploy_steps WHERE deployment_id = ? ORDER BY datetime(ended_at) DESC, id DESC LIMIT ?`,
 		strings.TrimSpace(deploymentID), limit)
 	if err != nil {
@@ -151,20 +183,65 @@ FROM deploy_steps WHERE deployment_id = ? ORDER BY datetime(ended_at) DESC, id D
 
 // ListRecentDeploySteps returns recent steps across deployments (for observability page).
 func (s *Store) ListRecentDeploySteps(ctx context.Context, limit int) ([]DeployStepRow, error) {
+	rows, _, err := s.ListDeployStepsFiltered(ctx, DeployStepFilter{Limit: limit})
+	return rows, err
+}
+
+func (s *Store) ListDeployStepsFiltered(ctx context.Context, filter DeployStepFilter) ([]DeployStepRow, int64, error) {
+	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	rows, err := s.db.QueryContext(ctx, `
-SELECT ds.id, ds.deployment_id, ds.project_id, ds.request_id, ds.step, ds.status, ds.duration_ms, ds.error_code, ds.started_at, ds.ended_at,
-       COALESCE(p.name, '') AS project_name
+	query := `
+SELECT ds.id,ds.deployment_id,ds.service_id,ds.environment_id,ds.request_id,ds.step,ds.status,ds.duration_ms,ds.error_code,ds.started_at,ds.ended_at,
+       COALESCE(svc.name,''),COALESCE(env.name,'')
 FROM deploy_steps ds
-LEFT JOIN projects p ON p.id = ds.project_id
-ORDER BY datetime(ds.ended_at) DESC, ds.id DESC LIMIT ?`, limit)
+LEFT JOIN services svc ON svc.id=ds.service_id
+LEFT JOIN environments env ON env.id=ds.environment_id
+WHERE 1=1`
+	args := make([]any, 0, 9)
+	add := func(clause string, value any) {
+		query += " AND " + clause
+		args = append(args, value)
+	}
+	if value := strings.TrimSpace(filter.ApplicationID); value != "" {
+		add("svc.application_id=?", value)
+	}
+	if value := strings.TrimSpace(filter.ServiceID); value != "" {
+		add("ds.service_id=?", value)
+	}
+	if value := strings.TrimSpace(filter.EnvironmentID); value != "" {
+		add("ds.environment_id=?", value)
+	}
+	if value := strings.TrimSpace(filter.Status); value != "" {
+		add("ds.status=?", value)
+	}
+	if value := strings.TrimSpace(filter.DateFrom); value != "" {
+		add("ds.ended_at>=?", value)
+	}
+	if value := strings.TrimSpace(filter.DateTo); value != "" {
+		add("ds.ended_at<=?", value)
+	}
+	if filter.Cursor > 0 {
+		add("ds.id<?", filter.Cursor)
+	}
+	query += " ORDER BY ds.id DESC LIMIT ?"
+	args = append(args, limit+1)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list recent deploy_steps: %w", err)
+		return nil, 0, fmt.Errorf("list recent deploy_steps: %w", err)
 	}
 	defer rows.Close()
-	return scanDeployStepRowsWithProject(rows)
+	out, err := scanDeployStepRowsWithContext(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	next := int64(0)
+	if len(out) > limit {
+		next = out[limit-1].ID
+		out = out[:limit]
+	}
+	return out, next, nil
 }
 
 func scanDeployStepRows(rows *sql.Rows) ([]DeployStepRow, error) {
@@ -172,7 +249,7 @@ func scanDeployStepRows(rows *sql.Rows) ([]DeployStepRow, error) {
 	for rows.Next() {
 		var r DeployStepRow
 		var dur sql.NullInt64
-		if err := rows.Scan(&r.ID, &r.DeploymentID, &r.ProjectID, &r.RequestID, &r.Step, &r.Status, &dur, &r.ErrorCode, &r.StartedAt, &r.EndedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.DeploymentID, &r.ServiceID, &r.EnvironmentID, &r.RequestID, &r.Step, &r.Status, &dur, &r.ErrorCode, &r.StartedAt, &r.EndedAt); err != nil {
 			return nil, err
 		}
 		if dur.Valid {
@@ -183,12 +260,12 @@ func scanDeployStepRows(rows *sql.Rows) ([]DeployStepRow, error) {
 	return out, rows.Err()
 }
 
-func scanDeployStepRowsWithProject(rows *sql.Rows) ([]DeployStepRow, error) {
+func scanDeployStepRowsWithContext(rows *sql.Rows) ([]DeployStepRow, error) {
 	var out []DeployStepRow
 	for rows.Next() {
 		var r DeployStepRow
 		var dur sql.NullInt64
-		if err := rows.Scan(&r.ID, &r.DeploymentID, &r.ProjectID, &r.RequestID, &r.Step, &r.Status, &dur, &r.ErrorCode, &r.StartedAt, &r.EndedAt, &r.ProjectName); err != nil {
+		if err := rows.Scan(&r.ID, &r.DeploymentID, &r.ServiceID, &r.EnvironmentID, &r.RequestID, &r.Step, &r.Status, &dur, &r.ErrorCode, &r.StartedAt, &r.EndedAt, &r.ServiceName, &r.EnvironmentName); err != nil {
 			return nil, err
 		}
 		if dur.Valid {
@@ -201,25 +278,76 @@ func scanDeployStepRowsWithProject(rows *sql.Rows) ([]DeployStepRow, error) {
 
 // ListRecentHTTPRequests returns recent HTTP samples, newest first.
 func (s *Store) ListRecentHTTPRequests(ctx context.Context, limit int) ([]HTTPRequestRow, error) {
+	rows, _, err := s.ListHTTPRequestsFiltered(ctx, HTTPRequestFilter{Limit: limit})
+	return rows, err
+}
+
+func (s *Store) ListHTTPRequestsFiltered(ctx context.Context, filter HTTPRequestFilter) ([]HTTPRequestRow, int64, error) {
+	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `
-SELECT id, request_id, method, path, status, duration_ms, started_at
-FROM http_requests ORDER BY datetime(started_at) DESC, id DESC LIMIT ?`, limit)
+	query := `
+SELECT id, request_id, application_id, service_id, environment_id, method, path, status, duration_ms, started_at
+FROM http_requests WHERE 1=1`
+	args := make([]any, 0, 10)
+	add := func(clause string, value any) {
+		query += " AND " + clause
+		args = append(args, value)
+	}
+	if value := strings.TrimSpace(filter.ApplicationID); value != "" {
+		add("application_id=?", value)
+	}
+	if value := strings.TrimSpace(filter.ServiceID); value != "" {
+		add("service_id=?", value)
+	}
+	if value := strings.TrimSpace(filter.EnvironmentID); value != "" {
+		add("environment_id=?", value)
+	}
+	if value := strings.ToUpper(strings.TrimSpace(filter.Method)); value != "" {
+		add("method=?", value)
+	}
+	switch strings.TrimSpace(filter.StatusClass) {
+	case "success":
+		query += " AND status>=200 AND status<400"
+	case "client_error":
+		query += " AND status>=400 AND status<500"
+	case "server_error":
+		query += " AND status>=500"
+	}
+	if value := strings.TrimSpace(filter.DateFrom); value != "" {
+		add("started_at>=?", value)
+	}
+	if value := strings.TrimSpace(filter.DateTo); value != "" {
+		add("started_at<=?", value)
+	}
+	if filter.Cursor > 0 {
+		add("id<?", filter.Cursor)
+	}
+	query += " ORDER BY id DESC LIMIT ?"
+	args = append(args, limit+1)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list http_requests: %w", err)
+		return nil, 0, fmt.Errorf("list http_requests: %w", err)
 	}
 	defer rows.Close()
-	var out []HTTPRequestRow
+	out := make([]HTTPRequestRow, 0, limit+1)
 	for rows.Next() {
 		var r HTTPRequestRow
-		if err := rows.Scan(&r.ID, &r.RequestID, &r.Method, &r.Path, &r.Status, &r.DurationMS, &r.StartedAt); err != nil {
-			return nil, err
+		if err := rows.Scan(&r.ID, &r.RequestID, &r.ApplicationID, &r.ServiceID, &r.EnvironmentID, &r.Method, &r.Path, &r.Status, &r.DurationMS, &r.StartedAt); err != nil {
+			return nil, 0, err
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	next := int64(0)
+	if len(out) > limit {
+		next = out[limit-1].ID
+		out = out[:limit]
+	}
+	return out, next, nil
 }
 
 // SummarizeObservability aggregates metrics for the last windowHours.

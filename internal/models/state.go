@@ -9,61 +9,17 @@ import (
 
 // Deployment lifecycle values stored in deployments.status (see SQL CHECK constraint).
 const (
-	DeploymentQueued   = "QUEUED"
-	DeploymentBuilding = "BUILDING"
-	DeploymentSuccess  = "SUCCESS"
-	DeploymentFailed   = "FAILED"
+	DeploymentQueued    = "QUEUED"
+	DeploymentBuilding  = "BUILDING"
+	DeploymentSuccess   = "SUCCESS"
+	DeploymentFailed    = "FAILED"
+	DeploymentCancelled = "CANCELLED"
 )
 
 const (
 	SSLStatusPending = "PENDING"
 	SSLStatusActive  = "ACTIVE"
 	SSLStatusError   = "ERROR"
-)
-
-// DeployRuntime values for projects.deploy_runtime (HostForge → Nixpacks worktree config).
-const (
-	DeployRuntimeAuto = "auto"
-	DeployRuntimeBun  = "bun"
-)
-
-// ProjectEnvVar is metadata for one encrypted env entry (no plaintext).
-type ProjectEnvVar struct {
-	ID         string
-	ProjectID  string
-	Key        string
-	ValueLast4 string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-}
-
-// ProjectEnvSealed holds key + ciphertext for deploy-time decryption.
-type ProjectEnvSealed struct {
-	Key     string
-	ValueCT []byte
-}
-
-// ProjectGitAuthMeta is non-sensitive metadata for per-project git credentials.
-type ProjectGitAuthMeta struct {
-	ProjectID  string
-	Provider   string
-	TokenLast4 string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-}
-
-// ProjectGitAuthSealed holds ciphertext used for git transport authentication.
-type ProjectGitAuthSealed struct {
-	ProjectID string
-	Provider  string
-	TokenCT   []byte
-}
-
-// GitSource values for projects.git_source.
-const (
-	GitSourceURL       = "url"
-	GitSourceGitHubApp = "github_app"
-	GitSourceSSH       = "ssh"
 )
 
 // GitHubAppMeta is non-sensitive metadata for the singleton GitHub App row.
@@ -109,58 +65,30 @@ type GitHubInstallation struct {
 	CreatedAt      time.Time
 }
 
-// ProjectSSHKeyMeta is the non-sensitive public key + fingerprint for a project.
-type ProjectSSHKeyMeta struct {
-	ProjectID   string
-	PublicKey   string
-	Fingerprint string
-	CreatedAt   time.Time
-}
-
-// ProjectSSHKeySealed holds the sealed private key for deploy-time git transport.
-type ProjectSSHKeySealed struct {
-	ProjectID    string
-	PublicKey    string
-	PrivateKeyCT []byte
-}
-
-// Project is a Git source (repo + branch) that deployments belong to.
-type Project struct {
-	ID      string
-	Name    string
-	RepoURL string
-	Branch  string // empty means remote default branch at creation time
-	// DeployRuntime selects how HostForge generates a worktree-local nixpacks.toml before build (auto | bun).
-	DeployRuntime    string
-	DeployInstallCmd string
-	DeployBuildCmd   string
-	DeployStartCmd   string
-	// GitSource selects how credentials for this project's repo are resolved: url | github_app | ssh.
-	GitSource string
-	// GitHubInstallationID is set when GitSource=github_app and identifies the installation used to mint tokens. 0 otherwise.
-	GitHubInstallationID int64
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
-}
-
-// Deployment is one build/run attempt for a project.
+// Deployment is one build/run attempt for a service environment.
 type Deployment struct {
-	ID           string
-	ProjectID    string
-	Status       string
-	CommitHash   string // optional; set when known (e.g. post-clone in a later phase)
-	LogsPath     string // optional; build log artifact path (Phase 5+)
-	ImageRef     string // Docker image reference built for this attempt
-	Worktree     string // on-disk clone path for this deploy
-	ErrorMessage string // set when Status is DeploymentFailed
+	ID            string `json:"id"`
+	ServiceID     string `json:"service_id"`
+	EnvironmentID string `json:"environment_id"`
+	TriggerKind   string `json:"trigger"`
+	Actor         string `json:"actor"`
+	CancelledAt   string `json:"cancelled_at,omitempty"`
+	RollbackOf    string `json:"rollback_of,omitempty"`
+	Branch        string `json:"branch,omitempty"`
+	Status        string `json:"status"`
+	CommitHash    string `json:"commit_hash"`             // optional; set when known (e.g. post-clone in a later phase)
+	LogsPath      string `json:"logs_path,omitempty"`     // optional; build log artifact path
+	ImageRef      string `json:"image_ref,omitempty"`     // Docker image reference built for this attempt
+	Worktree      string `json:"-"`                       // on-disk clone path is never part of public JSON
+	ErrorMessage  string `json:"error_message,omitempty"` // set when Status is DeploymentFailed
 	// BuilderKind identifies the selected image builder (railpack or dockerfile); empty for legacy rows.
-	BuilderKind string
+	BuilderKind string `json:"builder_kind,omitempty"`
 	// StackKind is a builder-neutral stable slug (e.g. node, go, dockerfile) for UI icons; empty if not captured.
-	StackKind string
+	StackKind string `json:"stack_kind,omitempty"`
 	// StackLabel is a short human summary (e.g. "Node · SPA"); empty if not captured.
-	StackLabel string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	StackLabel string    `json:"stack_label,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // Container records a running Docker instance for a successful deployment.
@@ -175,10 +103,12 @@ type Container struct {
 	UpdatedAt         time.Time
 }
 
-// Domain links a public hostname to a project.
+// Domain links a public hostname to a service environment.
 type Domain struct {
 	ID               string
-	ProjectID        string
+	ApplicationID    string
+	EnvironmentID    string
+	ServiceID        string
 	DomainName       string
 	SSLStatus        string
 	LastCertMessage  string // operator summary from optional cert poll (not ssl_status / route sync)
@@ -208,23 +138,27 @@ type DomainRoute struct {
 
 // DeployStepRecord is one persisted deploy or system observability span (SQLite observability UI).
 type DeployStepRecord struct {
-	DeploymentID string
-	ProjectID    string
-	RequestID    string
-	Step         string
-	Status       string // ok | failed
-	DurationMS   int64
-	ErrorCode    string
-	StartedAt    time.Time
-	EndedAt      time.Time
+	DeploymentID  string
+	ServiceID     string
+	EnvironmentID string
+	RequestID     string
+	Step          string
+	Status        string // ok | failed
+	DurationMS    int64
+	ErrorCode     string
+	StartedAt     time.Time
+	EndedAt       time.Time
 }
 
 // HTTPRequestRecord is one sampled HTTP request line for the observability UI.
 type HTTPRequestRecord struct {
-	RequestID  string
-	Method     string
-	Path       string
-	Status     int
-	DurationMS int64
-	StartedAt  time.Time
+	RequestID     string
+	ApplicationID string
+	ServiceID     string
+	EnvironmentID string
+	Method        string
+	Path          string
+	Status        int
+	DurationMS    int64
+	StartedAt     time.Time
 }

@@ -88,3 +88,22 @@ func HeadCommit(repoPath string) (string, error) {
 	}
 	return head.Hash().String(), nil
 }
+
+func CheckoutCommit(repoPath, commitHash string) error {
+	hash := plumbing.NewHash(commitHash)
+	if hash.IsZero() {
+		return fmt.Errorf("invalid empty commit hash")
+	}
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("git open: %w", err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("worktree: %w", err)
+	}
+	if err := worktree.Checkout(&gogit.CheckoutOptions{Hash: hash, Force: true}); err != nil {
+		return fmt.Errorf("checkout commit %s: %w", commitHash, err)
+	}
+	return nil
+}

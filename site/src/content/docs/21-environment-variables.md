@@ -63,7 +63,7 @@ The **`hostforge-server`** process reads configuration from the environment (and
 
 | Variable | Purpose |
 |----------|---------|
-| `HOSTFORGE_ENV_ENCRYPTION_KEY` | Base64-encoded **32 raw bytes** (AES-256). Required for `/api/projects/:id/env` and for injecting stored env at deploy time. |
+| `HOSTFORGE_ENV_ENCRYPTION_KEY` | Base64-encoded **32 raw bytes** (AES-256). Required for environment-variable APIs and for injecting stored values at deploy time. |
 
 ## Optional cert poll
 

@@ -38,7 +38,7 @@ func TestInsertDeployStepAndListByDeployment(t *testing.T) {
 	end := start.Add(5 * time.Second)
 	if err := store.InsertDeployStep(ctx, models.DeployStepRecord{
 		DeploymentID: "dep-a",
-		ProjectID:    "proj-1",
+		ServiceID:    "proj-1",
 		RequestID:    "req-1",
 		Step:         "clone",
 		Status:       "ok",
@@ -86,5 +86,65 @@ func TestSummarizeObservabilityHTTPPercentiles(t *testing.T) {
 	}
 	if sum.HTTPDurationP50 == 0 || sum.HTTPDurationP95 == 0 {
 		t.Fatalf("expected non-zero percentiles, p50=%d p95=%d", sum.HTTPDurationP50, sum.HTTPDurationP95)
+	}
+}
+
+func TestListHTTPRequestsFilteredUsesStableCursor(t *testing.T) {
+	ctx := context.Background()
+	_, store := openTestDB(t)
+	for index, record := range []models.HTTPRequestRecord{
+		{RequestID: "one", ApplicationID: "app-a", ServiceID: "svc-a", Method: "GET", Path: "/one", Status: 200},
+		{RequestID: "two", ApplicationID: "app-a", ServiceID: "svc-a", Method: "POST", Path: "/two", Status: 422},
+		{RequestID: "three", ApplicationID: "app-b", ServiceID: "svc-b", Method: "GET", Path: "/three", Status: 503},
+	} {
+		record.StartedAt = time.Now().UTC().Add(time.Duration(index) * time.Second)
+		if err := store.InsertHTTPRequest(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, next, err := store.ListHTTPRequestsFiltered(ctx, HTTPRequestFilter{ApplicationID: "app-a", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || first[0].RequestID != "two" || next < 1 {
+		t.Fatalf("unexpected first page: rows=%+v next=%d", first, next)
+	}
+	second, final, err := store.ListHTTPRequestsFiltered(ctx, HTTPRequestFilter{ApplicationID: "app-a", Cursor: next, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 1 || second[0].RequestID != "one" || final != 0 {
+		t.Fatalf("unexpected second page: rows=%+v next=%d", second, final)
+	}
+	errorsOnly, _, err := store.ListHTTPRequestsFiltered(ctx, HTTPRequestFilter{StatusClass: "server_error", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errorsOnly) != 1 || errorsOnly[0].RequestID != "three" {
+		t.Fatalf("unexpected server errors: %+v", errorsOnly)
+	}
+}
+
+func TestListDeployStepsFiltered(t *testing.T) {
+	ctx := context.Background()
+	_, store := openTestDB(t)
+	for index, record := range []models.DeployStepRecord{
+		{DeploymentID: "dep-one", ServiceID: "svc-a", EnvironmentID: "env-a", Step: "clone", Status: "ok"},
+		{DeploymentID: "dep-two", ServiceID: "svc-a", EnvironmentID: "env-a", Step: "build", Status: "error", ErrorCode: "build_failed"},
+		{DeploymentID: "dep-three", ServiceID: "svc-b", EnvironmentID: "env-b", Step: "release", Status: "ok"},
+	} {
+		record.RequestID = fmt.Sprintf("request-%d", index)
+		record.StartedAt = time.Now().UTC().Add(time.Duration(index) * time.Second)
+		record.EndedAt = record.StartedAt.Add(time.Second)
+		if err := store.InsertDeployStep(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, next, err := store.ListDeployStepsFiltered(ctx, DeployStepFilter{ServiceID: "svc-a", Status: "error", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].DeploymentID != "dep-two" || next != 0 {
+		t.Fatalf("unexpected filtered steps: rows=%+v next=%d", rows, next)
 	}
 }

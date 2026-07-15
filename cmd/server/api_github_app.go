@@ -13,7 +13,6 @@ import (
 	"time"
 
 	githubapp "github.com/hostforge/hostforge/internal/github/app"
-	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/repository"
 )
 
@@ -97,7 +96,7 @@ func (s *server) handleGitHubAppRoutes(w http.ResponseWriter, r *http.Request) {
 		idRaw := parts[1]
 		s.handleGitHubInstallationRepositories(w, r, idRaw)
 	default:
-		http.NotFound(w, r)
+		writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "route_not_found"})
 	}
 }
 
@@ -131,6 +130,7 @@ func (s *server) handleGitHubApp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.invalidateAppClient()
+		_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "integration", Status: "deleted", Actor: "operator", Message: "GitHub App credentials removed"})
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
@@ -318,6 +318,7 @@ func (s *server) handleGitHubAppExchange(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.invalidateAppClient()
+	_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "integration", Status: "configured", Actor: "operator", Message: "GitHub App configured", Detail: meta.Slug})
 
 	if synced, err := s.syncInstallationsFromAPI(r.Context()); err != nil {
 		s.requestLog(r).Warn("installations sync after manifest exchange failed", "error", err)
@@ -389,6 +390,7 @@ func (s *server) handleGitHubInstallationsSync(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "installations_sync_failed"})
 		return
 	}
+	_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "integration", Status: "updated", Actor: "operator", Message: "GitHub installations synchronized"})
 	s.writeInstallations(w, r)
 }
 
@@ -486,6 +488,3 @@ func inferBaseURL(r *http.Request) string {
 	}
 	return scheme + "://" + host
 }
-
-// ensure githubapp import used in multiple spots
-var _ = models.GitSourceGitHubApp

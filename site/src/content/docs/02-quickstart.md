@@ -1,41 +1,38 @@
 ---
 title: Quickstart
-description: Local dev server, golden-path CLI deploy, and where artifacts land on disk.
+description: Run the v2 control plane and deploy the first service from the UI.
 slug: quickstart
 group: Getting Started
 order: 3
 ---
 
-## Local development (summary)
+## Local development
 
-1. Install **Go 1.22+**, **Git**, **Nixpacks**, **Docker**.
-2. Build the CLI: `go build -o hostforge ./cmd/cli`
-3. Copy `scripts/hostforge-server.env.example`, set required secrets and **`HOSTFORGE_DATA_DIR`**, export env vars.
-4. Build the UI: `npm --prefix web install && npm --prefix web run build`
-5. Run the server: `go run ./cmd/server -data-dir "$HOSTFORGE_DATA_DIR" -listen "${HOSTFORGE_LISTEN:-:8080}"`
-6. UI hot reload: `npm --prefix web run dev` (Vite proxies `/api`, `/hooks`, `/auth` to the Go server).
-
-## Golden path (CLI)
-
-Use a small public Node app with a root `package.json`:
+1. Copy `scripts/hostforge-server.env.example` to an untracked environment file and set its required values.
+2. Start Docker, BuildKit, and Caddy.
+3. Install and verify the pinned Railpack helper.
+4. Build or start the UI:
 
 ```bash
-go run ./cmd/cli deploy https://github.com/heroku/node-js-getting-started
+npm --prefix web install
+npm --prefix web run dev
 ```
 
-**Expected:** Git clone progress on stderr, Nixpacks logs on stdout/stderr, exit code **0**, and artifacts under `.hostforge/builds/<hash>/` (or under your configured data directory).
+5. Start the server in another terminal:
 
-Deploy builds a Docker image with tags like `hostforge/<worktree-slug>:<utc-build-id>` and runs a container with a published host port.
+```bash
+go run ./cmd/server -data-dir ./.hostforge -listen 127.0.0.1:8080
+```
 
-## Data layout
+Vite proxies `/api`, `/auth`, and `/hooks` to the Go server.
 
-Under your data directory (default `./.hostforge`):
+## First deployment
 
-- **Worktrees:** `<data-dir>/worktrees/<hash>/`
-- **Nixpacks output:** `<data-dir>/builds/<hash>/`
-- **SQLite:** `<data-dir>/hostforge.db` (after server/CLI has initialized the DB)
+1. Sign in with `HOSTFORGE_API_TOKEN`; the server stores a signed HttpOnly session cookie.
+2. Complete GitHub App setup and connect an installation.
+3. Create an application. Production and staging are created together.
+4. Add a service, select an installation/repository, choose an environment branch, and review build/runtime settings.
+5. Deploy explicitly and follow the deployment detail/log stream.
+6. Add an environment variable or domain only after selecting its application environment and target service.
 
-## Next steps
-
-- [Architecture](/docs/architecture) — how CLI, server, Docker, and Caddy fit together.
-- [CLI reference](/docs/cli-reference) — all subcommands and flags.
+The deploy CLI no longer exists. Deployments are authenticated, auditable server operations.

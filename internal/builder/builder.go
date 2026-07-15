@@ -28,10 +28,15 @@ var (
 // checked-out deployment source and ImageRef must be immutable for the
 // deployment. Future adapters may use CacheKey and Platform for BuildKit.
 type Request struct {
-	Worktree string
-	ImageRef string
-	Platform string
-	CacheKey string
+	Worktree     string
+	ImageRef     string
+	Platform     string
+	CacheKey     string
+	Runtime      string
+	InstallCmd   string
+	BuildCmd     string
+	StartCmd     string
+	BuildSecrets map[string]string
 }
 
 // Event is a structured, already-redacted builder event suitable for the

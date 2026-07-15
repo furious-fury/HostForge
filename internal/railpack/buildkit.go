@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/hostforge/hostforge/internal/builder"
@@ -55,8 +56,7 @@ func (dockerImageStore) LoadAndVerify(ctx context.Context, imageTar io.Reader, i
 	return inspected.ID, nil
 }
 
-// BuildKitExecutor runs the Railpack frontend through BuildKit directly. It is
-// intentionally unwired from the active Nixpacks deployment path.
+// BuildKitExecutor runs the Railpack frontend through BuildKit directly.
 type BuildKitExecutor struct {
 	binary          string
 	address         string
@@ -108,7 +108,12 @@ func (e *BuildKitExecutor) Build(ctx context.Context, request builder.Request, p
 	if err := validateBuildInput(request, preparation, e.railpackVersion); err != nil {
 		return builder.Result{}, err
 	}
-	imageID, err := e.solveDockerExport(ctx, request, e.buildArgs(request, preparation), stderr)
+	secretArgs, cleanup, err := materializeBuildSecrets(request.BuildSecrets)
+	if err != nil {
+		return builder.Result{}, err
+	}
+	defer cleanup()
+	imageID, err := e.solveDockerExport(ctx, request, append(e.buildArgs(request, preparation), secretArgs...), stderr)
 	if err != nil {
 		return builder.Result{}, err
 	}
@@ -131,7 +136,12 @@ func (e *BuildKitExecutor) BuildDockerfile(ctx context.Context, request builder.
 	if err := validateDockerfileBuildInput(request); err != nil {
 		return builder.Result{}, err
 	}
-	imageID, err := e.solveDockerExport(ctx, request, e.dockerfileBuildArgs(request), stderr)
+	secretArgs, cleanup, err := materializeBuildSecrets(request.BuildSecrets)
+	if err != nil {
+		return builder.Result{}, err
+	}
+	defer cleanup()
+	imageID, err := e.solveDockerExport(ctx, request, append(e.dockerfileBuildArgs(request), secretArgs...), stderr)
 	if err != nil {
 		return builder.Result{}, err
 	}
@@ -237,4 +247,30 @@ func validateDockerfileBuildInput(request builder.Request) error {
 		return errors.New("repository Dockerfile must be a regular file")
 	}
 	return nil
+}
+
+func materializeBuildSecrets(secrets map[string]string) ([]string, func(), error) {
+	if len(secrets) == 0 {
+		return nil, func() {}, nil
+	}
+	directory, err := os.MkdirTemp("", "hostforge-build-secrets-")
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("create build secret directory: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(directory) }
+	keys := make([]string, 0, len(secrets))
+	for key := range secrets {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	args := make([]string, 0, len(keys)*2)
+	for index, key := range keys {
+		path := filepath.Join(directory, fmt.Sprintf("secret-%d", index))
+		if err := os.WriteFile(path, []byte(secrets[key]), 0o600); err != nil {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("write build secret: %w", err)
+		}
+		args = append(args, "--secret", "id="+key+",src="+path)
+	}
+	return args, cleanup, nil
 }

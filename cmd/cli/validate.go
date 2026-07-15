@@ -16,7 +16,7 @@ func printValidateUsage() {
 
 Subcommands:
   docker     Ping Docker Engine (same env as deploy: DOCKER_HOST, etc.)
-  preflight  docker + required tools on PATH (git, nixpacks)
+  preflight  docker + required tools on PATH (git, railpack, buildctl)
 
 `, os.Args[0])
 }
@@ -58,7 +58,8 @@ func runValidatePreflight(log *slog.Logger) int {
 		args []string
 	}{
 		{"git", []string{"--version"}},
-		{"nixpacks", []string{"--version"}},
+		{"railpack", []string{"--version"}},
+		{"buildctl", []string{"--version"}},
 	} {
 		path, err := exec.LookPath(tool.name)
 		if err != nil {

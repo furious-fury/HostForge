@@ -1,39 +1,467 @@
 export class APIError extends Error {
-  constructor(public status: number, public code: string, message?: string, public fields?: Record<string, string>) {
+  constructor(
+    public status: number,
+    public code: string,
+    message?: string,
+    public fields?: Record<string, string>,
+  ) {
     super(message || code)
+    this.name = "APIError"
   }
 }
+
+type APIErrorPayload = {
+  status?: "error"
+  error?: string
+  message?: string
+  fields?: Record<string, string>
+}
+
+export const unauthorizedEvent = "hostforge:unauthorized"
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...init,
     credentials: "same-origin",
-    headers: { Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}), ...init.headers },
+    headers: {
+      Accept: "application/json",
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...init.headers,
+    },
   })
   const payload = response.status === 204 ? null : await response.json().catch(() => null)
   if (!response.ok) {
-    if (response.status === 401 && window.location.pathname !== "/login") {
-      const returnTo = `${window.location.pathname}${window.location.search}`
-      window.location.assign(`/login?returnTo=${encodeURIComponent(returnTo)}`)
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(unauthorizedEvent))
     }
-    throw new APIError(response.status, payload?.error || "request_failed", payload?.message, payload?.fields)
+    const error = (payload || {}) as APIErrorPayload
+    throw new APIError(response.status, error.error || "request_failed", error.message, error.fields)
   }
   return payload as T
 }
 
-export type ApplicationDTO = { ID: string; Name: string; Description: string; Archived: boolean; CreatedAt: string; UpdatedAt: string }
-export type EnvironmentDTO = { ID: string; ApplicationID: string; Name: string; Slug: string; Kind: "production" | "staging"; CreatedAt: string; UpdatedAt: string }
-export type ServiceDTO = { ID: string; ApplicationID: string; Name: string; RepoURL: string; GitHubInstallationID: number; RootDirectory: string; DeployRuntime: string; InternalPort: number; HealthCheckPath: string }
+export type ApplicationDTO = {
+  id: string
+  name: string
+  description: string
+  archived: boolean
+  created_at: string
+  updated_at: string
+  environment_health?: Array<{ environment_id: string; name: string; kind: string; service_count: number; running_count: number; status: "empty" | "healthy" | "degraded" }>
+  service_count?: number
+  healthy_service_count?: number
+  domain_count?: number
+  latest_deployment?: DeploymentDTO
+}
+
+export type EnvironmentDTO = {
+  id: string
+  application_id: string
+  name: string
+  slug: string
+  kind: "production" | "staging"
+  created_at: string
+  updated_at: string
+}
+
+export type ServiceDTO = {
+  id: string
+  application_id: string
+  name: string
+  repo_url: string
+  github_installation_id: number
+  root_directory: string
+  runtime: string
+  install_cmd: string
+  build_cmd: string
+  start_cmd: string
+  internal_port: number
+  health_check_path: string
+  created_at: string
+  updated_at: string
+}
+
+export type ServiceEnvironmentDTO = {
+  service_id: string
+  environment_id: string
+  branch: string
+  auto_deploy: boolean
+  active_deployment_id: string
+  desired_state: "running" | "stopped"
+  created_at: string
+  updated_at: string
+}
+
+export type ServiceEnvironmentStateDTO = ServiceEnvironmentDTO & {
+  environment_name?: string
+  environment_kind?: string
+  active_deployment?: DeploymentDTO
+  current_container?: { id: string; docker_container_id: string; internal_port: number; host_port: number; status: string; updated_at: string }
+  public_url?: string
+  domains?: DomainDTO[]
+  container_error?: string
+}
+
+export type DeploymentDTO = {
+  id: string
+  service_id: string
+  environment_id: string
+  application_id?: string
+  application_name?: string
+  service_name?: string
+  environment_name?: string
+  branch?: string
+  status: "QUEUED" | "BUILDING" | "SUCCESS" | "FAILED" | "CANCELLED"
+  commit_hash: string
+  logs_path?: string
+  image_ref?: string
+  error_message?: string
+  builder_kind?: string
+  stack_kind?: string
+  stack_label?: string
+  trigger: string
+  actor?: string
+  cancelled_at?: string
+  rollback_of?: string
+  created_at: string
+  updated_at: string
+}
+
+export type DeploymentStepDTO = {
+  id: number
+  deployment_id: string
+  service_id: string
+  environment_id: string
+  service_name?: string
+  environment_name?: string
+  request_id: string
+  step: string
+  status: string
+  duration_ms: number
+  error_code: string
+  started_at: string
+  ended_at: string
+}
+
+export type ServiceMetricDTO = {
+  id: number
+  service_id: string
+  environment_id: string
+  cpu_percent: number
+  memory_bytes: number
+  network_rx_bytes: number
+  network_tx_bytes: number
+  sampled_at: string
+}
+
+export type HTTPRequestDTO = {
+  id: number
+  request_id: string
+  application_id?: string
+  service_id?: string
+  environment_id?: string
+  method: string
+  path: string
+  status: number
+  duration_ms: number
+  started_at: string
+}
+
+export type ObservabilitySummaryDTO = {
+  window_hours: number
+  http_request_count: number
+  http_error_count: number
+  http_duration_p50_ms: number
+  http_duration_p95_ms: number
+  deploy_count: number
+  deploy_failed_count: number
+  deploy_duration_p50_ms: number
+  deploy_duration_p95_ms: number
+}
+
+export type HostSampleDTO = {
+  at: string
+  cpu_pct: number
+  per_core_pct?: number[]
+  mem: { used_bytes: number; total_bytes: number; used_pct: number }
+  net: Array<{ iface: string; rx_bps: number; tx_bps: number }>
+  disks: Array<{ mount: string; used_bytes: number; total_bytes: number; used_pct: number }>
+  uptime_seconds: number
+  rates_ready: boolean
+  err?: string
+}
+
+export type PlatformEventDTO = {
+  id: number
+  application_id?: string
+  service_id?: string
+  environment_id?: string
+  deployment_id?: string
+  event_type: string
+  status?: string
+  actor?: string
+  message: string
+  detail?: string
+  created_at: string
+}
+
+export type GitHubInstallationDTO = {
+  installation_id: number
+  account_login: string
+  suspended: boolean
+}
+
+export type GitHubRepositoryDTO = {
+  id: number
+  full_name: string
+  private: boolean
+  default_branch: string
+  clone_url: string
+}
+
+export type DomainDTO = {
+  id: string
+  application_id: string
+  environment_id: string
+  service_id: string
+  domain_name: string
+  ssl_status: "PENDING" | "ACTIVE" | "ERROR"
+  last_cert_message?: string
+  cert_checked_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export type EnvironmentVariableDTO = {
+  id: string
+  application_id: string
+  environment_id: string
+  service_id?: string
+  key: string
+  value_last4: string
+  created_at: string
+  updated_at: string
+}
+
+export type OnboardingDTO = {
+  bootstrap_enabled: boolean
+  bootstrap_public_ip: string
+  bootstrap_https_port: number
+  bootstrap_expires_at: string
+  github_app_complete: boolean
+  platform_domain: string
+  permanent_ingress_complete: boolean
+  bootstrap_complete: boolean
+  completed_at: string
+}
+
+export type SystemStatusDTO = {
+  version: string
+  checks: Array<{ id: string; label: string; status: string; detail?: string; error_code?: string }>
+}
+
+export type SettingsDTO = {
+  auth: { scheme: string; expires_at?: string; subject?: string }
+  build: { version: string; version_display: string; commit: string; build_time: string; go_version: string; os: string; arch: string; started_at: string; uptime_seconds: number }
+  paths: { data_dir: string; logs_dir: string; db_path: string; db_size_bytes: number; logs_dir_size_bytes: number }
+  network: { listen: string; host_port: number; port_start: number; port_end: number; container_port: number }
+  caddy: { root_config: string; generated_path: string; sync_caddy: boolean; domain_sync_after_mutate: boolean; admin_url: string }
+  webhooks: { base_path: string; async: boolean; rate_limit_per_minute: number; secret_set: boolean }
+  dns: { server_ipv4: string; detected_ipv4: string; detected_ipv4_source: string; detected_ipv4_warning: string }
+  session: { ttl_minutes: number; cookie_secure: boolean; session_secret_set: boolean; api_token_set: boolean }
+}
+
+export type ObservabilityFilter = {
+  applicationID?: string
+  serviceID?: string
+  environmentID?: string
+  dateFrom?: string
+  dateTo?: string
+  cursor?: string
+  limit?: number
+}
+
+export type RequestObservabilityFilter = ObservabilityFilter & {
+  method?: string
+  statusClass?: "success" | "client_error" | "server_error"
+}
+
+export type DeployStepObservabilityFilter = ObservabilityFilter & {
+  status?: string
+}
+
+function observabilityQuery(filters: ObservabilityFilter & { method?: string; statusClass?: string; status?: string }) {
+  const params = new URLSearchParams()
+  if (filters.applicationID) params.set("application_id", filters.applicationID)
+  if (filters.serviceID) params.set("service_id", filters.serviceID)
+  if (filters.environmentID) params.set("environment_id", filters.environmentID)
+  if (filters.method) params.set("method", filters.method)
+  if (filters.statusClass) params.set("status_class", filters.statusClass)
+  if (filters.status) params.set("status", filters.status)
+  if (filters.dateFrom) params.set("date_from", filters.dateFrom)
+  if (filters.dateTo) params.set("date_to", filters.dateTo)
+  if (filters.cursor) params.set("cursor", filters.cursor)
+  if (filters.limit) params.set("limit", String(filters.limit))
+  return params.size ? "?" + params.toString() : ""
+}
 
 export const api = {
-  session: () => apiRequest<{ authenticated: boolean }>("/auth/session"),
-  applications: () => apiRequest<{ applications: ApplicationDTO[] }>("/api/applications"),
-  application: (id: string) => apiRequest<{ application: ApplicationDTO; environments: EnvironmentDTO[]; services: ServiceDTO[] }>(`/api/applications/${id}`),
-  createApplication: (input: { name: string; description: string }) => apiRequest<{ application: ApplicationDTO }>("/api/applications", { method: "POST", body: JSON.stringify(input) }),
+  session: (signal?: AbortSignal) => apiRequest<{ authenticated: boolean }>("/auth/session", { signal }),
+  login: (token: string) =>
+    apiRequest<{ authenticated: boolean }>("/auth/session", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token.trim()}` },
+    }),
+  logout: () => apiRequest<{ authenticated: boolean }>("/auth/session", { method: "DELETE" }),
+  onboarding: (signal?: AbortSignal) => apiRequest<{ onboarding: OnboardingDTO }>("/api/onboarding", { signal }),
+  completeOnboarding: (platformDomain: string) => apiRequest<{ status: "ok"; bootstrap_disabled: boolean; platform_domain: string }>("/api/onboarding", { method: "PATCH", body: JSON.stringify({ platform_domain: platformDomain }) }),
+  systemStatus: (signal?: AbortSignal) => apiRequest<SystemStatusDTO>("/api/system/status", { signal }),
+  settings: (signal?: AbortSignal) => apiRequest<SettingsDTO>("/api/settings", { signal }),
+  settingsAction: (action: "caddy-validate" | "caddy-sync" | "refresh-status" | "detect-public-ipv4") => apiRequest<Record<string, unknown>>("/api/settings/actions/" + action, { method: "POST" }),
+
+  applications: (signal?: AbortSignal) => apiRequest<{ applications: ApplicationDTO[] }>("/api/applications", { signal }),
+  application: (id: string, signal?: AbortSignal) =>
+    apiRequest<{ application: ApplicationDTO; environments: EnvironmentDTO[]; services: ServiceDTO[]; service_bindings: Record<string, ServiceEnvironmentDTO[]> }>(
+      `/api/applications/${encodeURIComponent(id)}`,
+      { signal },
+    ),
+  createApplication: (input: { name: string; description: string }) =>
+    apiRequest<{ application: ApplicationDTO }>("/api/applications", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  createEnvironment: (applicationID: string, input: { name: string; slug: string; kind: "production" | "staging" }) =>
+    apiRequest<{ environment: EnvironmentDTO }>(`/api/applications/${encodeURIComponent(applicationID)}/environments`, { method: "POST", body: JSON.stringify(input) }),
+  updateApplication: (id: string, input: Partial<Pick<ApplicationDTO, "name" | "description" | "archived">>) =>
+    apiRequest<{ application: ApplicationDTO }>(`/api/applications/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+  deleteApplication: (id: string) =>
+    apiRequest<{ status: "deleted" }>(`/api/applications/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  service: (id: string, signal?: AbortSignal) =>
+    apiRequest<{ service: ServiceDTO; bindings: ServiceEnvironmentDTO[]; environment_states: ServiceEnvironmentStateDTO[] }>(
+      `/api/services/${encodeURIComponent(id)}`,
+      { signal },
+    ),
+  createService: (applicationID: string, input: Omit<ServiceDTO, "id" | "application_id" | "created_at" | "updated_at">) =>
+    apiRequest<{ service: ServiceDTO }>(`/api/applications/${encodeURIComponent(applicationID)}/services`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateService: (id: string, input: Partial<Omit<ServiceDTO, "id" | "application_id" | "created_at" | "updated_at">>) =>
+    apiRequest<{ service: ServiceDTO }>("/api/services/" + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify(input) }),
+  deleteService: (id: string) => apiRequest<{ status: "deleted" }>("/api/services/" + encodeURIComponent(id), { method: "DELETE" }),
+  updateServiceBinding: (
+    serviceID: string,
+    environmentID: string,
+    input: { branch: string; auto_deploy: boolean },
+  ) =>
+    apiRequest<{ binding: ServiceEnvironmentDTO }>(
+      `/api/services/${encodeURIComponent(serviceID)}/environments/${encodeURIComponent(environmentID)}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+  serviceMetrics: (serviceID: string, environmentID: string, points = 120, signal?: AbortSignal) =>
+    apiRequest<{ supported: boolean; stale?: boolean; error_code?: string; deployment_id?: string; sample?: ServiceMetricDTO; samples: ServiceMetricDTO[] }>("/api/services/" + encodeURIComponent(serviceID) + "/environments/" + encodeURIComponent(environmentID) + "/metrics?points=" + points, { signal }),
+  observabilitySummary: (signal?: AbortSignal) => apiRequest<{ summary: ObservabilitySummaryDTO; system: unknown }>("/api/observability/summary", { signal }),
+  observabilityRequests: (filters: RequestObservabilityFilter = {}, signal?: AbortSignal) =>
+    apiRequest<{ requests: HTTPRequestDTO[]; next_cursor: string }>("/api/observability/requests" + observabilityQuery(filters), { signal }),
+  observabilityDeploySteps: (filters: DeployStepObservabilityFilter = {}, signal?: AbortSignal) =>
+    apiRequest<{ deploy_steps: DeploymentStepDTO[]; next_cursor: string }>("/api/observability/deploy-steps" + observabilityQuery(filters), { signal }),
+  hostSnapshot: (signal?: AbortSignal) => apiRequest<{ supported: boolean; error_code?: string; sample?: HostSampleDTO }>("/api/system/host/snapshot", { signal }),
+  hostHistory: (points = 120, signal?: AbortSignal) => apiRequest<{ supported: boolean; error_code?: string; samples: HostSampleDTO[] }>("/api/system/host/history?points=" + points, { signal }),
+  events: (filters: { applicationID?: string; serviceID?: string; type?: string; dateFrom?: string; dateTo?: string; cursor?: string; limit?: number } = {}, signal?: AbortSignal) => {
+    const params = new URLSearchParams()
+    if (filters.applicationID) params.set("application_id", filters.applicationID)
+    if (filters.serviceID) params.set("service_id", filters.serviceID)
+    if (filters.type) params.set("type", filters.type)
+    if (filters.dateFrom) params.set("date_from", filters.dateFrom)
+    if (filters.dateTo) params.set("date_to", filters.dateTo)
+    if (filters.cursor) params.set("cursor", filters.cursor)
+    if (filters.limit) params.set("limit", String(filters.limit))
+    const query = params.size ? "?" + params.toString() : ""
+    return apiRequest<{ events: PlatformEventDTO[]; next_cursor: string }>("/api/events" + query, { signal })
+  },
+  githubApp: (signal?: AbortSignal) => apiRequest<{ app: { configured: boolean; app_id?: number; slug?: string; html_url?: string; updated_at?: string } }>("/api/github/app", { signal }),
+  githubManifest: (input: { name: string; url: string; callback_url: string; webhook_url?: string }) => apiRequest<{ manifest: Record<string, unknown>; post_url: string; callback_url: string; webhook_url: string }>("/api/github/app/manifest", { method: "POST", body: JSON.stringify(input) }),
+  githubManifestExchange: (code: string) => apiRequest<{ app: { configured: boolean; app_id: number; slug: string }; install_url: string }>("/api/github/app/manifest/exchange", { method: "POST", body: JSON.stringify({ code }) }),
+  githubInstallations: (signal?: AbortSignal) => apiRequest<{ installations: GitHubInstallationDTO[] }>("/api/github/installations", { signal }),
+  syncGitHubInstallations: () => apiRequest<{ installations: GitHubInstallationDTO[] }>("/api/github/installations/sync", { method: "POST" }),
+  githubRepositories: (installationID: number, signal?: AbortSignal) => apiRequest<{ repositories: GitHubRepositoryDTO[] }>("/api/github/installations/" + installationID + "/repositories", { signal }),
+  repositoryBranches: (repoURL: string, installationID: number, signal?: AbortSignal) => {
+    const params = new URLSearchParams({ repo_url: repoURL, installation_id: String(installationID) })
+    return apiRequest<{ branches: string[]; default_branch: string }>("/api/repositories/branches?" + params.toString(), { signal })
+  },
+  domains: (applicationID: string, environmentID: string, serviceID = "", signal?: AbortSignal) => {
+    const query = serviceID ? "?service_id=" + encodeURIComponent(serviceID) : ""
+    return apiRequest<{ domains: DomainDTO[]; dns_guidance?: unknown }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains" + query, { signal })
+  },
+  createDomain: (applicationID: string, environmentID: string, input: { domain_name: string; service_id: string }) =>
+    apiRequest<{ domain: DomainDTO }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains", { method: "POST", body: JSON.stringify(input) }),
+  updateDomain: (applicationID: string, environmentID: string, domainID: string, input: { domain_name: string; service_id: string }) =>
+    apiRequest<{ domain: DomainDTO }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains/" + encodeURIComponent(domainID), { method: "PATCH", body: JSON.stringify(input) }),
+  deleteDomain: (applicationID: string, environmentID: string, domainID: string) =>
+    apiRequest<{ status: "deleted" }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains/" + encodeURIComponent(domainID), { method: "DELETE" }),
+  environmentVariables: (applicationID: string, environmentID: string, serviceID = "", signal?: AbortSignal) => {
+    const query = serviceID ? "?service_id=" + encodeURIComponent(serviceID) : ""
+    return apiRequest<{ variables: EnvironmentVariableDTO[] }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/variables" + query, { signal })
+  },
+  upsertEnvironmentVariable: (applicationID: string, environmentID: string, input: { key: string; value: string; service_id?: string }) =>
+    apiRequest<{ variable: EnvironmentVariableDTO }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/variables", { method: "POST", body: JSON.stringify(input) }),
+  updateEnvironmentVariable: (applicationID: string, environmentID: string, variableID: string, value: string) =>
+    apiRequest<{ variable: EnvironmentVariableDTO }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/variables/" + encodeURIComponent(variableID), { method: "PATCH", body: JSON.stringify({ value }) }),
+  deleteEnvironmentVariable: (applicationID: string, environmentID: string, variableID: string) =>
+    apiRequest<{ status: "deleted" }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/variables/" + encodeURIComponent(variableID), { method: "DELETE" }),
+  stopService: (serviceID: string, environmentID: string) =>
+    apiRequest<{ status: "stopped"; deployment_id: string; container_id: string }>("/api/services/" + encodeURIComponent(serviceID) + "/environments/" + encodeURIComponent(environmentID) + "/stop", { method: "POST" }),
+  restartService: (serviceID: string, environmentID: string) =>
+    apiRequest<{ status: "running"; deployment_id: string; container_id: string }>("/api/services/" + encodeURIComponent(serviceID) + "/environments/" + encodeURIComponent(environmentID) + "/restart", { method: "POST" }),
+  deployments: (filters: { applicationID?: string; serviceID?: string; environmentID?: string; status?: string; trigger?: string; branch?: string; dateFrom?: string; dateTo?: string; cursor?: string; limit?: number } = {}, signal?: AbortSignal) => {
+    const params = new URLSearchParams()
+    if (filters.applicationID) params.set("application_id", filters.applicationID)
+    if (filters.serviceID) params.set("service_id", filters.serviceID)
+    if (filters.environmentID) params.set("environment_id", filters.environmentID)
+    if (filters.status) params.set("status", filters.status)
+    if (filters.trigger) params.set("trigger", filters.trigger)
+    if (filters.branch) params.set("branch", filters.branch)
+    if (filters.dateFrom) params.set("date_from", filters.dateFrom)
+    if (filters.dateTo) params.set("date_to", filters.dateTo)
+    if (filters.cursor) params.set("cursor", filters.cursor)
+    if (filters.limit) params.set("limit", String(filters.limit))
+    const query = params.size ? "?" + params.toString() : ""
+    return apiRequest<{ deployments: DeploymentDTO[]; next_cursor: string }>("/api/deployments" + query, { signal })
+  },
+  deployment: (id: string, signal?: AbortSignal) => apiRequest<{ deployment: DeploymentDTO }>("/api/deployments/" + encodeURIComponent(id), { signal }),
+  deploymentSteps: (id: string, signal?: AbortSignal) => apiRequest<{ deployment_id: string; steps: DeploymentStepDTO[] }>("/api/deployments/" + encodeURIComponent(id) + "/steps", { signal }),
+  deploymentLogs: (id: string, signal?: AbortSignal) => apiRequest<{ eof: number; text: string }>("/api/deployments/" + encodeURIComponent(id) + "/logs?eof_meta=1&tail_lines=1000", { signal }),
+  deploy: (serviceID: string, environmentID: string) => apiRequest<{ deployment: DeploymentDTO }>("/api/services/" + encodeURIComponent(serviceID) + "/environments/" + encodeURIComponent(environmentID) + "/deployments", { method: "POST" }),
+  redeploy: (id: string) => apiRequest<{ deployment: DeploymentDTO }>("/api/deployments/" + encodeURIComponent(id) + "/redeploy", { method: "POST" }),
+  rollback: (id: string) => apiRequest<{ deployment: DeploymentDTO }>("/api/deployments/" + encodeURIComponent(id) + "/rollback", { method: "POST" }),
+  cancelDeployment: (id: string) => apiRequest<{ status: "cancelled" }>("/api/deployments/" + encodeURIComponent(id) + "/cancel", { method: "POST" }),
 }
 
 export const queryKeys = {
   session: ["session"] as const,
+  onboarding: ["onboarding"] as const,
+  systemStatus: ["system-status"] as const,
+  settings: ["settings"] as const,
   applications: ["applications"] as const,
   application: (id: string) => ["applications", id] as const,
+  serviceMetrics: (serviceID: string, environmentID: string, points = 120) => ["service-metrics", serviceID, environmentID, points] as const,
+  observabilitySummary: ["observability-summary"] as const,
+  observabilityRequests: (filters: RequestObservabilityFilter = {}) => ["observability-requests", filters] as const,
+  observabilityDeploySteps: (filters: DeployStepObservabilityFilter = {}) => ["observability-deploy-steps", filters] as const,
+  hostSnapshot: ["host-snapshot"] as const,
+  hostHistory: (points = 120) => ["host-history", points] as const,
+  events: (applicationID = "", serviceID = "", type = "") => ["events", applicationID, serviceID, type] as const,
+  githubApp: ["github-app"] as const,
+  githubInstallations: ["github-installations"] as const,
+  githubRepositories: (installationID: number) => ["github-repositories", installationID] as const,
+  repositoryBranches: (repoURL: string, installationID: number) => ["repository-branches", repoURL, installationID] as const,
+  service: (id: string) => ["services", id] as const,
+  domains: (applicationID: string, environmentID: string, serviceID = "") => ["domains", applicationID, environmentID, serviceID] as const,
+  variables: (applicationID: string, environmentID: string, serviceID = "") => ["variables", applicationID, environmentID, serviceID] as const,
+  deployments: (serviceID = "", environmentID = "", applicationID = "") => ["deployments", { serviceID, environmentID, applicationID }] as const,
+  deployment: (id: string) => ["deployments", id] as const,
 }

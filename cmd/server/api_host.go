@@ -58,8 +58,9 @@ func (s *server) handleHostSnapshot(w http.ResponseWriter, r *http.Request) {
 
 	if !s.hostSampler.HasSamples() {
 		payload := map[string]string{
-			"error":  "warming_up",
-			"detail": "host metrics have no samples yet; wait for the next collection tick",
+			"status":  "error",
+			"error":   "warming_up",
+			"message": "host metrics have no samples yet; wait for the next collection tick",
 		}
 		writeJSON(w, http.StatusServiceUnavailable, payload)
 		return
@@ -72,7 +73,7 @@ func (s *server) handleHostSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "encode_failed"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "encode_failed"})
 		return
 	}
 	s.hostSnapCache.set(now, time.Second, http.StatusOK, raw)

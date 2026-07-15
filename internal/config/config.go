@@ -68,8 +68,7 @@ type Config struct {
 	WebhookRateLimitPerMinute int
 	// LogsDirPath overrides where build logs are written (default: <data-dir>/logs).
 	LogsDirPath string
-	// RailpackEnabled enables the future Railpack/BuildKit path. It remains false
-	// by default until the deployment service is explicitly migrated.
+	// RailpackEnabled enables the required Railpack/BuildKit deployment path.
 	RailpackEnabled bool
 	// RailpackBin and RailpackVersion identify the pinned prepare helper.
 	RailpackBin     string
@@ -215,8 +214,8 @@ const (
 	BootstrapHTTPSPortEnv = "HOSTFORGE_BOOTSTRAP_HTTPS_PORT"
 	BootstrapExpiresAtEnv = "HOSTFORGE_BOOTSTRAP_EXPIRES_AT"
 	// EnvEncryptionKeyEnv is an optional base64-encoded 32-byte AES-256 key used to encrypt
-	// per-project environment variable values at rest (see README). When unset, env CRUD
-	// API returns 503 and deploy skips injecting project env (unless ciphertext rows exist).
+	// environment variable values and GitHub App secrets at rest. When unset, secret CRUD
+	// and GitHub App setup return 503.
 	EnvEncryptionKeyEnv = "HOSTFORGE_ENV_ENCRYPTION_KEY"
 )
 
@@ -337,7 +336,7 @@ func Load(dataDirFlag string) (*Config, error) {
 		return nil, err
 	}
 	logsDirPath := strings.TrimSpace(os.Getenv(LogsDirEnv))
-	railpackEnabled, err := envBool(RailpackEnabledEnv, false)
+	railpackEnabled, err := envBool(RailpackEnabledEnv, true)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +479,7 @@ func (c *Config) WorktreesDir() string {
 	return filepath.Join(c.DataDir, "worktrees")
 }
 
-// BuildsDir returns the directory for nixpacks build outputs.
+// BuildsDir returns the retained build artifact directory.
 func (c *Config) BuildsDir() string {
 	return filepath.Join(c.DataDir, "builds")
 }

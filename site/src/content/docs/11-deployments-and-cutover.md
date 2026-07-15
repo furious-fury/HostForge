@@ -1,50 +1,25 @@
 ---
 title: Deployments and cutover
-description: Deployment statuses, candidate-first rollout, health checks, and failure behavior.
+description: Service-environment release lifecycle, cancellation, rollback, and failure behavior.
 slug: deployments-and-cutover
 group: Concepts
 order: 11
 ---
 
-## Deployment lifecycle
+## Lifecycle
 
-Deployments use a fixed set of statuses in SQLite:
+- `QUEUED`: accepted and cancellable.
+- `BUILDING`: cloning, planning, building, starting, or health-checking; cancellation remains available.
+- `SUCCESS`: healthy and promoted to the service environment's active release.
+- `FAILED`: a material stage failed; the previous active release remains selected.
+- `CANCELLED`: the operator cancelled a queued/building attempt.
 
-- **`QUEUED`** — accepted, not yet building.
-- **`BUILDING`** — clone / Nixpacks / image / container startup in progress.
-- **`SUCCESS`** — healthy (and Caddy sync when required) completed; this is what public routes prefer.
-- **`FAILED`** — build, health, or sync failure; error message stored on the row.
+Every deployment records its service, environment, trigger, actor, exact commit, stages, builder metadata, and optional rollback source.
 
-There is **no distinct `LIVE` state** in v1: the latest **`SUCCESS`** deployment for a project is what routing and the UI treat as “current”.
+## Cutover guarantees
 
-## Candidate-first cutover
+The previous active container remains running while the candidate builds and passes health checks. HostForge promotes the candidate before rendering Caddy routes. If validation/reload fails, it restores the previous active deployment, marks the candidate failed, and removes the candidate container.
 
-HostForge keeps the **previous successful** container running while a **new candidate** is built and started on a **new host port**.
+Redeploy creates a new deployment for the same exact commit. Rollback accepts a successful historical deployment and creates a new auditable deployment referencing it; history is never rewritten.
 
-1. Start the **new** container on a **new** published port.
-2. Probe **`127.0.0.1:<new_port>`** with **`HOSTFORGE_HEALTH_*`** settings (path, timeouts, retries, expected status range).
-3. If health passes, optionally run **Caddy sync** so registered domains reverse-proxy to the new upstream.
-4. Only then mark the deployment **`SUCCESS`** and **stop/remove** the previous container.
-
-## Failure semantics
-
-- **Build failure:** candidate deployment → **`FAILED`**; prior **`SUCCESS`** deployment and container remain serving.
-- **Health failure:** same — route stays on the old upstream.
-- **Caddy sync failure (when sync is required):** candidate **`FAILED`**; old route and container remain.
-
-This matches the PRD intent: failed promotion must not take production offline on a single-node install.
-
-## Configuration knobs
-
-See [Environment variables](/docs/environment-variables) for:
-
-- `HOSTFORGE_HEALTH_PATH`
-- `HOSTFORGE_HEALTH_TIMEOUT_MS`
-- `HOSTFORGE_HEALTH_RETRIES`
-- `HOSTFORGE_HEALTH_INTERVAL_MS`
-- `HOSTFORGE_HEALTH_EXPECTED_MIN` / `HOSTFORGE_HEALTH_EXPECTED_MAX`
-- `HOSTFORGE_SYNC_CADDY` / `-sync-caddy`
-
-## Operator validation
-
-End-to-end “no downtime while curling through Caddy” is tracked as a **manual smoke** in the project task list. See [Operations and HTTPS](/docs/operations-https) for the runbook pointer.
+Build and runtime logs support authenticated catch-up and live WebSocket streaming. Navigating away does not cancel a deployment.

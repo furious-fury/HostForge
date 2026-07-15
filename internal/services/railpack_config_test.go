@@ -23,10 +23,10 @@ func validRailpackConfig() *config.Config {
 	}
 }
 
-func TestValidateRailpackConfig_DisabledAllowsExistingBaseline(t *testing.T) {
+func TestValidateRailpackConfig_DisabledIsRejected(t *testing.T) {
 	t.Parallel()
-	if err := ValidateRailpackConfig(&config.Config{}); err != nil {
-		t.Fatal(err)
+	if err := ValidateRailpackConfig(&config.Config{}); err == nil || !strings.Contains(err.Error(), "railpack is required") {
+		t.Fatalf("got %v", err)
 	}
 }
 

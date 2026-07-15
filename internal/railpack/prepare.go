@@ -23,8 +23,13 @@ const DefaultVersion = "v0.23.0"
 // PrepareRequest describes where a plan is generated. ArtifactsDir must be
 // outside Worktree so generated plan/info files never become source context.
 type PrepareRequest struct {
-	Worktree     string
-	ArtifactsDir string
+	Worktree        string
+	ArtifactsDir    string
+	Runtime         string
+	InstallCmd      string
+	BuildCmd        string
+	StartCmd        string
+	EnvironmentKeys []string
 }
 
 // Preparation is the non-secret metadata a future BuildKit adapter needs to
@@ -99,6 +104,24 @@ func (p *Planner) Prepare(ctx context.Context, request PrepareRequest, stdout, s
 	planPath := filepath.Join(request.ArtifactsDir, "railpack-plan.json")
 	infoPath := filepath.Join(request.ArtifactsDir, "railpack-info.json")
 	args := []string{"prepare", request.Worktree, "--plan-out", planPath, "--info-out", infoPath}
+	for _, key := range request.EnvironmentKeys {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			args = append(args, "--env", key+"=__HOSTFORGE_BUILD_SECRET__")
+		}
+	}
+	if command := strings.TrimSpace(request.InstallCmd); command != "" {
+		args = append(args, "--env", "RAILPACK_INSTALL_CMD="+command)
+	}
+	if command := strings.TrimSpace(request.BuildCmd); command != "" {
+		args = append(args, "--build-cmd", command)
+	}
+	if command := strings.TrimSpace(request.StartCmd); command != "" {
+		args = append(args, "--start-cmd", command)
+	}
+	if strings.EqualFold(strings.TrimSpace(request.Runtime), "bun") {
+		args = append(args, "--env", "RAILPACK_PACKAGES=bun")
+	}
 	var output bytes.Buffer
 	prepareOut := io.MultiWriter(&output, writerOrDiscard(stdout))
 	prepareErr := io.MultiWriter(&output, writerOrDiscard(stderr))

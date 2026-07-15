@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/hostforge/hostforge/internal/database"
-	"github.com/hostforge/hostforge/internal/models"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -135,88 +134,5 @@ func TestGitHubInstallationsCRUD(t *testing.T) {
 	}
 	if err := s.DeleteGitHubInstallation(ctx, 100); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestProjectSSHKeysRoundTripAndCascade(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	s := newTestStore(t)
-
-	project, err := s.CreateProject(ctx, CreateProjectInput{
-		Name:          "ssh-demo",
-		RepoURL:       "https://github.com/example/ssh-demo",
-		Branch:        "main",
-		DeployRuntime: models.DeployRuntimeAuto,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	meta, err := s.UpsertProjectSSHKey(ctx, UpsertProjectSSHKeyInput{
-		ProjectID:    project.ID,
-		PublicKey:    "ssh-ed25519 AAAAC3... hostforge",
-		PrivateKeyCT: []byte("sealed-priv"),
-		Fingerprint:  "SHA256:abcdef",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.Fingerprint != "SHA256:abcdef" {
-		t.Fatalf("unexpected meta: %+v", meta)
-	}
-
-	sealed, err := s.GetProjectSSHKeySealed(ctx, project.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(sealed.PrivateKeyCT) != "sealed-priv" {
-		t.Fatalf("unexpected sealed payload: %+v", sealed)
-	}
-
-	// Delete-cascade: removing the project should delete the SSH key row too.
-	if err := s.DeleteProjectCascade(ctx, project.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.GetProjectSSHKeySealed(ctx, project.ID); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("expected sql.ErrNoRows after cascade delete, got %v", err)
-	}
-}
-
-func TestUpdateProjectGitSource(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	s := newTestStore(t)
-
-	p, err := s.CreateProject(ctx, CreateProjectInput{
-		Name:          "app",
-		RepoURL:       "https://github.com/example/app",
-		Branch:        "main",
-		DeployRuntime: models.DeployRuntimeAuto,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.GitSource != models.GitSourceURL {
-		t.Fatalf("expected default git_source=url, got %q", p.GitSource)
-	}
-
-	if err := s.UpdateProjectGitSource(ctx, p.ID, models.GitSourceGitHubApp, 42); err != nil {
-		t.Fatal(err)
-	}
-	got, err := s.GetProjectByID(ctx, p.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.GitSource != models.GitSourceGitHubApp || got.GitHubInstallationID != 42 {
-		t.Fatalf("expected github_app/42, got %q/%d", got.GitSource, got.GitHubInstallationID)
-	}
-
-	if err := s.UpdateProjectGitSource(ctx, p.ID, models.GitSourceURL, 0); err != nil {
-		t.Fatal(err)
-	}
-	got, _ = s.GetProjectByID(ctx, p.ID)
-	if got.GitSource != models.GitSourceURL || got.GitHubInstallationID != 0 {
-		t.Fatalf("expected url/0 after reset, got %q/%d", got.GitSource, got.GitHubInstallationID)
 	}
 }

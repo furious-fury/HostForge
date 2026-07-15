@@ -1,69 +1,52 @@
-import { useState } from "react"
-import { Link } from "react-router-dom"
+import { lazy, Suspense, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { api, queryKeys } from "@/api"
+import { Link, useLocation, useNavigate } from "react-router-dom"
+import { RouteTabs } from "@/components/route-tabs"
 import {
   ActivityIcon,
   AppWindowIcon,
-  ArrowSquareOutIcon,
-  BellIcon,
   BookOpenIcon,
-  BracketsCurlyIcon,
   CaretDownIcon,
   CaretRightIcon,
-  CheckCircleIcon,
   CloudArrowUpIcon,
   CubeIcon,
-  DotsThreeIcon,
-  FunnelSimpleIcon,
   GearSixIcon,
-  GitBranchIcon,
   GlobeIcon,
   ListIcon,
   MagnifyingGlassIcon,
   PlusIcon,
   PulseIcon,
-  RocketLaunchIcon,
   SignOutIcon,
   SquaresFourIcon,
-  StackIcon,
   XIcon,
 } from "@phosphor-icons/react"
 
+import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
-import { navigateTo } from "@/navigation"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
 import { CommandSearch } from "@/command-search"
 import { ThemeSwitcher } from "@/theme-switcher"
-import { ApplicationActivity } from "@/application-activity"
-import { CreateApplication } from "@/create-application"
-import { DeploymentsList } from "@/deployment-screens"
-import { DomainsScreen, EnvironmentScreen } from "@/operations-screens"
-import { ObservabilityScreen } from "@/observability-screen"
-import { DocumentationScreen, SystemStatusScreen } from "@/platform-screens"
-import { ServicesRouter } from "@/services-router"
-import { ApplicationSettings, GlobalSettings } from "@/settings-screens"
 import "@/applications.css"
+
+const DashboardScreen = lazy(() => import("@/dashboard-screen").then((module) => ({ default: module.DashboardScreen })))
+const ApplicationActivity = lazy(() => import("@/application-activity").then((module) => ({ default: module.ApplicationActivity })))
+const CreateApplication = lazy(() => import("@/create-application").then((module) => ({ default: module.CreateApplication })))
+const DeploymentsList = lazy(() => import("@/deployment-screens").then((module) => ({ default: module.DeploymentsList })))
+const DeploymentDetail = lazy(() => import("@/deployment-screens").then((module) => ({ default: module.DeploymentDetail })))
+const DomainsScreen = lazy(() => import("@/operations-screens").then((module) => ({ default: module.DomainsScreen })))
+const EnvironmentScreen = lazy(() => import("@/operations-screens").then((module) => ({ default: module.EnvironmentScreen })))
+const ObservabilityScreen = lazy(() => import("@/observability-screen").then((module) => ({ default: module.ObservabilityScreen })))
+const DocumentationScreen = lazy(() => import("@/platform-screens").then((module) => ({ default: module.DocumentationScreen })))
+const SystemStatusScreen = lazy(() => import("@/platform-screens").then((module) => ({ default: module.SystemStatusScreen })))
+const ServicesRouter = lazy(() => import("@/services-router").then((module) => ({ default: module.ServicesRouter })))
+const ApplicationSettings = lazy(() => import("@/settings-screens").then((module) => ({ default: module.ApplicationSettings })))
+const GlobalSettings = lazy(() => import("@/settings-screens").then((module) => ({ default: module.GlobalSettings })))
 
 type Icon = React.ComponentType<{ className?: string; size?: number; weight?: "regular" | "bold" | "fill" }>
 
-const applications = [
-  { id: "taxio", name: "TaxIO", description: "Nigerian personal income tax platform", initials: "TX", services: 3, healthy: 3, status: "Healthy", deployment: "8 minutes ago", domains: 4, updated: "8m ago" },
-  { id: "gamenation", name: "GameNation", description: "Competitive gaming and tournament platform", initials: "GN", services: 2, healthy: 1, status: "Degraded", deployment: "2 hours ago", domains: 2, updated: "2h ago" },
-  { id: "hostforge-docs", name: "HostForge Docs", description: "Product documentation and operator guides", initials: "HD", services: 1, healthy: 1, status: "Healthy", deployment: "Yesterday", domains: 1, updated: "1d ago" },
-  { id: "ledger-api", name: "Ledger API", description: "Internal accounting and reconciliation services", initials: "LA", services: 0, healthy: 0, status: "No services", deployment: "Never", domains: 0, updated: "4d ago" },
-]
-
-const services = [
-  { name: "web", type: "Web service", branch: "main", status: "Running", deployment: "8m ago", url: "taxio.ng", cpu: "18%", memory: "312 MB" },
-  { name: "api", type: "API service", branch: "main", status: "Running", deployment: "24m ago", url: "api.taxio.ng", cpu: "31%", memory: "486 MB" },
-  { name: "worker", type: "Worker", branch: "main", status: "Running", deployment: "1h ago", url: null, cpu: "12%", memory: "208 MB" },
-]
-
-const deploymentActivity = [
-  { service: "web", commit: "8c2af71", message: "Add invoice retry policy", status: "Live", time: "8 minutes ago" },
-  { service: "api", commit: "13d298a", message: "Validate taxpayer region codes", status: "Live", time: "24 minutes ago" },
-  { service: "worker", commit: "fa72c20", message: "Reduce queue concurrency", status: "Failed", time: "1 hour ago" },
-]
-
-const navItems: Array<{ label: string; icon: Icon; href: string }> = [
+ const navItems: Array<{ label: string; icon: Icon; href: string }> = [
   { label: "Overview", icon: SquaresFourIcon, href: "/" },
   { label: "Applications", icon: AppWindowIcon, href: "/applications" },
   { label: "Deployments", icon: CloudArrowUpIcon, href: "/deployments" },
@@ -84,6 +67,13 @@ function Brand() {
 }
 
 function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const queryClient = useQueryClient()
+  const statusQuery = useQuery({ queryKey: queryKeys.systemStatus, queryFn: ({ signal }) => api.systemStatus(signal), refetchInterval: 30_000 })
+  const logout = useMutation({ mutationFn: api.logout, onSuccess: async () => { queryClient.clear(); navigate("/login", { replace: true }) } })
+  const connected = statusQuery.isSuccess
+  const healthy = statusQuery.data?.checks.every((check) => ["RUNNING", "READY"].includes(check.status)) ?? false
   return (
     <>
       {open && <button className="fixed inset-0 z-40 bg-black/30 lg:hidden" aria-label="Close navigation" onClick={onClose} />}
@@ -98,22 +88,22 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
           <div className="space-y-1">
             {navItems.map((item) => {
               const ItemIcon = item.icon
-              const active = window.location.pathname === "/observability" ? item.label === "Observability" : window.location.pathname === "/deployments" ? item.label === "Deployments" : window.location.pathname.startsWith("/applications") ? item.label === "Applications" : false
+              const active = pathname === "/" ? item.label === "Overview" : pathname === "/observability" ? item.label === "Observability" : pathname.startsWith("/deployments") ? item.label === "Deployments" : pathname.startsWith("/applications") ? item.label === "Applications" : false
               return <Link key={item.label} to={item.href} onClick={onClose} className={`hf-nav-item ${active ? "hf-nav-item-active" : ""}`}><ItemIcon size={17} weight={active ? "fill" : "regular"} />{item.label}</Link>
             })}
           </div>
           <p className="mb-2 mt-7 px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Platform</p>
           <div className="space-y-1">
-            <Link to="/settings" className={window.location.pathname === "/settings" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><GearSixIcon size={17} />Settings</Link>
-            <Link to="/docs" className={window.location.pathname === "/docs" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><BookOpenIcon size={17} />Documentation</Link>
-            <Link to="/status" className={window.location.pathname === "/status" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><ActivityIcon size={17} />System status<span className="ml-auto size-1.5 rounded-full bg-amber-500" /></Link>
+            <Link to="/settings" className={pathname === "/settings" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><GearSixIcon size={17} />Settings</Link>
+            <Link to="/docs" className={pathname === "/docs" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><BookOpenIcon size={17} />Documentation</Link>
+            <Link to="/status" className={pathname === "/status" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><ActivityIcon size={17} />System status<span className={"ml-auto size-1.5 rounded-full " + (healthy ? "bg-emerald-500" : "bg-amber-500")} /></Link>
           </div>
         </nav>
         <div className="border-t p-3">
-          <div className="mb-2 flex items-center gap-2 rounded-md px-2 py-2 text-xs text-muted-foreground"><span className="size-2 rounded-full bg-emerald-500" />Server connected<span className="ml-auto font-mono text-[10px]">v0.9.4</span></div>
-          <button className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-muted">
-            <span className="grid size-8 place-items-center rounded-full bg-foreground text-xs font-semibold text-background">MF</span>
-            <span className="min-w-0 flex-1"><span className="block text-xs font-medium">Mr Fury</span><span className="block text-[11px] text-muted-foreground">Administrator</span></span>
+          <div className="mb-2 flex items-center gap-2 rounded-md px-2 py-2 text-xs text-muted-foreground"><span className={"size-2 rounded-full " + (connected ? "bg-emerald-500" : "bg-red-500")} />{connected ? "Server connected" : statusQuery.isPending ? "Connecting..." : "Server unavailable"}<span className="ml-auto font-mono text-[10px]">{statusQuery.data?.version || ""}</span></div>
+          <button disabled={logout.isPending} onClick={() => logout.mutate()} className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-muted disabled:opacity-60">
+            <span className="grid size-8 place-items-center rounded-full bg-foreground text-xs font-semibold text-background">OP</span>
+            <span className="min-w-0 flex-1"><span className="block text-xs font-medium">Operator</span><span className="block text-[11px] text-muted-foreground">{logout.isPending ? "Signing out..." : "Authenticated session"}</span></span>
             <SignOutIcon size={16} className="text-muted-foreground" />
           </button>
         </div>
@@ -132,11 +122,12 @@ function Topbar({ onOpenNavigation, application, section }: { onOpenNavigation: 
           {application && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><span className="truncate font-medium">{application}</span></>}
         </>}
       </div>
-      <div className="ml-auto flex items-center gap-2">
+      <div className="absolute left-1/2 top-1/2 hidden w-[clamp(20rem,38vw,36rem)] -translate-x-1/2 -translate-y-1/2 lg:block">
         <CommandSearch />
+      </div>
+      <div className="ml-auto flex items-center gap-2">
         <ThemeSwitcher />
-        <button className="relative grid size-9 place-items-center rounded-md border bg-card text-muted-foreground hover:text-foreground" aria-label="Notifications"><BellIcon size={17} /><span className="absolute right-2 top-2 size-1.5 rounded-full bg-amber-500 ring-2 ring-card" /></button>
-        <Button size="sm" className="hidden sm:inline-flex"><PlusIcon /> Create</Button>
+        <Button asChild size="sm" className="hidden sm:inline-flex"><Link to="/applications/new"><PlusIcon /> Create</Link></Button>
       </div>
     </header>
   )
@@ -152,20 +143,38 @@ function PageHeader({ eyebrow, title, description, children }: { eyebrow?: React
 }
 
 function StatusPill({ status }: { status: string }) {
-  const style = status === "Healthy" || status === "Running" || status === "Live" ? "bg-emerald-50 text-emerald-700 ring-emerald-600/15" : status === "Degraded" || status === "Failed" ? "bg-amber-50 text-amber-700 ring-amber-600/15" : "bg-neutral-100 text-neutral-600 ring-neutral-500/15"
-  return <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold ring-1 ring-inset ${style}`}><span className="size-1.5 rounded-full bg-current" />{status}</span>
+  const tone = status === "Healthy" || status === "Running" || status === "Live" ? "success" : status === "Degraded" || status === "Failed" ? "warning" : "neutral"
+  return <StatusBadge tone={tone} dot>{status}</StatusBadge>
+}
+
+function ScreenLoading() {
+  return <main className="mx-auto w-full max-w-[1600px] animate-pulse px-4 py-7 sm:px-6 lg:px-8 lg:py-9" aria-busy="true" aria-label="Loading page"><div className="mb-7 h-8 w-52 rounded-md bg-muted" /><div className="h-72 rounded-xl border bg-card" /></main>
+}
+
+function NotFoundScreen() {
+  return <main className="mx-auto w-full max-w-[1600px] px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-10 text-center"><h1 className="text-lg font-semibold">Page not found</h1><p className="mt-2 text-xs text-muted-foreground">The requested HostForge screen does not exist.</p><Button asChild className="mt-5"><Link to="/">Return to overview</Link></Button></section></main>
 }
 
 function ApplicationsList() {
+  const navigate = useNavigate()
   const [filter, setFilter] = useState("All")
   const [query, setQuery] = useState("")
-  const visibleApplications = applications.filter((application) => (filter === "All" || application.status === filter) && `${application.name} ${application.description}`.toLowerCase().includes(query.toLowerCase()))
+  const applicationsQuery = useQuery({ queryKey: queryKeys.applications, queryFn: ({ signal }) => api.applications(signal) })
+  if (applicationsQuery.isPending) return <ScreenLoading />
+  if (applicationsQuery.isError) return <main className="mx-auto w-full max-w-[1600px] px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-8 text-center"><h1 className="text-sm font-semibold">Applications could not be loaded</h1><p className="mt-2 text-xs text-muted-foreground">HostForge returned an error while loading application data.</p><Button className="mt-4" variant="outline" onClick={() => applicationsQuery.refetch()}>Retry</Button></section></main>
+  const applications = applicationsQuery.data.applications.map((application) => {
+    const production = application.environment_health?.find((environment) => environment.kind === "production")
+    const services = application.service_count || 0
+    const healthy = application.healthy_service_count || 0
+    const status = services === 0 ? "No services" : production?.status === "healthy" ? "Healthy" : "Degraded"
+    return { id: application.id, name: application.name, description: application.description, initials: application.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(), services, healthy, domains: application.domain_count || 0, status, deployment: application.latest_deployment ? new Date(application.latest_deployment.created_at).toLocaleString() : "Never", updated: new Date(application.updated_at).toLocaleDateString() }
+  })
+  const visibleApplications = applications.filter((application) => (filter === "All" || application.status === filter) && [application.name, application.description].join(" ").toLowerCase().includes(query.toLowerCase()))
 
   return (
     <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
       <PageHeader title="Applications" description="Organize related services, deployments, domains and configuration.">
-        <Button variant="outline"><GitBranchIcon /> Import from GitHub</Button>
-        <Button onClick={() => navigateTo("/applications/new")}><PlusIcon /> Create application</Button>
+        <Button onClick={() => navigate("/applications/new")}><PlusIcon /> Create application</Button>
       </PageHeader>
 
       <section className="overflow-hidden rounded-xl border bg-card">
@@ -173,95 +182,84 @@ function ApplicationsList() {
           <div className="flex flex-wrap gap-1 rounded-lg border bg-card p-1">
             {["All", "Healthy", "Degraded", "No services"].map((item) => <button key={item} onClick={() => setFilter(item)} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${filter === item ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{item}</button>)}
           </div>
-          <label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full rounded-md border bg-card pl-9 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20" placeholder="Search applications or services" /></label>
-          <Button variant="outline" size="icon" aria-label="Filter applications"><FunnelSimpleIcon /></Button>
+          <label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full rounded-md border bg-card pl-9 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20" placeholder="Search applications or services" /></label>
         </header>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[880px] text-left">
-            <thead className="border-b text-[10px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-semibold">Application</th><th className="px-4 py-3 font-semibold">Services</th><th className="px-4 py-3 font-semibold">Production</th><th className="px-4 py-3 font-semibold">Latest deployment</th><th className="px-4 py-3 font-semibold">Domains</th><th className="px-4 py-3 font-semibold">Updated</th><th className="px-5 py-3 text-right font-semibold">Actions</th></tr></thead>
-            <tbody className="divide-y">
+          <Table className="w-full min-w-[880px] text-left">
+            <TableHeader className="border-b text-[10px] uppercase tracking-[0.12em] text-muted-foreground"><TableRow><TableHead className="px-5 py-3 font-semibold">Application</TableHead><TableHead className="px-4 py-3 font-semibold">Services</TableHead><TableHead className="px-4 py-3 font-semibold">Production</TableHead><TableHead className="px-4 py-3 font-semibold">Latest deployment</TableHead><TableHead className="px-4 py-3 font-semibold">Domains</TableHead><TableHead className="px-4 py-3 font-semibold">Updated</TableHead><TableHead className="px-5 py-3 text-right font-semibold">Actions</TableHead></TableRow></TableHeader>
+            <TableBody className="divide-y">
               {visibleApplications.map((application) => (
-                <tr key={application.id} className="group hover:bg-muted/35">
-                  <td className="px-5 py-4"><Link to={`/applications/${application.id}`} className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-lg bg-accent text-[11px] font-bold text-accent-foreground">{application.initials}</span><span><span className="block text-xs font-semibold group-hover:underline">{application.name}</span><span className="mt-1 block max-w-72 truncate text-[11px] text-muted-foreground">{application.description}</span></span></Link></td>
-                  <td className="px-4 py-4"><p className="text-xs font-medium tabular-nums">{application.services}</p><p className="mt-1 text-[11px] text-muted-foreground">{application.services ? `${application.healthy} healthy` : "None added"}</p></td>
-                  <td className="px-4 py-4"><StatusPill status={application.status} /></td>
-                  <td className="px-4 py-4 text-xs text-muted-foreground">{application.deployment}</td>
-                  <td className="px-4 py-4"><span className="flex items-center gap-1.5 text-xs"><GlobeIcon size={14} className="text-muted-foreground" />{application.domains}</span></td>
-                  <td className="px-4 py-4 text-xs text-muted-foreground">{application.updated}</td>
-                  <td className="px-5 py-4 text-right"><Button variant="ghost" size="icon" aria-label={`Actions for ${application.name}`}><DotsThreeIcon weight="bold" /></Button></td>
-                </tr>
+                <TableRow key={application.id} className="group hover:bg-muted/35">
+                  <TableCell className="px-5 py-4"><Link to={`/applications/${application.id}`} className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-lg bg-accent text-[11px] font-bold text-accent-foreground">{application.initials}</span><span><span className="block text-xs font-semibold group-hover:underline">{application.name}</span><span className="mt-1 block max-w-72 truncate text-[11px] text-muted-foreground">{application.description}</span></span></Link></TableCell>
+                  <TableCell className="px-4 py-4"><p className="text-xs font-medium tabular-nums">{application.services}</p><p className="mt-1 text-[11px] text-muted-foreground">{application.services ? `${application.healthy} healthy` : "None added"}</p></TableCell>
+                  <TableCell className="px-4 py-4"><StatusPill status={application.status} /></TableCell>
+                  <TableCell className="px-4 py-4 text-xs text-muted-foreground">{application.deployment}</TableCell>
+                  <TableCell className="px-4 py-4"><Link to={"/applications/" + application.id + "/domains"} className="flex items-center gap-1.5 text-xs font-medium hover:underline"><GlobeIcon size={14} className="text-muted-foreground" />{application.domains}</Link></TableCell>
+                  <TableCell className="px-4 py-4 text-xs text-muted-foreground">{application.updated}</TableCell>
+                  <TableCell className="px-5 py-4 text-right"><Button asChild variant="ghost" size="sm"><Link to={"/applications/" + application.id + "/settings"}>Settings</Link></Button></TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
-        {!visibleApplications.length && <div className="grid place-items-center px-6 py-16 text-center"><span className="grid size-11 place-items-center rounded-xl border bg-muted"><MagnifyingGlassIcon size={20} /></span><p className="mt-4 text-sm font-semibold">Create your first application</p><p className="mt-1 text-xs text-muted-foreground">Applications group the services that make up a product. Clear filters if you expected an existing application.</p><div className="mt-4 flex gap-2"><Button size="sm" onClick={() => navigateTo("/applications/new")}><PlusIcon />Create application</Button><Button variant="outline" size="sm"><GitBranchIcon />Import from GitHub</Button></div></div>}
+        {!visibleApplications.length && <div className="grid place-items-center px-6 py-16 text-center"><span className="grid size-11 place-items-center rounded-xl border bg-muted"><MagnifyingGlassIcon size={20} /></span><p className="mt-4 text-sm font-semibold">Create your first application</p><p className="mt-1 text-xs text-muted-foreground">Applications group the services that make up a product. Clear filters if you expected an existing application.</p><Button className="mt-4" size="sm" onClick={() => navigate("/applications/new")}><PlusIcon />Create application</Button></div>}
         <footer className="flex items-center justify-between border-t bg-muted/30 px-5 py-3 text-[11px] text-muted-foreground"><span>{visibleApplications.length} of {applications.length} applications</span><span>Updated just now</span></footer>
       </section>
     </main>
   )
 }
 
-function Panel({ title, subtitle, action, children, className = "" }: { title: string; subtitle?: string; action?: React.ReactNode; children: React.ReactNode; className?: string }) {
-  return <section className={`overflow-hidden rounded-xl border bg-card ${className}`}><header className="flex min-h-14 items-center gap-4 border-b bg-muted/75 px-5 py-3"><div><h2 className="text-sm font-semibold tracking-tight">{title}</h2>{subtitle && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}</div>{action && <div className="ml-auto">{action}</div>}</header>{children}</section>
-}
-
-function ApplicationOverview() {
+function ApplicationOverview({ applicationID }: { applicationID: string }) {
+  const navigate = useNavigate()
+  const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
+  if (applicationQuery.isPending) return <ScreenLoading />
+  if (applicationQuery.isError) return <main className="mx-auto w-full max-w-[1600px] px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-8 text-center"><h1 className="text-sm font-semibold">Application could not be loaded</h1><p className="mt-2 text-xs text-muted-foreground">It may have been removed or the server is unavailable.</p><Button className="mt-4" variant="outline" onClick={() => applicationQuery.refetch()}>Retry</Button></section></main>
+  const { application, environments, services } = applicationQuery.data
+  const initials = application.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()
+  const base = "/applications/" + application.id
   const tabs = ["Overview", "Services", "Deployments", "Domains", "Environment", "Activity", "Settings"]
   return (
     <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
-      <PageHeader eyebrow={<p className="mb-2 flex items-center gap-2 text-xs font-medium text-emerald-700"><span className="size-1.5 rounded-full bg-emerald-500" />Production healthy</p>} title="TaxIO" description="Nigerian personal income tax platform">
-        <Button variant="outline" onClick={() => navigateTo("/applications/taxio/settings")}><GearSixIcon /> Settings</Button><Button variant="outline"><PlusIcon /> Add service</Button><Button><RocketLaunchIcon weight="fill" /> Deploy all</Button><Button variant="outline" size="icon" aria-label="More application actions"><DotsThreeIcon weight="bold" /></Button>
+      <PageHeader eyebrow={<p className="mb-2 text-xs font-medium text-muted-foreground">{application.archived ? "Archived" : "Active application"}</p>} title={application.name} description={application.description || "No description provided."}>
+        <Button variant="outline" onClick={() => navigate(base + "/settings")}><GearSixIcon /> Settings</Button>
+        <Button onClick={() => navigate(base + "/services/new")}><PlusIcon /> Add service</Button>
       </PageHeader>
-
       <div className="mb-5 flex flex-col gap-3 rounded-xl border bg-card p-4 sm:flex-row sm:items-center">
-        <span className="grid size-11 place-items-center rounded-xl bg-accent text-sm font-bold text-accent-foreground">TX</span>
-        <div><p className="text-xs font-medium">Production URL</p><Link to="https://taxio.ng" className="mt-1 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">taxio.ng <ArrowSquareOutIcon size={13} /></Link></div>
-        <div className="sm:ml-auto sm:text-right"><p className="text-xs font-medium">Last updated</p><p className="mt-1 text-xs text-muted-foreground">8 minutes ago by deployment</p></div>
+        <span className="grid size-11 place-items-center rounded-xl bg-accent text-sm font-bold text-accent-foreground">{initials}</span>
+        <div><p className="text-xs font-medium">{services.length} {services.length === 1 ? "service" : "services"}</p><p className="mt-1 text-xs text-muted-foreground">{environments.map((environment) => environment.name).join(" · ")}</p></div>
+        <div className="sm:ml-auto sm:text-right"><p className="text-xs font-medium">Last updated</p><p className="mt-1 text-xs text-muted-foreground">{new Date(application.updated_at).toLocaleString()}</p></div>
       </div>
-
-      <nav className="mb-5 overflow-x-auto rounded-xl border bg-card p-1" aria-label="Application navigation"><div className="flex min-w-max gap-1">{tabs.map((tab) => <Link key={tab} to={tab === "Overview" ? "/applications/taxio" : `/applications/taxio/${tab.toLowerCase()}`} className={`rounded-lg px-3.5 py-2 text-xs font-medium ${tab === "Overview" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{tab}</Link>)}</div></nav>
-
-      <section className="mb-5 grid grid-cols-2 overflow-hidden rounded-xl border bg-card lg:grid-cols-4">
-        {[{ label: "Services", value: "3", detail: "All deployed", icon: StackIcon }, { label: "Healthy services", value: "3", detail: "100% operational", icon: CheckCircleIcon }, { label: "Failed deploys", value: "1", detail: "Last 30 days", icon: CloudArrowUpIcon }, { label: "Domains", value: "4", detail: "All secured", icon: GlobeIcon }].map((item) => { const ItemIcon = item.icon; return <article key={item.label} className="hf-app-summary"><div className="flex items-center justify-between"><p className="text-xs text-muted-foreground">{item.label}</p><ItemIcon size={16} className="text-muted-foreground" /></div><p className="mt-4 text-2xl font-semibold tracking-tight">{item.value}</p><p className="mt-1 text-[11px] text-muted-foreground">{item.detail}</p></article> })}
+      <RouteTabs active="Overview" label="Application navigation" tabs={tabs.map((tab) => ({ label: tab, href: tab === "Overview" ? base : base + "/" + tab.toLowerCase() }))} />
+      <section className="overflow-hidden rounded-xl border bg-card">
+        <header className="flex min-h-14 items-center border-b bg-muted/75 px-5"><div><h2 className="text-sm font-semibold">Services</h2><p className="mt-0.5 text-xs text-muted-foreground">Deployable components in this application</p></div><Button className="ml-auto" variant="ghost" size="sm" onClick={() => navigate(base + "/services")}>View all <CaretRightIcon /></Button></header>
+        {services.length ? <div className="divide-y">{services.map((service) => <Link key={service.id} to={base + "/services/" + service.id} className="flex items-center gap-3 px-5 py-4 hover:bg-muted/35"><span className="grid size-9 place-items-center rounded-lg border bg-muted"><CubeIcon size={16} /></span><span className="min-w-0"><span className="block truncate text-xs font-semibold">{service.name}</span><span className="mt-1 block truncate text-[11px] text-muted-foreground">{service.repo_url} · {service.runtime}</span></span><span className="ml-auto font-mono text-[10px] text-muted-foreground">:{service.internal_port}</span></Link>)}</div> : <div className="px-6 py-14 text-center"><CubeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">No services yet</p><p className="mt-1 text-xs text-muted-foreground">Connect a repository to create the first deployable service.</p><Button className="mt-4" onClick={() => navigate(base + "/services/new")}><PlusIcon /> Add service</Button></div>}
       </section>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.75fr)]">
-        <Panel title="Services" subtitle="Deployable components in this application" action={<Button variant="ghost" size="sm">View all <CaretRightIcon /></Button>}>
-          <div className="overflow-x-auto"><table className="w-full min-w-[740px] text-left"><thead className="border-b text-[10px] uppercase tracking-[0.12em] text-muted-foreground"><tr><th className="px-5 py-3 font-semibold">Service</th><th className="px-4 py-3 font-semibold">Branch</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3 font-semibold">URL</th><th className="px-5 py-3 text-right font-semibold">Resources</th></tr></thead><tbody className="divide-y">{services.map((service) => <tr key={service.name} className="hover:bg-muted/35"><td className="px-5 py-4"><Link to={`/applications/taxio/services/${service.name}`} className="flex items-center gap-3"><span className="grid size-8 place-items-center rounded-md border bg-muted"><CubeIcon size={15} /></span><span><span className="block text-xs font-semibold">{service.name}</span><span className="mt-0.5 block text-[11px] text-muted-foreground">{service.type} · deployed {service.deployment}</span></span></Link></td><td className="px-4 py-4"><span className="flex items-center gap-1.5 font-mono text-[11px]"><GitBranchIcon size={13} />{service.branch}</span></td><td className="px-4 py-4"><StatusPill status={service.status} /></td><td className="px-4 py-4">{service.url ? <Link to={`https://${service.url}`} className="flex items-center gap-1 text-xs hover:underline">{service.url}<ArrowSquareOutIcon size={12} /></Link> : <span className="text-xs text-muted-foreground">Internal</span>}</td><td className="px-5 py-4 text-right text-[11px] text-muted-foreground">{service.cpu} CPU · {service.memory}</td></tr>)}</tbody></table></div>
-        </Panel>
-
-        <Panel title="Application domains" subtitle="Public routes and TLS status" action={<Button variant="ghost" size="sm">Manage</Button>}>
-          <div className="divide-y">{[{ domain: "taxio.ng", target: "web", primary: true }, { domain: "www.taxio.ng", target: "web" }, { domain: "api.taxio.ng", target: "api" }].map((item) => <div key={item.domain} className="flex items-center gap-3 px-5 py-4"><span className="grid size-8 place-items-center rounded-md border bg-muted"><GlobeIcon size={15} /></span><div className="min-w-0"><p className="truncate text-xs font-medium">{item.domain}</p><p className="mt-0.5 text-[11px] text-muted-foreground">Routes to {item.target}</p></div><span className="ml-auto text-[10px] font-medium text-emerald-700">{item.primary ? "Primary · TLS" : "TLS"}</span></div>)}</div>
-        </Panel>
-
-        <Panel title="Deployment activity" subtitle="Recent releases across all services">
-          <div className="divide-y">{deploymentActivity.map((deployment) => <div key={deployment.commit} className="flex gap-4 px-5 py-4"><div className="relative"><span className={`mt-1 block size-2.5 rounded-full ring-4 ring-card ${deployment.status === "Failed" ? "bg-red-500" : "bg-emerald-500"}`} /></div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-xs font-semibold">{deployment.service}</p><StatusPill status={deployment.status} /><span className="ml-auto text-[11px] text-muted-foreground">{deployment.time}</span></div><p className="mt-1 text-xs text-muted-foreground"><span className="font-mono text-foreground">{deployment.commit}</span> · {deployment.message}</p></div></div>)}</div>
-        </Panel>
-
-        <Panel title="Shared environment" subtitle="Variable names available to services" action={<Button variant="ghost" size="sm">Configure</Button>}>
-          <div className="divide-y">{[{ name: "DATABASE_URL", scope: "All services" }, { name: "REDIS_URL", scope: "api, worker" }, { name: "APP_ENV", scope: "All services" }, { name: "SENTRY_DSN", scope: "web, api" }].map((variable) => <div key={variable.name} className="flex items-center gap-3 px-5 py-3.5"><BracketsCurlyIcon size={16} className="text-muted-foreground" /><div><p className="font-mono text-[11px] font-medium">{variable.name}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{variable.scope}</p></div><span className="ml-auto rounded bg-muted px-1.5 py-1 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Secret</span></div>)}</div>
-        </Panel>
-      </div>
     </main>
   )
 }
 
 export default function ApplicationsApp() {
   const [navigationOpen, setNavigationOpen] = useState(false)
-  const path = window.location.pathname
+  const { pathname: path } = useLocation()
+  const dashboard = path === "/"
+  const applicationsList = path === "/applications" || path === "/applications/"
   const creatingApplication = path === "/applications/new"
   const globalDeployments = path === "/deployments"
+  const deploymentDetailMatch = path.match(/^\/deployments\/([^/]+)\/?$/)
   const observability = path === "/observability"
   const globalSettings = path === "/settings"
   const documentation = path === "/docs"
   const systemStatus = path === "/status"
-  const applicationSettings = path === "/applications/taxio/settings"
-  const applicationDeployments = path === "/applications/taxio/deployments"
-  const applicationActivity = path === "/applications/taxio/activity"
-  const applicationEnvironment = path === "/applications/taxio/environment"
-  const applicationDomains = path === "/applications/taxio/domains"
-  const serviceArea = path.startsWith("/applications/taxio/services")
+  const applicationMatch = path.match(/^\/applications\/([^/]+)/)
+  const applicationID = applicationMatch?.[1]
+  const applicationBase = applicationID ? "/applications/" + applicationID : ""
+  const applicationSettings = path === applicationBase + "/settings"
+  const applicationDeployments = path === applicationBase + "/deployments"
+  const applicationActivity = path === applicationBase + "/activity"
+  const applicationEnvironment = path === applicationBase + "/environment"
+  const applicationDomains = path === applicationBase + "/domains"
+  const serviceArea = Boolean(applicationBase) && path.startsWith(applicationBase + "/services")
   const applicationOverview = /^\/applications\/[^/]+\/?$/.test(path) && path !== "/applications/new"
-  return <div className="min-h-svh bg-background text-foreground"><Sidebar open={navigationOpen} onClose={() => setNavigationOpen(false)} /><div className="lg:pl-60"><Topbar application={path.startsWith("/applications/taxio") ? "TaxIO" : undefined} section={globalSettings ? "Settings" : documentation ? "Documentation" : systemStatus ? "System status" : observability ? "Observability" : globalDeployments ? "Deployments" : undefined} onOpenNavigation={() => setNavigationOpen(true)} />{documentation ? <DocumentationScreen /> : systemStatus ? <SystemStatusScreen /> : globalSettings ? <GlobalSettings /> : applicationSettings ? <ApplicationSettings /> : observability ? <ObservabilityScreen /> : globalDeployments ? <DeploymentsList /> : applicationDeployments ? <DeploymentsList scope="application" /> : applicationActivity ? <ApplicationActivity /> : applicationEnvironment ? <EnvironmentScreen scope="application" /> : applicationDomains ? <DomainsScreen scope="application" /> : serviceArea ? <ServicesRouter path={path} /> : creatingApplication ? <CreateApplication /> : applicationOverview ? <ApplicationOverview /> : <ApplicationsList />}</div></div>
+  return <div className="min-h-svh bg-background text-foreground"><Sidebar open={navigationOpen} onClose={() => setNavigationOpen(false)} /><div className="lg:pl-60"><Topbar application={applicationID} section={dashboard ? "Overview" : globalSettings ? "Settings" : documentation ? "Documentation" : systemStatus ? "System status" : observability ? "Observability" : globalDeployments ? "Deployments" : undefined} onOpenNavigation={() => setNavigationOpen(true)} /><Suspense fallback={<ScreenLoading />}>{dashboard ? <DashboardScreen /> : documentation ? <DocumentationScreen /> : systemStatus ? <SystemStatusScreen /> : globalSettings ? <GlobalSettings /> : applicationSettings ? <ApplicationSettings applicationID={applicationID!} /> : observability ? <ObservabilityScreen /> : deploymentDetailMatch ? <DeploymentDetail deploymentID={deploymentDetailMatch[1]} /> : globalDeployments ? <DeploymentsList /> : applicationDeployments ? <DeploymentsList scope="application" applicationID={applicationID!} /> : applicationActivity ? <ApplicationActivity applicationID={applicationID!} /> : applicationEnvironment ? <EnvironmentScreen scope="application" applicationID={applicationID!} /> : applicationDomains ? <DomainsScreen scope="application" applicationID={applicationID!} /> : serviceArea ? <ServicesRouter path={path} /> : creatingApplication ? <CreateApplication /> : applicationOverview && applicationID ? <ApplicationOverview applicationID={applicationID} /> : applicationsList ? <ApplicationsList /> : <NotFoundScreen />}</Suspense></div></div>
 }

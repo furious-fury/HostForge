@@ -18,9 +18,14 @@ var (
 )
 
 type ServiceEnvironment struct {
-	ServiceID, EnvironmentID, Branch, ActiveDeploymentID, DesiredState string
-	AutoDeploy                                                         bool
-	CreatedAt, UpdatedAt                                               time.Time
+	ServiceID          string    `json:"service_id"`
+	EnvironmentID      string    `json:"environment_id"`
+	Branch             string    `json:"branch"`
+	ActiveDeploymentID string    `json:"active_deployment_id"`
+	DesiredState       string    `json:"desired_state"`
+	AutoDeploy         bool      `json:"auto_deploy"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type CreateServiceInput struct {
@@ -169,6 +174,71 @@ func (s *Store) UpdateEnvironment(ctx context.Context, id, name string) (Environ
 		return Environment{}, err
 	}
 	return s.GetEnvironment(ctx, item.ID)
+}
+
+func (s *Store) CreateEnvironment(ctx context.Context, applicationID, name, slug, kind string) (Environment, error) {
+	applicationID = strings.TrimSpace(applicationID)
+	name = strings.TrimSpace(name)
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if _, err := s.GetApplication(ctx, applicationID); errors.Is(err, sql.ErrNoRows) {
+		return Environment{}, ErrApplicationNotFound
+	} else if err != nil {
+		return Environment{}, err
+	}
+	if name == "" || slug == "" || (kind != "production" && kind != "staging") {
+		return Environment{}, fmt.Errorf("invalid environment")
+	}
+	for _, char := range slug {
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' {
+			return Environment{}, fmt.Errorf("invalid environment slug")
+		}
+	}
+	now := time.Now().UTC()
+	stamp := now.Format(time.RFC3339)
+	item := Environment{ID: newID(), ApplicationID: applicationID, Name: name, Slug: slug, Kind: kind, CreatedAt: now, UpdatedAt: now}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Environment{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO environments(id,application_id,name,slug,kind,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, item.ID, item.ApplicationID, item.Name, item.Slug, item.Kind, stamp, stamp); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return Environment{}, ErrDuplicateEnvironment
+		}
+		return Environment{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO service_environments(service_id,environment_id,branch,auto_deploy,active_deployment_id,desired_state,created_at,updated_at)
+		SELECT id,?,'',0,'','running',?,? FROM services WHERE application_id=?`, item.ID, stamp, stamp, applicationID); err != nil {
+		return Environment{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Environment{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) ListServiceEnvironments(ctx context.Context, serviceID string) ([]ServiceEnvironment, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT service_id,environment_id,branch,auto_deploy,active_deployment_id,desired_state,created_at,updated_at FROM service_environments WHERE service_id=? ORDER BY environment_id`, strings.TrimSpace(serviceID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ServiceEnvironment
+	for rows.Next() {
+		var item ServiceEnvironment
+		var auto int
+		var created, updated string
+		if err := rows.Scan(&item.ServiceID, &item.EnvironmentID, &item.Branch, &auto, &item.ActiveDeploymentID, &item.DesiredState, &created, &updated); err != nil {
+			return nil, err
+		}
+		item.AutoDeploy = auto != 0
+		item.CreatedAt = parseTime(created)
+		item.UpdatedAt = parseTime(updated)
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) GetServiceEnvironment(ctx context.Context, serviceID, environmentID string) (ServiceEnvironment, error) {

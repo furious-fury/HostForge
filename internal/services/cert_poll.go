@@ -96,15 +96,16 @@ func recordCertPollObs(ctx context.Context, log *slog.Logger, started time.Time,
 		code = "cert_poll_failed"
 	}
 	obs.RecordDeployStep(ctx, log, models.DeployStepRecord{
-		DeploymentID: "",
-		ProjectID:    "",
-		RequestID:    "",
-		Step:         "cert_poll",
-		Status:       status,
-		DurationMS:   time.Since(started).Milliseconds(),
-		ErrorCode:    code,
-		StartedAt:    started.UTC(),
-		EndedAt:      time.Now().UTC(),
+		DeploymentID:  "",
+		ServiceID:     "",
+		EnvironmentID: "",
+		RequestID:     "",
+		Step:          "cert_poll",
+		Status:        status,
+		DurationMS:    time.Since(started).Milliseconds(),
+		ErrorCode:     code,
+		StartedAt:     started.UTC(),
+		EndedAt:       time.Now().UTC(),
 	})
 }
 

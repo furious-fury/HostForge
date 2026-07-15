@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/hostforge/hostforge/internal/builder"
@@ -141,5 +142,64 @@ func TestPrepare_RejectsArtifactsInsideWorktree(t *testing.T) {
 	_, err := newTestPlanner(t, runner).Prepare(context.Background(), PrepareRequest{Worktree: worktree, ArtifactsDir: filepath.Join(worktree, ".hostforge")}, nil, nil)
 	if err == nil {
 		t.Fatal("expected an error")
+	}
+}
+
+func TestPrepare_PassesServiceCommandOverrides(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	artifacts := t.TempDir()
+	runner := &fakeRunner{run: func(_ string, args []string, _ string, stdout, _ io.Writer) error {
+		if reflect.DeepEqual(args, []string{"--version"}) {
+			_, _ = io.WriteString(stdout, "railpack 0.23.0\n")
+			return nil
+		}
+		if err := os.WriteFile(args[3], []byte(`{"steps":{}}`), 0o600); err != nil {
+			return err
+		}
+		return os.WriteFile(args[5], []byte(`{"detectedProviders":["node"]}`), 0o600)
+	}}
+	_, err := newTestPlanner(t, runner).Prepare(context.Background(), PrepareRequest{
+		Worktree: worktree, ArtifactsDir: artifacts, Runtime: "bun",
+		InstallCmd: "bun install --frozen-lockfile", BuildCmd: "bun run build", StartCmd: "bun run start",
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runner.calls[1].args
+	wantTail := []string{"--env", "RAILPACK_INSTALL_CMD=bun install --frozen-lockfile", "--build-cmd", "bun run build", "--start-cmd", "bun run start", "--env", "RAILPACK_PACKAGES=bun"}
+	if !reflect.DeepEqual(got[len(got)-len(wantTail):], wantTail) {
+		t.Fatalf("override args=%q want suffix=%q", got, wantTail)
+	}
+}
+
+func TestPrepare_UsesRedactedEnvironmentPlaceholders(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	artifacts := t.TempDir()
+	runner := &fakeRunner{run: func(_ string, args []string, _ string, stdout, _ io.Writer) error {
+		if reflect.DeepEqual(args, []string{"--version"}) {
+			_, _ = io.WriteString(stdout, "railpack 0.23.0\n")
+			return nil
+		}
+		if strings.Contains(strings.Join(args, " "), "actual-secret") {
+			t.Fatal("secret value reached planner arguments")
+		}
+		if err := os.WriteFile(args[3], []byte(`{"steps":{}}`), 0o600); err != nil {
+			return err
+		}
+		return os.WriteFile(args[5], []byte(`{"detectedProviders":["node"]}`), 0o600)
+	}}
+	_, err := newTestPlanner(t, runner).Prepare(context.Background(), PrepareRequest{
+		Worktree: worktree, ArtifactsDir: artifacts, EnvironmentKeys: []string{"DATABASE_URL", "TOKEN"},
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(runner.calls[1].args, " ")
+	for _, expected := range []string{"DATABASE_URL=__HOSTFORGE_BUILD_SECRET__", "TOKEN=__HOSTFORGE_BUILD_SECRET__"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("missing %s in %s", expected, joined)
+		}
 	}
 }

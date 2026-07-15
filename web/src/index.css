@@ -13,6 +13,15 @@
   --border: oklch(0.89 0.005 80);
   --body-pattern: oklch(0.35 0.008 75 / 14%);
   --ring: var(--accent);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-foreground);
+  --secondary: var(--muted);
+  --secondary-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --input: var(--border);
+  --destructive: oklch(0.55 0.2 28);
+  --destructive-foreground: oklch(0.99 0 0);
 
   /* One token controls primary actions, charts, and active UI states. */
   --accent: oklch(0.19 0.006 70);
@@ -44,6 +53,15 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
   --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-input: var(--input);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --radius-sm: calc(var(--radius) - 4px);

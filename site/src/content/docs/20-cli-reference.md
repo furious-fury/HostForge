@@ -1,59 +1,32 @@
 ---
 title: CLI reference
-description: hostforge subcommands, flags, and environment parity with the server deploy path.
+description: Safe operator-only HostForge commands.
 slug: cli-reference
 group: Reference
 order: 20
 ---
 
-All examples assume a built **`hostforge`** binary on `PATH`.
+The CLI intentionally does not create applications, mutate domains, or deploy repositories. Those are authenticated server/API workflows.
 
-## Global flags / env
-
-- **`--data-dir`** — overrides the data root (default `./.hostforge`). Env: **`HOSTFORGE_DATA_DIR`**.
-- **`--branch`** — optional branch; default is the remote’s default branch.
-- **`--host-port`** — `-1` picks from a configured range, `0` uses an ephemeral port, `>0` pins a host port.
-- **`--port-start` / `--port-end`** — host port range when `--host-port=-1`.
-- **`--container-port`** — app port inside the container (default **`3000`**).
-
-Equivalent env vars:
-
-- `HOSTFORGE_HOST_PORT`
-- `HOSTFORGE_PORT_START` / `HOSTFORGE_PORT_END`
-- `HOSTFORGE_CONTAINER_PORT`
-
-## `hostforge deploy`
+## Caddy synchronization
 
 ```bash
-hostforge deploy [flags] <repo_url>
+hostforge caddy sync [-data-dir /var/lib/hostforge]
 ```
 
-Builds with Nixpacks, creates/runs a Docker container, persists SQLite state when configured.
+Regenerates service-environment routes from SQLite and runs the configured validate/reload flow.
 
-## `hostforge domain`
+## Host validation
 
 ```bash
-hostforge domain add [flags] --domain <hostname> <repo_url>
-hostforge domain remove [flags] (--id <domain_id> | --domain <hostname> <repo_url>)
-hostforge domain edit [flags] --id <domain_id> --domain <new_hostname>
+hostforge validate docker
+hostforge validate preflight
 ```
 
-## `hostforge caddy sync`
+`docker` checks daemon reachability. `preflight` also verifies Git, Railpack, and BuildKit tooling.
 
-Regenerates the HostForge Caddy fragment from SQLite and reloads Caddy against your **root** config.
+## Version
 
 ```bash
-hostforge caddy sync [flags]
+hostforge version
 ```
-
-## `hostforge validate`
-
-```bash
-hostforge validate docker|preflight
-```
-
-Quick operator checks for Docker reachability and host prerequisites.
-
-## `hostforge version`
-
-Prints the embedded semver (see `internal/version/VERSION` in the main repository).

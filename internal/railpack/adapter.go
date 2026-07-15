@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/hostforge/hostforge/internal/builder"
@@ -73,7 +74,12 @@ func (a *Adapter) Build(ctx context.Context, request builder.Request, sink build
 		sink(builder.Event{Phase: "prepare", Message: "Preparing Railpack build plan."})
 	}
 	planLogs := eventWriter{phase: "prepare", sink: sink}
-	preparation, err := a.planner.Prepare(ctx, PrepareRequest{Worktree: request.Worktree, ArtifactsDir: artifactsDir}, &planLogs, &planLogs)
+	environmentKeys := make([]string, 0, len(request.BuildSecrets))
+	for key := range request.BuildSecrets {
+		environmentKeys = append(environmentKeys, key)
+	}
+	sort.Strings(environmentKeys)
+	preparation, err := a.planner.Prepare(ctx, PrepareRequest{Worktree: request.Worktree, ArtifactsDir: artifactsDir, Runtime: request.Runtime, InstallCmd: request.InstallCmd, BuildCmd: request.BuildCmd, StartCmd: request.StartCmd, EnvironmentKeys: environmentKeys}, &planLogs, &planLogs)
 	if err != nil {
 		return builder.Result{}, err
 	}
