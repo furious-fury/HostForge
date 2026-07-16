@@ -2,10 +2,62 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/hostforge/hostforge/internal/models"
 )
+
+func TestEnsurePlatformServiceDomainIsStableAndCustomDomainsRemainPreferred(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	if err := store.MarkGitHubAppComplete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteOnboarding(ctx, "forge.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	app, err := store.CreateApplication(ctx, "Share URLs", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := store.ListApplicationEnvironments(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := store.CreateService(ctx, CreateServiceInput{ApplicationID: app.ID, Name: "web", RepoURL: "https://github.com/acme/web.git", InternalPort: 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated, created, err := store.EnsurePlatformServiceDomain(ctx, app.ID, environments[0].ID, service.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || generated.Kind != "platform" || !strings.HasSuffix(generated.DomainName, ".forge.example.com") {
+		t.Fatalf("unexpected generated domain: created=%v domain=%+v", created, generated)
+	}
+	reused, created, err := store.EnsurePlatformServiceDomain(ctx, app.ID, environments[0].ID, service.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || reused.ID != generated.ID || reused.DomainName != generated.DomainName {
+		t.Fatalf("platform domain was not stable: first=%+v second=%+v", generated, reused)
+	}
+	custom, err := store.CreateServiceDomain(ctx, app.ID, environments[0].ID, service.ID, "app.customer.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	domains, err := store.ListServiceDomains(ctx, app.ID, environments[0].ID, service.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 2 || domains[0].ID != custom.ID || domains[1].ID != generated.ID {
+		t.Fatalf("custom domain should be preferred: %+v", domains)
+	}
+	if err := store.DeleteServiceDomain(ctx, app.ID, environments[0].ID, generated.ID); err != ErrManagedDomain {
+		t.Fatalf("managed domain deletion error=%v", err)
+	}
+}
 
 func TestServiceDomainsFollowEnvironmentActiveRelease(t *testing.T) {
 	store := newTestStore(t)

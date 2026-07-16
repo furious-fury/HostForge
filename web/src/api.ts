@@ -112,6 +112,10 @@ export type DeploymentDTO = {
   application_name?: string
   service_name?: string
   environment_name?: string
+  environment_kind?: "production" | "staging"
+  is_active?: boolean
+  public_url?: string
+  urls?: string[]
   branch?: string
   status: "QUEUED" | "BUILDING" | "SUCCESS" | "FAILED" | "CANCELLED"
   commit_hash: string
@@ -240,6 +244,7 @@ export type DomainDTO = {
   environment_id: string
   service_id: string
   domain_name: string
+  kind?: "custom" | "platform"
   ssl_status: "PENDING" | "ACTIVE" | "ERROR"
   last_cert_message?: string
   cert_checked_at?: string

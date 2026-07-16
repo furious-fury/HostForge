@@ -103,6 +103,10 @@ func (s *server) handleServiceDomains(w http.ResponseWriter, r *http.Request, ap
 			return
 		}
 		item, err := s.store.UpdateServiceDomain(r.Context(), applicationID, environmentID, domainID, req.DomainName, req.ServiceID)
+		if errors.Is(err, repository.ErrManagedDomain) {
+			writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "managed_domain"})
+			return
+		}
 		if errors.Is(err, repository.ErrDuplicateDomain) {
 			writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "duplicate_domain"})
 			return
@@ -122,6 +126,10 @@ func (s *server) handleServiceDomains(w http.ResponseWriter, r *http.Request, ap
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "domain": item, "caddy_sync": sync})
 	case http.MethodDelete:
 		if err := s.store.DeleteServiceDomain(r.Context(), applicationID, environmentID, domainID); err != nil {
+			if errors.Is(err, repository.ErrManagedDomain) {
+				writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "managed_domain"})
+				return
+			}
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "delete_domain_failed"})
 			return
 		}

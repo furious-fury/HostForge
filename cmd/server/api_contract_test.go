@@ -530,6 +530,48 @@ func TestDeploymentDetailReturnsNormalizedNotFound(t *testing.T) {
 	assertAPIError(t, recorder, http.StatusNotFound, "deployment_not_found")
 }
 
+func TestDeploymentDetailIncludesActiveReleaseContextAndURL(t *testing.T) {
+	s := newAPITestServer(t)
+	application, err := s.store.CreateApplication(context.Background(), "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := s.store.ListApplicationEnvironments(context.Background(), application.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := environments[0]
+	service, err := s.store.CreateService(context.Background(), repository.CreateServiceInput{ApplicationID: application.ID, Name: "api", RepoURL: "https://github.com/acme/payments.git", InternalPort: 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := s.store.CreateServiceDeployment(context.Background(), repository.CreateServiceDeploymentInput{ServiceID: service.ID, EnvironmentID: environment.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.ActivateServiceDeployment(context.Background(), service.ID, environment.ID, deployment.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.CreateServiceDomain(context.Background(), application.ID, environment.ID, service.ID, "payments.example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	if !s.handleDeploymentV2Detail(recorder, httptest.NewRequest(http.MethodGet, "/api/deployments/"+deployment.ID, nil), deployment.ID) {
+		t.Fatal("handler did not consume deployment detail request")
+	}
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	item := decodeResponse(t, recorder)["deployment"].(map[string]any)
+	if item["application_name"] != application.Name || item["service_name"] != service.Name || item["environment_name"] != environment.Name {
+		t.Fatalf("missing deployment context: %#v", item)
+	}
+	if item["is_active"] != true || item["public_url"] != "https://payments.example.com" {
+		t.Fatalf("missing active deployment URL: %#v", item)
+	}
+}
+
 func TestDeploymentCancellationContract(t *testing.T) {
 	s := newAPITestServer(t)
 	application, err := s.store.CreateApplication(context.Background(), "Payments", "")

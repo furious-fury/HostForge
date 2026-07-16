@@ -150,6 +150,15 @@ func runServer(log *slog.Logger, args []string) int {
 	defer db.Close()
 
 	store := repository.New(db)
+	if created, err := store.EnsureActivePlatformServiceDomains(ctx); err != nil {
+		log.Warn("backfill platform share domains failed", "error", err)
+	} else if created > 0 {
+		if err := services.SyncCaddyRoutes(ctx, log, cfg, store); err != nil {
+			log.Warn("sync backfilled platform share domains failed", "created", created, "error", err)
+		} else {
+			log.Info("backfilled platform share domains", "created", created)
+		}
+	}
 	services.StartCaddyCertPollLoop(log, cfg, store, obs.WithStore(context.Background(), store))
 	startServiceMetricSampler(context.Background(), log, store)
 	webhookLimiter := newFixedWindowLimiter(cfg.WebhookRateLimitPerMinute, time.Minute)

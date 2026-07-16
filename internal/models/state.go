@@ -110,6 +110,7 @@ type Domain struct {
 	EnvironmentID    string
 	ServiceID        string
 	DomainName       string
+	Kind             string
 	SSLStatus        string
 	LastCertMessage  string // operator summary from optional cert poll (not ssl_status / route sync)
 	CertCheckedAtRaw string // RFC3339 from DB; empty if never polled

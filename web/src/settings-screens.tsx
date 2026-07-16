@@ -2,7 +2,6 @@ import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "react-router-dom"
 import {
-  ArrowLeftIcon,
   CheckCircleIcon,
   GithubLogoIcon,
   GlobeIcon,
@@ -31,8 +30,8 @@ function ErrorState({ retry }: { retry: () => void }) {
   return <main className="mx-auto w-full max-w-[1400px] px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-8 text-center"><WarningCircleIcon className="mx-auto text-destructive" size={24} /><h1 className="mt-3 text-sm font-semibold">Settings could not be loaded</h1><p className="mt-2 text-xs text-muted-foreground">HostForge did not substitute local defaults for unavailable server data.</p><Button className="mt-4" variant="outline" onClick={retry}>Retry</Button></section></main>
 }
 
-function Page({ title, description, back, children }: { title: string; description: string; back?: { label: string; href: string }; children: React.ReactNode }) {
-  return <main className="mx-auto w-full max-w-[1400px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">{back && <Link to={back.href} className="mb-5 inline-flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground"><ArrowLeftIcon size={14} />{back.label}</Link>}<div className="mb-7"><h1 className="text-3xl font-semibold tracking-[-0.035em]">{title}</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">{description}</p></div>{children}</main>
+function Page({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
+  return <main className="mx-auto w-full max-w-[1400px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9"><div className="mb-7"><h1 className="text-3xl font-semibold tracking-[-0.035em]">{title}</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">{description}</p></div>{children}</main>
 }
 
 function Section({ title, description, children, footer }: { title: string; description: string; children: React.ReactNode; footer?: React.ReactNode }) {
@@ -145,7 +144,7 @@ export function ApplicationSettings({ applicationID }: { applicationID: string }
   const application = query.data.application
   const form = draft || { name: application.name, description: application.description }
 
-  return <Page title="Application settings" description={`Manage ${application.name} identity and lifecycle.`} back={{ label: application.name + " overview", href: "/applications/" + application.id }}>
+  return <Page title="Application settings" description={`Manage ${application.name} identity and lifecycle.`}>
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Section title="General" description="Application identity shared by every environment and service." footer={<Button disabled={update.isPending || !form.name.trim()} onClick={() => update.mutate({ name: form.name.trim(), description: form.description.trim() })}>{update.isPending ? "Saving..." : "Save changes"}</Button>}>
         <Field label="Application name"><Input value={form.name} onChange={(event) => setDraft({ ...form, name: event.target.value })} className="h-10 bg-background text-xs" /></Field>
@@ -197,7 +196,7 @@ export function ServiceSettings({ applicationID, serviceID }: { applicationID: s
   const service = { ...query.data.service, ...draft }
   const set = <K extends keyof ServiceDTO>(key: K, value: ServiceDTO[K]) => setDraft((current) => ({ ...current, [key]: value }))
 
-  return <Page title="Service settings" description={`Configure source, build, and runtime values for ${query.data.service.name}.`} back={{ label: query.data.service.name + " overview", href: "/applications/" + applicationID + "/services/" + serviceID }}>
+  return <Page title="Service settings" description={`Configure source, build, and runtime values for ${query.data.service.name}.`}>
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Section title="Service configuration" description="Changes apply to future deployments; active releases are not rebuilt automatically." footer={<Button disabled={update.isPending || !Object.keys(draft).length} onClick={() => update.mutate()}>{update.isPending ? "Saving..." : "Save changes"}</Button>}>
         <div className="grid gap-5 sm:grid-cols-2"><Field label="Service name"><Input value={service.name} onChange={(event) => set("name", event.target.value)} className="h-10 bg-background text-xs" /></Field><Field label="Runtime"><AppSelect options={["auto", "bun"]} value={service.runtime} onValueChange={(value) => set("runtime", value)} className="h-10 bg-background font-mono text-xs" /></Field></div>

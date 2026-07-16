@@ -9,6 +9,7 @@ import (
 	"github.com/hostforge/hostforge/internal/caddy"
 	"github.com/hostforge/hostforge/internal/dnsops"
 	"github.com/hostforge/hostforge/internal/repository"
+	platformservices "github.com/hostforge/hostforge/internal/services"
 )
 
 type onboardingCompleteRequest struct {
@@ -78,6 +79,13 @@ func (s *server) handleOnboardingComplete(w http.ResponseWriter, r *http.Request
 	if err := s.store.CompleteOnboarding(r.Context(), domain); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "onboarding_completion_failed"})
 		return
+	}
+	if created, provisionErr := s.store.EnsureActivePlatformServiceDomains(r.Context()); provisionErr != nil {
+		s.requestLog(r).Warn("provision existing platform share domains failed", "error", provisionErr)
+	} else if created > 0 {
+		if syncErr := platformservices.SyncCaddyRoutes(r.Context(), s.requestLog(r), s.cfg, s.store); syncErr != nil {
+			s.requestLog(r).Warn("sync existing platform share domains failed", "created", created, "error", syncErr)
+		}
 	}
 	_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "configuration", Status: "completed", Actor: "operator", Message: "Onboarding completed", Detail: domain})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "bootstrap_disabled": true, "platform_domain": domain})

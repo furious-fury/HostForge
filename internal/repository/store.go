@@ -16,6 +16,7 @@ import (
 var (
 	ErrDuplicateDomain                  = errors.New("duplicate_domain")
 	ErrDomainNotFound                   = errors.New("domain_not_found")
+	ErrManagedDomain                    = errors.New("managed_domain")
 	ErrEnvironmentVariableLimitExceeded = errors.New("environment_variable_limit_exceeded")
 )
 
@@ -145,7 +146,7 @@ func isUniqueConstraint(err error) bool {
 }
 
 func (s *Store) ListAllDomains(ctx context.Context) ([]models.Domain, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,application_id,environment_id,service_id,domain_name,ssl_status,last_cert_message,cert_checked_at,created_at,updated_at FROM domains ORDER BY domain_name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,application_id,environment_id,service_id,domain_name,kind,ssl_status,last_cert_message,cert_checked_at,created_at,updated_at FROM domains ORDER BY domain_name`)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +155,7 @@ func (s *Store) ListAllDomains(ctx context.Context) ([]models.Domain, error) {
 	for rows.Next() {
 		var item models.Domain
 		var createdAt, updatedAt string
-		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.EnvironmentID, &item.ServiceID, &item.DomainName, &item.SSLStatus, &item.LastCertMessage, &item.CertCheckedAtRaw, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.EnvironmentID, &item.ServiceID, &item.DomainName, &item.Kind, &item.SSLStatus, &item.LastCertMessage, &item.CertCheckedAtRaw, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = parseTime(createdAt)
@@ -180,7 +181,7 @@ func (s *Store) UpdateDomainSSLStatus(ctx context.Context, domainID, status stri
 
 func (s *Store) ListDomainRoutes(ctx context.Context) ([]models.DomainRoute, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT d.id,d.application_id,d.environment_id,d.service_id,d.domain_name,d.ssl_status,
+		SELECT d.id,d.application_id,d.environment_id,d.service_id,d.domain_name,d.kind,d.ssl_status,
 		       d.last_cert_message,d.cert_checked_at,d.created_at,d.updated_at,c.host_port
 		FROM domains d
 		JOIN service_environments se ON se.service_id=d.service_id AND se.environment_id=d.environment_id
@@ -195,7 +196,7 @@ func (s *Store) ListDomainRoutes(ctx context.Context) ([]models.DomainRoute, err
 		var item models.DomainRoute
 		var createdAt, updatedAt string
 		var hostPort sql.NullInt64
-		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.EnvironmentID, &item.ServiceID, &item.DomainName, &item.SSLStatus, &item.LastCertMessage, &item.CertCheckedAtRaw, &createdAt, &updatedAt, &hostPort); err != nil {
+		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.EnvironmentID, &item.ServiceID, &item.DomainName, &item.Kind, &item.SSLStatus, &item.LastCertMessage, &item.CertCheckedAtRaw, &createdAt, &updatedAt, &hostPort); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = parseTime(createdAt)

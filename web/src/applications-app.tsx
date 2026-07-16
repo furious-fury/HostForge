@@ -66,10 +66,16 @@ function Brand() {
   )
 }
 
-function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+function Sidebar({ open, onClose, applicationID }: { open: boolean; onClose: () => void; applicationID?: string }) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const queryClient = useQueryClient()
+  const applicationBase = applicationID ? "/applications/" + applicationID : ""
+  const applicationQuery = useQuery({
+    queryKey: queryKeys.application(applicationID || ""),
+    queryFn: ({ signal }) => api.application(applicationID!, signal),
+    enabled: Boolean(applicationID),
+  })
   const statusQuery = useQuery({ queryKey: queryKeys.systemStatus, queryFn: ({ signal }) => api.systemStatus(signal), refetchInterval: 30_000 })
   const logout = useMutation({ mutationFn: api.logout, onSuccess: async () => { queryClient.clear(); navigate("/login", { replace: true }) } })
   const connected = statusQuery.isSuccess
@@ -92,6 +98,14 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
               return <Link key={item.label} to={item.href} onClick={onClose} className={`hf-nav-item ${active ? "hf-nav-item-active" : ""}`}><ItemIcon size={17} weight={active ? "fill" : "regular"} />{item.label}</Link>
             })}
           </div>
+          {applicationID && <div className="mt-7">
+            <p className="mb-2 truncate px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{applicationQuery.data?.application.name || "Current application"}</p>
+            <div className="space-y-1">
+              <Link to={applicationBase} onClick={onClose} className={pathname === applicationBase || pathname === applicationBase + "/" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><SquaresFourIcon size={17} />Overview</Link>
+              <Link to={applicationBase + "/services"} onClick={onClose} className={pathname.startsWith(applicationBase + "/services") ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><CubeIcon size={17} />Services</Link>
+              <Link to={applicationBase + "/deployments"} onClick={onClose} className={pathname === applicationBase + "/deployments" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><CloudArrowUpIcon size={17} />Deployments</Link>
+            </div>
+          </div>}
           <p className="mb-2 mt-7 px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Platform</p>
           <div className="space-y-1">
             <Link to="/settings" className={pathname === "/settings" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><GearSixIcon size={17} />Settings</Link>
@@ -113,19 +127,35 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
 }
 
 function Topbar({ onOpenNavigation, applicationID, section }: { onOpenNavigation: () => void; applicationID?: string; section?: string }) {
+  const { pathname } = useLocation()
   const applicationQuery = useQuery({
     queryKey: queryKeys.application(applicationID || ""),
     queryFn: ({ signal }) => api.application(applicationID!, signal),
     enabled: Boolean(applicationID),
   })
+  const serviceID = pathname.match(/^\/applications\/[^/]+\/services\/([^/]+)/)?.[1]
+  const serviceQuery = useQuery({
+    queryKey: queryKeys.service(serviceID || ""),
+    queryFn: ({ signal }) => api.service(serviceID!, signal),
+    enabled: Boolean(serviceID && serviceID !== "new"),
+  })
   const applicationName = applicationQuery.data?.application.name || (applicationQuery.isPending ? "Loading application..." : "Application")
+  const applicationBase = applicationID ? "/applications/" + applicationID : ""
+  const serviceBase = serviceID && serviceID !== "new" ? applicationBase + "/services/" + serviceID : ""
+  const serviceSection = serviceID === "new" ? "New service" : pathname === serviceBase ? "" : serviceBase ? pathname.slice(serviceBase.length + 1).split("/")[0] : ""
+  const applicationSection = applicationID && !pathname.startsWith(applicationBase + "/services") && pathname !== applicationBase && pathname !== applicationBase + "/" ? pathname.slice(applicationBase.length + 1).split("/")[0] : ""
+  const globalDeploymentID = pathname.match(/^\/deployments\/([^/]+)\/?$/)?.[1]
   return (
     <header className="hf-topbar sticky top-0 z-30 flex h-16 items-center border-b px-4 backdrop-blur-md sm:px-6 lg:px-8">
       <button className="mr-3 rounded-md p-2 hover:bg-muted lg:hidden" onClick={onOpenNavigation} aria-label="Open navigation"><ListIcon size={20} /></button>
       <div className="flex min-w-0 items-center gap-2 text-sm">
-        {section ? <span className="font-medium">{section}</span> : <>
+        {globalDeploymentID ? <><Link to="/deployments" className="text-muted-foreground hover:text-foreground">Deployments</Link><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><span className="max-w-56 truncate font-mono font-medium">{globalDeploymentID}</span></> : section ? <span className="font-medium">{section}</span> : <>
           <Link to="/applications" className={applicationID ? "text-muted-foreground hover:text-foreground" : "font-medium"}>Applications</Link>
-          {applicationID && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><span className="truncate font-medium">{applicationName}</span></>}
+          {applicationID && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><Link to={applicationBase} className={pathname === applicationBase ? "truncate font-medium" : "truncate text-muted-foreground hover:text-foreground"}>{applicationName}</Link></>}
+          {applicationSection && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><span className="truncate font-medium capitalize">{applicationSection}</span></>}
+          {pathname.startsWith(applicationBase + "/services") && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><Link to={applicationBase + "/services"} className={serviceID ? "text-muted-foreground hover:text-foreground" : "font-medium"}>Services</Link></>}
+          {serviceID && serviceID !== "new" && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><Link to={serviceBase} className={serviceSection ? "max-w-40 truncate text-muted-foreground hover:text-foreground" : "max-w-40 truncate font-medium"}>{serviceQuery.data?.service.name || "Service"}</Link></>}
+          {(serviceSection || serviceID === "new") && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><span className="truncate font-medium capitalize">{serviceSection || "New service"}</span></>}
         </>}
       </div>
       <div className="absolute left-1/2 top-1/2 hidden w-[clamp(20rem,38vw,36rem)] -translate-x-1/2 -translate-y-1/2 lg:block">
@@ -267,5 +297,5 @@ export default function ApplicationsApp() {
   const applicationDomains = path === applicationBase + "/domains"
   const serviceArea = Boolean(applicationBase) && path.startsWith(applicationBase + "/services")
   const applicationOverview = /^\/applications\/[^/]+\/?$/.test(path) && path !== "/applications/new"
-  return <div className="min-h-svh bg-background text-foreground"><Sidebar open={navigationOpen} onClose={() => setNavigationOpen(false)} /><div className="lg:pl-60"><Topbar applicationID={applicationID} section={dashboard ? "Overview" : globalSettings ? "Settings" : documentation ? "Documentation" : systemStatus ? "System status" : observability ? "Observability" : globalDeployments ? "Deployments" : undefined} onOpenNavigation={() => setNavigationOpen(true)} /><Suspense fallback={<ScreenLoading />}>{dashboard ? <DashboardScreen /> : documentation ? <DocumentationScreen /> : systemStatus ? <SystemStatusScreen /> : globalSettings ? <GlobalSettings /> : applicationSettings ? <ApplicationSettings applicationID={applicationID!} /> : observability ? <ObservabilityScreen /> : deploymentDetailMatch ? <DeploymentDetail deploymentID={deploymentDetailMatch[1]} /> : globalDeployments ? <DeploymentsList /> : applicationDeployments ? <DeploymentsList scope="application" applicationID={applicationID!} /> : applicationActivity ? <ApplicationActivity applicationID={applicationID!} /> : applicationEnvironment ? <EnvironmentScreen scope="application" applicationID={applicationID!} /> : applicationDomains ? <DomainsScreen scope="application" applicationID={applicationID!} /> : serviceArea ? <ServicesRouter path={path} /> : creatingApplication ? <CreateApplication /> : applicationOverview && applicationID ? <ApplicationOverview applicationID={applicationID} /> : applicationsList ? <ApplicationsList /> : <NotFoundScreen />}</Suspense></div></div>
+  return <div className="min-h-svh bg-background text-foreground"><Sidebar open={navigationOpen} onClose={() => setNavigationOpen(false)} applicationID={applicationID} /><div className="lg:pl-60"><Topbar applicationID={applicationID} section={dashboard ? "Overview" : globalSettings ? "Settings" : documentation ? "Documentation" : systemStatus ? "System status" : observability ? "Observability" : globalDeployments ? "Deployments" : undefined} onOpenNavigation={() => setNavigationOpen(true)} /><Suspense fallback={<ScreenLoading />}>{dashboard ? <DashboardScreen /> : documentation ? <DocumentationScreen /> : systemStatus ? <SystemStatusScreen /> : globalSettings ? <GlobalSettings /> : applicationSettings ? <ApplicationSettings applicationID={applicationID!} /> : observability ? <ObservabilityScreen /> : deploymentDetailMatch ? <DeploymentDetail deploymentID={deploymentDetailMatch[1]} /> : globalDeployments ? <DeploymentsList /> : applicationDeployments ? <DeploymentsList scope="application" applicationID={applicationID!} /> : applicationActivity ? <ApplicationActivity applicationID={applicationID!} /> : applicationEnvironment ? <EnvironmentScreen scope="application" applicationID={applicationID!} /> : applicationDomains ? <DomainsScreen scope="application" applicationID={applicationID!} /> : serviceArea ? <ServicesRouter path={path} /> : creatingApplication ? <CreateApplication /> : applicationOverview && applicationID ? <ApplicationOverview applicationID={applicationID} /> : applicationsList ? <ApplicationsList /> : <NotFoundScreen />}</Suspense></div></div>
 }

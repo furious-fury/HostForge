@@ -135,7 +135,7 @@ describe("add service", () => {
 })
 
 describe("service overview", () => {
-  it("does not present failed deployment and domain requests as empty states", async () => {
+  it("does not present a failed deployment request as an empty state", async () => {
     mockApplication()
     vi.spyOn(api, "service").mockResolvedValue({
       service,
@@ -152,13 +152,49 @@ describe("service overview", () => {
       environment_states: [],
     })
     vi.spyOn(api, "deployments").mockRejectedValue(new APIError(503, "deployments_unavailable"))
-    vi.spyOn(api, "domains").mockRejectedValue(new APIError(503, "domains_unavailable"))
 
     renderOverview()
 
     expect(await screen.findByText("Deployment history could not be loaded.")).toBeInTheDocument()
-    expect(screen.getByText("Domain routes could not be loaded.")).toBeInTheDocument()
     expect(screen.queryByText("Deploy this environment to create its first release.")).not.toBeInTheDocument()
-    expect(screen.queryByText("No public routes configured.")).not.toBeInTheDocument()
+  })
+
+  it("shows active deployments and URLs for every environment without a selector", async () => {
+    const staging = { ...environment, id: "env-staging", name: "Staging", slug: "staging", kind: "staging" as const }
+    vi.spyOn(api, "application").mockResolvedValue({ application, environments: [environment, staging], services: [service], service_bindings: {} })
+    vi.spyOn(api, "service").mockResolvedValue({
+      service,
+      bindings: [environment, staging].map((item) => ({
+        service_id: service.id,
+        environment_id: item.id,
+        branch: item.kind === "staging" ? "develop" : "main",
+        auto_deploy: true,
+        active_deployment_id: item.kind === "staging" ? "deployment-staging" : "",
+        desired_state: "running" as const,
+        created_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      })),
+      environment_states: [{
+        service_id: service.id,
+        environment_id: staging.id,
+        branch: "develop",
+        auto_deploy: true,
+        active_deployment_id: "deployment-staging",
+        desired_state: "running",
+        environment_name: "Staging",
+        environment_kind: "staging",
+        public_url: "https://staging.payments.example.com",
+        created_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      }],
+    })
+    vi.spyOn(api, "deployments").mockResolvedValue({ deployments: [], next_cursor: "" })
+
+    renderOverview()
+
+    expect(await screen.findByRole("link", { name: /staging\.payments\.example\.com/i })).toHaveAttribute("href", "https://staging.payments.example.com")
+    expect(screen.getByText("Production")).toBeInTheDocument()
+    expect(screen.getByText("Staging")).toBeInTheDocument()
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument()
   })
 })

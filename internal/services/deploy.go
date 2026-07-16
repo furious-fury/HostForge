@@ -308,6 +308,28 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	log.Info("deploy step", "step", "health_check_end", "status", "ok", "host_port", hostPortValue, "duration_ms", msHealth)
 	recordDeployObs(ctx, log, job, "health_check", "ok", t2, msHealth, "")
 
+	platformDomain, platformDomainCreated, err := store.EnsurePlatformServiceDomain(ctx, job.Target.Application.ID, job.Target.Environment.ID, job.Target.Service.ID)
+	if err != nil {
+		e := ErrCode("platform_domain_provision_failed", err)
+		markFailed(e)
+		cleanupCandidate("platform domain provisioning failure")
+		return DeployResult{}, e
+	}
+	if platformDomainCreated {
+		log.Info("generated platform domain", "domain", platformDomain.DomainName, "environment_id", job.Target.Environment.ID)
+		_ = store.RecordPlatformEvent(ctx, repository.PlatformEventInput{
+			ApplicationID: job.Target.Application.ID,
+			ServiceID:     job.Target.Service.ID,
+			EnvironmentID: job.Target.Environment.ID,
+			DeploymentID:  job.Deployment.ID,
+			EventType:     "domain",
+			Status:        "created",
+			Actor:         "hostforge",
+			Message:       "Platform domain generated",
+			Detail:        platformDomain.DomainName,
+		})
+	}
+
 	// Caddy resolves each domain to the latest SUCCESS deployment. Promote the
 	// healthy candidate before rendering routes so the generated upstream is the
 	// new container, not the one that is about to be removed after cutover.

@@ -4,11 +4,10 @@ import { api, APIError, queryKeys, type ServiceDTO } from "@/api"
 import { Link, useNavigate } from "react-router-dom"
 import {
   ActivityIcon,
-  ArrowLeftIcon,
+  ArrowSquareOutIcon,
   CodeIcon,
   CubeIcon,
   GithubLogoIcon,
-  GitBranchIcon,
   GlobeIcon,
   HardDrivesIcon,
   HeartbeatIcon,
@@ -72,7 +71,6 @@ export function ServicesList({ applicationID }: { applicationID: string }) {
   const visibleRows = services.filter((service) => [service.name, service.repo_url, service.runtime].join(" ").toLowerCase().includes(query.toLowerCase()))
   const running = services.filter((service) => bindings[service.id]?.find((item) => item.environment_id === environment?.id)?.active_deployment_id && bindings[service.id]?.find((item) => item.environment_id === environment?.id)?.desired_state === "running").length
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
-    <Link to={"/applications/" + applicationID} className="mb-5 inline-flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground"><ArrowLeftIcon size={14} />{application.name} overview</Link>
     <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end"><div><h1 className="text-3xl font-semibold tracking-[-0.035em]">Services</h1><p className="mt-2 text-sm text-muted-foreground">Deployable components of {application.name}.</p></div><div className="flex gap-2 sm:ml-auto"><AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-9 min-w-36 bg-card text-xs" /><Button onClick={() => navigate("/applications/" + applicationID + "/services/new")}><PlusIcon />Add service</Button></div></div>
     <ApplicationTabs active="Services" applicationID={applicationID} />
     <section className="mb-5 grid grid-cols-2 overflow-hidden rounded-xl border bg-card lg:grid-cols-4">{[{ label: "Total services", value: services.length }, { label: "Running", value: running }, { label: "Stopped", value: services.filter((service) => bindings[service.id]?.find((item) => item.environment_id === environment?.id)?.desired_state === "stopped").length }, { label: "Awaiting deploy", value: services.length - running }].map((item) => <article key={item.label} className="hf-service-summary"><p className="text-xs text-muted-foreground">{item.label}</p><p className="mt-4 text-2xl font-semibold tracking-tight">{item.value}</p><p className="mt-1 text-[11px] text-muted-foreground">{environment?.name}</p></article>)}</section>
@@ -154,7 +152,6 @@ export function AddService({ applicationID }: { applicationID: string }) {
   if (!installations.length) return <main className="mx-auto w-full max-w-5xl px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-10 text-center"><GithubLogoIcon className="mx-auto text-muted-foreground" size={26} /><h1 className="mt-3 text-sm font-semibold">No active GitHub installation</h1><p className="mx-auto mt-1 max-w-md text-xs leading-5 text-muted-foreground">Configure or restore a GitHub App installation, then synchronize it before adding a repository-backed service.</p><div className="mt-5 flex justify-center gap-2"><Button asChild><Link to="/onboarding">Configure GitHub App</Link></Button><Button variant="outline" onClick={() => installationsQuery.refetch()}>Check again</Button></div></section></main>
   const applicationName = applicationQuery.data?.application.name || "application"
   return <main className="mx-auto w-full max-w-5xl px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
-    <Link to={"/applications/" + applicationID + "/services"} className="mb-5 inline-flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground"><ArrowLeftIcon size={14} />Back to services</Link>
     <div className="mb-8"><h1 className="text-3xl font-semibold tracking-[-0.035em]">Add service</h1><p className="mt-2 text-sm text-muted-foreground">Connect a GitHub App repository to {applicationName}.</p></div>
     <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}>
       <Panel title="GitHub source" subtitle="Choose exactly what HostForge should deploy for the first release"><div className="grid gap-5 p-6 sm:grid-cols-2"><Field label="Installation"><AppSelect options={installations.map((item) => item.account_login)} value={installation?.account_login || installationName} onValueChange={(value) => { setInstallationName(value); setRepositoryName(""); setBranch("") }} className="h-10 w-full bg-background text-xs" /></Field><Field label="Repository"><AppSelect options={repositories.map((item) => item.full_name)} value={repository?.full_name || repositoryName} onValueChange={(value) => { setRepositoryName(value); setBranch("") }} disabled={!installation || repositoriesQuery.isPending} className="h-10 w-full bg-background text-xs" /></Field><Field label="Environment"><AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-10 w-full bg-background text-xs" /></Field><Field label="Branch"><AppSelect options={branches} value={selectedBranch} onValueChange={setBranch} disabled={!repository || branchesQuery.isPending} className="h-10 w-full bg-background text-xs" /></Field></div><div className="border-t px-6 py-3 text-xs" aria-live="polite">{repositoriesQuery.isPending ? <p className="text-muted-foreground">Loading repositories from GitHub...</p> : repositoriesQuery.isError ? <p role="alert" className="flex items-center justify-between gap-3 text-destructive"><span>Repositories could not be loaded for this installation.</span><Button type="button" size="sm" variant="outline" onClick={() => repositoriesQuery.refetch()}>Retry</Button></p> : !repositories.length ? <p className="text-muted-foreground">This installation does not expose any repositories. Update its repository access on GitHub.</p> : branchesQuery.isPending ? <p className="text-muted-foreground">Loading repository branches...</p> : branchesQuery.isError ? <p role="alert" className="flex items-center justify-between gap-3 text-destructive"><span>Branches could not be loaded for this repository.</span><Button type="button" size="sm" variant="outline" onClick={() => branchesQuery.refetch()}>Retry</Button></p> : !branches.length ? <p className="text-muted-foreground">No branches are available in this repository.</p> : <p className="text-muted-foreground">Ready to deploy <span className="font-mono font-semibold text-foreground">{selectedBranch}</span> to <span className="font-semibold text-foreground">{environment?.name}</span>.</p>}</div></Panel>
@@ -169,22 +166,17 @@ export function AddService({ applicationID }: { applicationID: string }) {
 export function ServiceOverview({ applicationID, service: serviceID }: { applicationID: string; service: string }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [environmentName, setEnvironmentName] = useState("Production")
   const serviceQuery = useQuery({ queryKey: queryKeys.service(serviceID), queryFn: ({ signal }) => api.service(serviceID, signal) })
   const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
   const environments = applicationQuery.data?.environments || []
-  const environment = environments.find((item) => item.name === environmentName) || environments[0]
-  const binding = serviceQuery.data?.bindings.find((item) => item.environment_id === environment?.id)
-  const environmentState = serviceQuery.data?.environment_states.find((item) => item.environment_id === environment?.id)
-  const deploymentsQuery = useQuery({ queryKey: queryKeys.deployments(serviceID, environment?.id || ""), queryFn: ({ signal }) => api.deployments({ serviceID, environmentID: environment.id }, signal), enabled: Boolean(environment) })
-  const domainsQuery = useQuery({ queryKey: queryKeys.domains(applicationID, environment?.id || "", serviceID), queryFn: ({ signal }) => api.domains(applicationID, environment.id, serviceID, signal), enabled: Boolean(environment) })
+  const deploymentsQuery = useQuery({ queryKey: queryKeys.deployments(serviceID), queryFn: ({ signal }) => api.deployments({ serviceID }, signal) })
   const invalidate = async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) })
-    await queryClient.invalidateQueries({ queryKey: queryKeys.deployments(serviceID, environment?.id || "") })
+    await queryClient.invalidateQueries({ queryKey: queryKeys.deployments(serviceID) })
   }
-  const deployMutation = useMutation({ mutationFn: () => api.deploy(serviceID, environment.id), onSuccess: async (result) => { await invalidate(); navigate("/deployments/" + result.deployment.id) } })
-  const stopMutation = useMutation({ mutationFn: () => api.stopService(serviceID, environment.id), onSuccess: invalidate })
-  const restartMutation = useMutation({ mutationFn: () => api.restartService(serviceID, environment.id), onSuccess: invalidate })
+  const deployMutation = useMutation({ mutationFn: (environmentID: string) => api.deploy(serviceID, environmentID), onSuccess: async (result) => { await invalidate(); navigate("/deployments/" + result.deployment.id) } })
+  const stopMutation = useMutation({ mutationFn: (environmentID: string) => api.stopService(serviceID, environmentID), onSuccess: invalidate })
+  const restartMutation = useMutation({ mutationFn: (environmentID: string) => api.restartService(serviceID, environmentID), onSuccess: invalidate })
   const runtimeMutationPending = deployMutation.isPending || stopMutation.isPending || restartMutation.isPending
 
   if (serviceQuery.isPending || applicationQuery.isPending) return <main className="mx-auto w-full max-w-[1600px] animate-pulse px-4 py-8 sm:px-6 lg:px-8"><div className="h-10 w-56 rounded bg-muted" /><div className="mt-6 h-96 rounded-xl border bg-card" /></main>
@@ -192,25 +184,38 @@ export function ServiceOverview({ applicationID, service: serviceID }: { applica
 
   const service = serviceQuery.data.service
   const latest = deploymentsQuery.data?.deployments[0]
-  const domains = domainsQuery.data?.domains || []
-  const state = binding?.desired_state === "stopped" ? "Stopped" : binding?.active_deployment_id ? "Running" : binding?.branch ? "Awaiting deployment" : "Configuration required"
+  const activeEnvironments = serviceQuery.data.environment_states.filter((item) => item.active_deployment_id)
+  const state = activeEnvironments.some((item) => item.desired_state === "running") ? "Running" : activeEnvironments.length ? "Stopped" : serviceQuery.data.bindings.some((item) => item.branch) ? "Awaiting deployment" : "Configuration required"
   const tabs = ["Overview", "Deployments", "Logs", "Metrics", "Environment", "Domains", "Settings"]
   const base = "/applications/" + applicationID + "/services/" + serviceID
   const mutationError = deployMutation.error || stopMutation.error || restartMutation.error
 
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
-    <Link to={"/applications/" + applicationID + "/services"} className="mb-5 inline-flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground"><ArrowLeftIcon size={14} />All services</Link>
-    <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end"><div className="flex items-start gap-4"><span className="grid size-12 place-items-center rounded-xl bg-accent text-accent-foreground"><CubeIcon size={22} weight="fill" /></span><div><p className="mb-1"><StatusPill status={state} /></p><h1 className="text-3xl font-semibold tracking-[-0.035em]">{service.name}</h1><p className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground"><span className="flex items-center gap-1"><GithubLogoIcon size={13} />{service.repo_url}</span><span className="flex items-center gap-1"><GitBranchIcon size={13} />{binding?.branch || "No branch selected"}</span></p></div></div>
-      <div className="flex flex-wrap gap-2 xl:ml-auto"><AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} disabled={runtimeMutationPending} className="h-9 min-w-36 bg-card text-xs" />{binding?.desired_state !== "stopped" && binding?.active_deployment_id && <ConfirmationAction title="Stop this service?" description="The active container will stop until it is restarted or redeployed." confirmLabel="Stop service" onConfirm={() => stopMutation.mutateAsync()} trigger={<Button variant="outline" disabled={runtimeMutationPending}><PauseIcon />Stop</Button>} />}{binding?.active_deployment_id && <ConfirmationAction title="Restart this service?" description="HostForge will restart the active container for this environment. Requests may be interrupted briefly while the container returns." confirmLabel="Restart service" onConfirm={() => restartMutation.mutateAsync()} trigger={<Button variant="outline" disabled={runtimeMutationPending}><ActivityIcon />Restart</Button>} />}<Button disabled={!binding?.branch || runtimeMutationPending} onClick={() => deployMutation.mutate()}><RocketLaunchIcon weight="fill" />{deployMutation.isPending ? "Deploying..." : "Deploy"}</Button></div>
+    <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end"><div className="flex items-start gap-4"><span className="grid size-12 place-items-center rounded-xl bg-accent text-accent-foreground"><CubeIcon size={22} weight="fill" /></span><div><p className="mb-1"><StatusPill status={state} /></p><h1 className="text-3xl font-semibold tracking-[-0.035em]">{service.name}</h1><p className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground"><span className="flex items-center gap-1"><GithubLogoIcon size={13} />{service.repo_url}</span><span>{activeEnvironments.length} active {activeEnvironments.length === 1 ? "environment" : "environments"}</span></p></div></div>
+      <Button className="xl:ml-auto" variant="outline" onClick={() => navigate(base + "/settings")}>Configure environments</Button>
     </div>
     {mutationError && <div className="mb-5 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">{mutationError.message}</div>}
     <RouteTabs active="Overview" label="Service navigation" tabs={tabs.map((tab) => ({ label: tab, href: tab === "Overview" ? base : base + "/" + tab.toLowerCase() }))} />
 
+    <section className="mb-5">
+      <div className="mb-3"><h2 className="text-sm font-semibold">Environment deployments</h2><p className="mt-1 text-xs text-muted-foreground">Active releases and public URLs across this service. No environment switch is required.</p></div>
+      <div className="grid gap-5 xl:grid-cols-2">{environments.map((environment) => {
+        const binding = serviceQuery.data.bindings.find((item) => item.environment_id === environment.id)
+        const environmentState = serviceQuery.data.environment_states.find((item) => item.environment_id === environment.id)
+        const environmentStatus = binding?.desired_state === "stopped" ? "Stopped" : binding?.active_deployment_id ? "Running" : binding?.branch ? "Awaiting deployment" : "Configuration required"
+        return <Panel key={environment.id} title={environment.name} subtitle={`${environment.kind} · ${binding?.branch || "No branch configured"}`} action={<StatusPill status={environmentStatus} />}>
+          <div className="border-b p-5">
+            {environmentState?.public_url ? <a href={environmentState.public_url} target="_blank" rel="noreferrer" className="group flex items-center justify-between gap-4 rounded-lg border bg-muted/25 p-4 hover:bg-muted/50"><span className="min-w-0"><span className="block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Active deployed URL</span><span className="mt-1 block truncate font-mono text-xs font-semibold group-hover:underline">{environmentState.public_url}</span></span><ArrowSquareOutIcon className="shrink-0" size={17} /></a> : <div className="rounded-lg border border-dashed p-4"><p className="text-xs font-semibold">{binding?.active_deployment_id ? "Deployment is active, but no public domain is configured." : "No active deployment URL"}</p><Button asChild className="mt-3" size="sm" variant="outline"><Link to={base + "/domains"}><GlobeIcon />{binding?.active_deployment_id ? "Add a public domain" : "Configure domain"}</Link></Button></div>}
+          </div>
+          <div className="grid grid-cols-2 gap-px bg-border"><RuntimeValue label="Active deployment" value={binding?.active_deployment_id || "None"} /><RuntimeValue label="Container" value={environmentState?.current_container?.status || "None"} /><RuntimeValue label="Automatic deploy" value={binding?.auto_deploy ? "Enabled" : "Disabled"} /><RuntimeValue label="Desired state" value={binding?.desired_state || "unconfigured"} /></div>
+          <footer className="flex flex-wrap gap-2 border-t bg-muted/20 px-5 py-3">{binding?.active_deployment_id && <Button asChild size="sm" variant="ghost"><Link to={"/deployments/" + binding.active_deployment_id}>View deployment</Link></Button>}<span className="flex-1" />{binding?.desired_state !== "stopped" && binding?.active_deployment_id && <ConfirmationAction title={`Stop ${environment.name}?`} description="The active container will stop until it is restarted or redeployed." confirmLabel="Stop service" onConfirm={() => stopMutation.mutateAsync(environment.id)} trigger={<Button size="sm" variant="outline" disabled={runtimeMutationPending}><PauseIcon />Stop</Button>} />}{binding?.active_deployment_id && <ConfirmationAction title={`Restart ${environment.name}?`} description="Requests may be interrupted briefly while the active container returns." confirmLabel="Restart service" onConfirm={() => restartMutation.mutateAsync(environment.id)} trigger={<Button size="sm" variant="outline" disabled={runtimeMutationPending}><ActivityIcon />Restart</Button>} />}<Button size="sm" disabled={!binding?.branch || runtimeMutationPending} onClick={() => deployMutation.mutate(environment.id)}><RocketLaunchIcon weight="fill" />Deploy to {environment.name}</Button></footer>
+        </Panel>
+      })}</div>
+    </section>
+
     <div className="grid gap-5 xl:grid-cols-2">
-      <Panel title="Runtime binding" subtitle={environment?.name || "Environment"} action={<StatusPill status={state} />}><div className="grid grid-cols-2 gap-px bg-border"><RuntimeValue label="Desired state" value={binding?.desired_state || "unconfigured"} /><RuntimeValue label="Branch" value={binding?.branch || "Not selected"} /><RuntimeValue label="Active deployment" value={binding?.active_deployment_id || "None"} /><RuntimeValue label="Automatic deploy" value={binding?.auto_deploy ? "Enabled" : "Disabled"} /><RuntimeValue label="Container" value={environmentState?.current_container ? environmentState.current_container.status : "None"} /><RuntimeValue label="Public URL" value={environmentState?.public_url || "Not configured"} /></div></Panel>
       <Panel title="Source configuration" subtitle="Repository and runtime settings"><div className="divide-y"><SourceValue icon={GithubLogoIcon} label="Repository" value={service.repo_url} /><SourceValue icon={CodeIcon} label="Runtime" value={service.runtime} /><SourceValue icon={HardDrivesIcon} label="Root directory" value={service.root_directory || "Repository root"} /><SourceValue icon={HeartbeatIcon} label="Health check" value={service.health_check_path + " on port " + service.internal_port} /></div></Panel>
       <Panel title="Latest deployment" subtitle={latest ? new Date(latest.created_at).toLocaleString() : "No deployment recorded"} action={latest ? <Link to={"/deployments/" + latest.id} className="text-xs font-medium hover:underline">View deployment</Link> : undefined}>{deploymentsQuery.isPending ? <div className="h-36 animate-pulse bg-muted/40" /> : deploymentsQuery.isError ? <PanelQueryError message="Deployment history could not be loaded." retry={() => deploymentsQuery.refetch()} /> : latest ? <div className="p-5"><div className="flex items-center gap-2"><StatusPill status={latest.status === "SUCCESS" ? "Healthy" : latest.status[0] + latest.status.slice(1).toLowerCase()} /><span className="font-mono text-xs">{latest.id}</span></div><p className="mt-4 font-mono text-xs text-muted-foreground">{latest.commit_hash || "Commit pending"}</p><p className="mt-2 text-xs text-muted-foreground">{latest.trigger || "manual"} / {latest.actor || "operator"}</p></div> : <div className="p-8 text-center text-xs text-muted-foreground">Deploy this environment to create its first release.</div>}</Panel>
-      <Panel title="Domains" subtitle="Routes for this environment" action={<Link to={base + "/domains"} className="text-xs font-medium hover:underline">Manage</Link>}>{domainsQuery.isPending ? <div className="h-36 animate-pulse bg-muted/40" /> : domainsQuery.isError ? <PanelQueryError message="Domain routes could not be loaded." retry={() => domainsQuery.refetch()} /> : domains.length ? <div className="divide-y">{domains.map((domain) => <div key={domain.id} className="flex items-center gap-3 px-5 py-4"><GlobeIcon size={15} className="text-muted-foreground" /><span className="text-xs font-medium">{domain.domain_name}</span><DomainStatus value={domain.ssl_status} /></div>)}</div> : <div className="p-8 text-center text-xs text-muted-foreground">No public routes configured.</div>}</Panel>
     </div>
   </main>
 }
@@ -225,10 +230,6 @@ function RuntimeValue({ label, value }: { label: string; value: string }) {
 
 function SourceValue({ icon: Icon, label, value }: { icon: React.ComponentType<{ size?: number; className?: string }>; label: string; value: string }) {
   return <div className="flex items-center gap-3 px-5 py-3.5"><Icon size={16} className="text-muted-foreground" /><div><p className="text-[10px] text-muted-foreground">{label}</p><p className="mt-0.5 break-all text-xs font-medium">{value}</p></div></div>
-}
-
-function DomainStatus({ value }: { value: string }) {
-  return <span className="ml-auto text-[10px] font-medium text-muted-foreground">{value.toLowerCase()}</span>
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

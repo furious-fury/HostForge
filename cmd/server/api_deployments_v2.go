@@ -27,6 +27,40 @@ func deploymentToV2(item models.Deployment) map[string]any {
 	}
 }
 
+func (s *server) deploymentToV2WithContext(ctx context.Context, item models.Deployment) map[string]any {
+	row := deploymentToV2(item)
+	service, err := s.store.GetService(ctx, item.ServiceID)
+	if err != nil {
+		return row
+	}
+	row["application_id"] = service.ApplicationID
+	row["service_name"] = service.Name
+	if application, appErr := s.store.GetApplication(ctx, service.ApplicationID); appErr == nil {
+		row["application_name"] = application.Name
+	}
+	if environment, environmentErr := s.store.GetEnvironment(ctx, item.EnvironmentID); environmentErr == nil {
+		row["environment_name"] = environment.Name
+		row["environment_kind"] = environment.Kind
+	}
+	if binding, bindingErr := s.store.GetServiceEnvironment(ctx, item.ServiceID, item.EnvironmentID); bindingErr == nil {
+		active := binding.ActiveDeploymentID == item.ID
+		row["is_active"] = active
+		if active {
+			if domains, domainErr := s.store.ListServiceDomains(ctx, service.ApplicationID, item.EnvironmentID, item.ServiceID); domainErr == nil {
+				urls := make([]string, 0, len(domains))
+				for _, domain := range domains {
+					urls = append(urls, "https://"+domain.DomainName)
+				}
+				row["urls"] = urls
+				if len(urls) > 0 {
+					row["public_url"] = urls[0]
+				}
+			}
+		}
+	}
+	return row
+}
+
 func (s *server) handleDeploymentsV2Collection(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
@@ -90,18 +124,7 @@ func (s *server) handleDeploymentsV2Collection(w http.ResponseWriter, r *http.Re
 	}
 	out := make([]map[string]any, 0, len(items))
 	for _, item := range items {
-		row := deploymentToV2(item)
-		if service, lookupErr := s.store.GetService(r.Context(), item.ServiceID); lookupErr == nil {
-			row["application_id"] = service.ApplicationID
-			row["service_name"] = service.Name
-			if application, appErr := s.store.GetApplication(r.Context(), service.ApplicationID); appErr == nil {
-				row["application_name"] = application.Name
-			}
-		}
-		if environment, lookupErr := s.store.GetEnvironment(r.Context(), item.EnvironmentID); lookupErr == nil {
-			row["environment_name"] = environment.Name
-		}
-		out = append(out, row)
+		out = append(out, s.deploymentToV2WithContext(r.Context(), item))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deployments": out, "next_cursor": nextCursor})
 }
@@ -181,7 +204,7 @@ func (s *server) handleDeploymentV2Detail(w http.ResponseWriter, r *http.Request
 		return true
 	}
 	if r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, map[string]any{"deployment": deploymentToV2(item)})
+		writeJSON(w, http.StatusOK, map[string]any{"deployment": s.deploymentToV2WithContext(r.Context(), item)})
 		return true
 	}
 	return false
