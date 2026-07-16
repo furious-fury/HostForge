@@ -315,7 +315,7 @@ export type SettingsDTO = {
   build: { version: string; version_display: string; commit: string; build_time: string; go_version: string; os: string; arch: string; started_at: string; uptime_seconds: number }
   paths: { data_dir: string; logs_dir: string; db_path: string; db_size_bytes: number; logs_dir_size_bytes: number }
   network: { listen: string; host_port: number; port_start: number; port_end: number; container_port: number }
-  caddy: { root_config: string; generated_path: string; sync_caddy: boolean; domain_sync_after_mutate: boolean; admin_url: string }
+  caddy: { root_config: string; generated_path: string; control_plane_path: string; sync_caddy: boolean; domain_sync_after_mutate: boolean; admin_url: string }
   webhooks: { base_path: string; async: boolean; rate_limit_per_minute: number; secret_set: boolean }
   dns: { server_ipv4: string; detected_ipv4: string; detected_ipv4_source: string; detected_ipv4_warning: string }
   session: { ttl_minutes: number; cookie_secure: boolean; session_secret_set: boolean; api_token_set: boolean }

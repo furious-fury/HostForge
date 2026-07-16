@@ -35,6 +35,7 @@ The **`hostforge-server`** process reads configuration from the environment (and
 |----------|---------|
 | `HOSTFORGE_CADDY_BIN` | Caddy executable (default `caddy`). |
 | `HOSTFORGE_CADDY_GENERATED_PATH` | Snippet output path (default `<data-dir>/caddy/hostforge.caddy`). |
+| `HOSTFORGE_CADDY_CONTROL_PLANE_PATH` | Managed control-plane snippet imported by the root Caddyfile (defaults beside the generated routes snippet). |
 | `HOSTFORGE_CADDY_ROOT_CONFIG` | Root Caddyfile for `validate` / `reload` (**required for sync**). |
 | `HOSTFORGE_SYNC_CADDY` | If `true`, sync after successful deploy. |
 | `HOSTFORGE_DOMAIN_SYNC_AFTER_MUTATE` | Sync after domain mutations when root config is set (default `true`). |

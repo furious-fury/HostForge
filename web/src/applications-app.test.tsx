@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -61,10 +62,13 @@ afterEach(() => vi.restoreAllMocks())
 
 describe("application shell with a newly created empty application", () => {
   it("renders the overview", async () => {
+    const user = userEvent.setup()
     mockShellAPI()
     renderApp("/")
     expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument()
     expect(screen.getByText("1")).toBeInTheDocument()
+    expect(api.application).not.toHaveBeenCalled()
+    await user.click(screen.getByPlaceholderText("Search HostForge..."))
     await waitFor(() => expect(api.application).toHaveBeenCalledWith(application.id, expect.any(AbortSignal)))
     expect(screen.queryByText("This screen could not be rendered")).not.toBeInTheDocument()
   })

@@ -237,6 +237,11 @@ if getent group docker >/dev/null 2>&1; then
   echo "Adding hostforge to docker group (restart hostforge-server after first deploy setup if needed)..."
   usermod -aG docker hostforge 2>/dev/null || true
 fi
+if getent group caddy >/dev/null 2>&1; then
+  echo "Adding hostforge to caddy group for managed route snippets..."
+  usermod -aG caddy hostforge
+  "${REPO_ROOT}/scripts/migrate-caddy-layout.sh"
+fi
 
 systemctl daemon-reload
 systemctl enable hostforge-server.service

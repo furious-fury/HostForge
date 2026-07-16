@@ -164,6 +164,8 @@ func (s *server) buildSettingsPayload(r *http.Request) map[string]any {
 		"bin_env":                      config.CaddyBinEnv,
 		"generated_path":               cfg.CaddyGeneratedPath,
 		"generated_path_env":           config.CaddyGeneratedPathEnv,
+		"control_plane_path":           cfg.CaddyControlPlanePath,
+		"control_plane_path_env":       config.CaddyControlPlanePathEnv,
 		"root_config":                  cfg.CaddyRootConfig,
 		"root_config_env":              config.CaddyRootConfigEnv,
 		"sync_caddy":                   cfg.SyncCaddy,
@@ -308,14 +310,14 @@ func (s *server) handleSettingsPlatformDomainUpdate(w http.ResponseWriter, r *ht
 		if err := s.store.UpdatePlatformDomain(context.Background(), next, current); err != nil {
 			s.requestLog(r).Error("rollback platform domain database failed", "error", err)
 		}
-		if err := caddy.ReplaceRoot(context.Background(), s.cfg.CaddyBin, s.cfg.CaddyRootConfig, caddy.RenderPermanentControlPlaneConfig(current, s.cfg.CaddyGeneratedPath)); err != nil {
+		if err := caddy.ReplaceManagedConfig(context.Background(), s.cfg.CaddyBin, s.cfg.CaddyControlPlanePath, s.cfg.CaddyRootConfig, caddy.RenderPermanentControlPlaneConfig(current)); err != nil {
 			s.requestLog(r).Error("rollback platform domain caddy root failed", "error", err)
 		}
 		if err := services.SyncCaddyRoutes(context.Background(), s.requestLog(r), s.cfg, s.store); err != nil {
 			s.requestLog(r).Error("rollback platform domain routes failed", "error", err)
 		}
 	}
-	if err := caddy.ReplaceRoot(r.Context(), s.cfg.CaddyBin, s.cfg.CaddyRootConfig, caddy.RenderPermanentControlPlaneConfig(next, s.cfg.CaddyGeneratedPath)); err != nil {
+	if err := caddy.ReplaceManagedConfig(r.Context(), s.cfg.CaddyBin, s.cfg.CaddyControlPlanePath, s.cfg.CaddyRootConfig, caddy.RenderPermanentControlPlaneConfig(next)); err != nil {
 		rollback()
 		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "platform_caddy_update_failed"})
 		return

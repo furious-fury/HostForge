@@ -27,6 +27,8 @@ type Config struct {
 	CaddyBin string
 	// CaddyGeneratedPath is the HostForge-managed generated Caddy config/snippet path.
 	CaddyGeneratedPath string
+	// CaddyControlPlanePath is the HostForge-managed control-plane Caddy snippet path.
+	CaddyControlPlanePath string
 	// CaddyRootConfig is the root Caddy config path for validate/reload.
 	CaddyRootConfig string
 	// SyncCaddy enables automatic caddy sync after successful deploy.
@@ -133,6 +135,8 @@ const (
 	CaddyBinEnv = "HOSTFORGE_CADDY_BIN"
 	// CaddyGeneratedPathEnv sets where HostForge writes generated Caddy config.
 	CaddyGeneratedPathEnv = "HOSTFORGE_CADDY_GENERATED_PATH"
+	// CaddyControlPlanePathEnv sets where HostForge writes the control-plane Caddy snippet.
+	CaddyControlPlanePathEnv = "HOSTFORGE_CADDY_CONTROL_PLANE_PATH"
 	// CaddyRootConfigEnv sets the root Caddy config used for validate/reload.
 	CaddyRootConfigEnv = "HOSTFORGE_CADDY_ROOT_CONFIG"
 	// SyncCaddyEnv enables post-deploy Caddy sync when set to true.
@@ -275,6 +279,10 @@ func Load(dataDirFlag string) (*Config, error) {
 	if caddyGeneratedPath == "" {
 		caddyGeneratedPath = filepath.Join(abs, "caddy", "hostforge.caddy")
 	}
+	caddyControlPlanePath := strings.TrimSpace(os.Getenv(CaddyControlPlanePathEnv))
+	if caddyControlPlanePath == "" {
+		caddyControlPlanePath = filepath.Join(filepath.Dir(caddyGeneratedPath), "control-plane.caddy")
+	}
 	caddyRootConfig := strings.TrimSpace(os.Getenv(CaddyRootConfigEnv))
 	syncCaddy, err := envBool(SyncCaddyEnv, false)
 	if err != nil {
@@ -410,6 +418,7 @@ func Load(dataDirFlag string) (*Config, error) {
 		ContainerPort:             containerPort,
 		CaddyBin:                  caddyBin,
 		CaddyGeneratedPath:        caddyGeneratedPath,
+		CaddyControlPlanePath:     caddyControlPlanePath,
 		CaddyRootConfig:           caddyRootConfig,
 		SyncCaddy:                 syncCaddy,
 		PlatformDomainBase:        strings.Trim(strings.ToLower(strings.TrimSpace(os.Getenv(PlatformDomainBaseEnv))), "."),

@@ -101,8 +101,9 @@ func (s *server) handleOnboardingComplete(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "caddy_root_config_required"})
 		return
 	}
-	if err := caddy.ReplaceRoot(r.Context(), s.cfg.CaddyBin, s.cfg.CaddyRootConfig, caddy.RenderPermanentControlPlaneConfig(domain, s.cfg.CaddyGeneratedPath)); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "permanent_https_provision_failed"})
+	if err := caddy.ReplaceManagedConfig(r.Context(), s.cfg.CaddyBin, s.cfg.CaddyControlPlanePath, s.cfg.CaddyRootConfig, caddy.RenderPermanentControlPlaneConfig(domain)); err != nil {
+		s.requestLog(r).Error("permanent control-plane caddy update failed", "domain", domain, "managed_path", s.cfg.CaddyControlPlanePath, "root_config", s.cfg.CaddyRootConfig, "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "permanent_https_provision_failed", "message": "Caddy could not apply the permanent platform route. Run the VPS update to migrate the managed Caddy layout, then retry."})
 		return
 	}
 	if err := s.store.CompleteOnboarding(r.Context(), domain); err != nil {

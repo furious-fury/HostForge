@@ -122,6 +122,7 @@ function suggestedPlatformDomain(hostname: string) {
 function onboardingDomainError(error: unknown) {
   if (!(error instanceof APIError)) return "Setup completion failed."
   if (error.code === "expected_public_ipv4_unavailable") return "HostForge cannot determine the server IPv4. Configure HOSTFORGE_DNS_SERVER_IPV4 and try again."
+  if (error.code === "permanent_https_provision_failed") return error.message
   if (error.code !== "platform_dns_not_ready") return error.message.replaceAll("_", " ")
   const checks = error.details?.checks as Record<string, string> | undefined
   const hostnames = error.details?.hostnames as Record<string, string> | undefined

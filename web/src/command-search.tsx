@@ -63,7 +63,7 @@ export function CommandSearch() {
   const navigate = useNavigate()
   const applicationsQuery = useQuery({ queryKey: queryKeys.applications, queryFn: ({ signal }) => api.applications(signal) })
   const applications = Array.isArray(applicationsQuery.data?.applications) ? applicationsQuery.data.applications : []
-  const detailQueries = useQueries({ queries: applications.map((application) => ({ queryKey: queryKeys.application(application.id), queryFn: ({ signal }) => api.application(application.id, signal) })) })
+  const detailQueries = useQueries({ queries: applications.map((application) => ({ queryKey: queryKeys.application(application.id), queryFn: ({ signal }) => api.application(application.id, signal), enabled: open, staleTime: 60_000 })) })
   const resourceItems = detailQueries.flatMap((detail) => applicationResourceItems(detail.data))
 
   useEffect(() => {

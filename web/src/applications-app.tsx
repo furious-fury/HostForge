@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react"
+import { lazy, Suspense, useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { api, queryKeys } from "@/api"
 import { Link, useLocation, useNavigate } from "react-router-dom"
@@ -30,19 +30,30 @@ import { CommandSearch } from "@/command-search"
 import { ThemeSwitcher } from "@/theme-switcher"
 import "@/applications.css"
 
-const DashboardScreen = lazy(() => import("@/dashboard-screen").then((module) => ({ default: module.DashboardScreen })))
-const ApplicationActivity = lazy(() => import("@/application-activity").then((module) => ({ default: module.ApplicationActivity })))
-const CreateApplication = lazy(() => import("@/create-application").then((module) => ({ default: module.CreateApplication })))
-const DeploymentsList = lazy(() => import("@/deployment-screens").then((module) => ({ default: module.DeploymentsList })))
-const DeploymentDetail = lazy(() => import("@/deployment-screens").then((module) => ({ default: module.DeploymentDetail })))
-const DomainsScreen = lazy(() => import("@/operations-screens").then((module) => ({ default: module.DomainsScreen })))
-const EnvironmentScreen = lazy(() => import("@/operations-screens").then((module) => ({ default: module.EnvironmentScreen })))
-const ObservabilityScreen = lazy(() => import("@/observability-screen").then((module) => ({ default: module.ObservabilityScreen })))
-const DocumentationScreen = lazy(() => import("@/platform-screens").then((module) => ({ default: module.DocumentationScreen })))
-const SystemStatusScreen = lazy(() => import("@/platform-screens").then((module) => ({ default: module.SystemStatusScreen })))
-const ServicesRouter = lazy(() => import("@/services-router").then((module) => ({ default: module.ServicesRouter })))
-const ApplicationSettings = lazy(() => import("@/settings-screens").then((module) => ({ default: module.ApplicationSettings })))
-const GlobalSettings = lazy(() => import("@/settings-screens").then((module) => ({ default: module.GlobalSettings })))
+const loadDashboard = () => import("@/dashboard-screen")
+const loadApplicationActivity = () => import("@/application-activity")
+const loadCreateApplication = () => import("@/create-application")
+const loadDeployments = () => import("@/deployment-screens")
+const loadOperations = () => import("@/operations-screens")
+const loadObservability = () => import("@/observability-screen")
+const loadPlatform = () => import("@/platform-screens")
+const loadServices = () => import("@/services-router")
+const loadSettings = () => import("@/settings-screens")
+const routeModuleLoaders = [loadDashboard, loadApplicationActivity, loadCreateApplication, loadDeployments, loadOperations, loadObservability, loadPlatform, loadServices, loadSettings]
+
+const DashboardScreen = lazy(() => loadDashboard().then((module) => ({ default: module.DashboardScreen })))
+const ApplicationActivity = lazy(() => loadApplicationActivity().then((module) => ({ default: module.ApplicationActivity })))
+const CreateApplication = lazy(() => loadCreateApplication().then((module) => ({ default: module.CreateApplication })))
+const DeploymentsList = lazy(() => loadDeployments().then((module) => ({ default: module.DeploymentsList })))
+const DeploymentDetail = lazy(() => loadDeployments().then((module) => ({ default: module.DeploymentDetail })))
+const DomainsScreen = lazy(() => loadOperations().then((module) => ({ default: module.DomainsScreen })))
+const EnvironmentScreen = lazy(() => loadOperations().then((module) => ({ default: module.EnvironmentScreen })))
+const ObservabilityScreen = lazy(() => loadObservability().then((module) => ({ default: module.ObservabilityScreen })))
+const DocumentationScreen = lazy(() => loadPlatform().then((module) => ({ default: module.DocumentationScreen })))
+const SystemStatusScreen = lazy(() => loadPlatform().then((module) => ({ default: module.SystemStatusScreen })))
+const ServicesRouter = lazy(() => loadServices().then((module) => ({ default: module.ServicesRouter })))
+const ApplicationSettings = lazy(() => loadSettings().then((module) => ({ default: module.ApplicationSettings })))
+const GlobalSettings = lazy(() => loadSettings().then((module) => ({ default: module.GlobalSettings })))
 
 type Icon = React.ComponentType<{ className?: string; size?: number; weight?: "regular" | "bold" | "fill" }>
 
@@ -184,6 +195,7 @@ function NotFoundScreen() {
 
 function ApplicationsList() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [filter, setFilter] = useState("All")
   const [query, setQuery] = useState("")
   const applicationsQuery = useQuery({ queryKey: queryKeys.applications, queryFn: ({ signal }) => api.applications(signal) })
@@ -219,7 +231,7 @@ function ApplicationsList() {
             <TableBody className="divide-y">
               {visibleApplications.map((application) => (
                 <TableRow key={application.id} className="group hover:bg-muted/35">
-                  <TableCell className="px-5 py-4"><Link to={`/applications/${application.id}`} className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-lg bg-accent text-[11px] font-bold text-accent-foreground">{application.initials}</span><span><span className="block text-xs font-semibold group-hover:underline">{application.name}</span><span className="mt-1 block max-w-72 truncate text-[11px] text-muted-foreground">{application.description}</span></span></Link></TableCell>
+                  <TableCell className="px-5 py-4"><Link to={`/applications/${application.id}`} onPointerEnter={() => queryClient.prefetchQuery({ queryKey: queryKeys.application(application.id), queryFn: ({ signal }) => api.application(application.id, signal) })} onFocus={() => queryClient.prefetchQuery({ queryKey: queryKeys.application(application.id), queryFn: ({ signal }) => api.application(application.id, signal) })} className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-lg bg-accent text-[11px] font-bold text-accent-foreground">{application.initials}</span><span><span className="block text-xs font-semibold group-hover:underline">{application.name}</span><span className="mt-1 block max-w-72 truncate text-[11px] text-muted-foreground">{application.description}</span></span></Link></TableCell>
                   <TableCell className="px-4 py-4"><p className="text-xs font-medium tabular-nums">{application.services}</p><p className="mt-1 text-[11px] text-muted-foreground">{application.services ? `${application.healthy} healthy` : "None added"}</p></TableCell>
                   <TableCell className="px-4 py-4"><StatusPill status={application.status} /></TableCell>
                   <TableCell className="px-4 py-4 text-xs text-muted-foreground">{application.deployment}</TableCell>
@@ -240,6 +252,7 @@ function ApplicationsList() {
 
 function ApplicationOverview({ applicationID }: { applicationID: string }) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
   if (applicationQuery.isPending) return <ScreenLoading />
   if (applicationQuery.isError) return <main className="mx-auto w-full max-w-[1600px] px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-8 text-center"><h1 className="text-sm font-semibold">Application could not be loaded</h1><p className="mt-2 text-xs text-muted-foreground">It may have been removed or the server is unavailable.</p><Button className="mt-4" variant="outline" onClick={() => applicationQuery.refetch()}>Retry</Button></section></main>
@@ -261,7 +274,7 @@ function ApplicationOverview({ applicationID }: { applicationID: string }) {
       <RouteTabs active="Overview" label="Application navigation" tabs={tabs.map((tab) => ({ label: tab, href: tab === "Overview" ? base : base + "/" + tab.toLowerCase() }))} />
       <section className="overflow-hidden rounded-xl border bg-card">
         <header className="flex min-h-14 items-center border-b bg-muted/75 px-5"><div><h2 className="text-sm font-semibold">Services</h2><p className="mt-0.5 text-xs text-muted-foreground">Deployable components in this application</p></div><Button className="ml-auto" variant="ghost" size="sm" onClick={() => navigate(base + "/services")}>View all <CaretRightIcon /></Button></header>
-        {services.length ? <div className="divide-y">{services.map((service) => <Link key={service.id} to={base + "/services/" + service.id} className="flex items-center gap-3 px-5 py-4 hover:bg-muted/35"><span className="grid size-9 place-items-center rounded-lg border bg-muted"><CubeIcon size={16} /></span><span className="min-w-0"><span className="block truncate text-xs font-semibold">{service.name}</span><span className="mt-1 block truncate text-[11px] text-muted-foreground">{service.repo_url} · {service.runtime}</span></span><span className="ml-auto font-mono text-[10px] text-muted-foreground">:{service.internal_port}</span></Link>)}</div> : <div className="px-6 py-14 text-center"><CubeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">No services yet</p><p className="mt-1 text-xs text-muted-foreground">Connect a repository to create the first deployable service.</p><Button className="mt-4" onClick={() => navigate(base + "/services/new")}><PlusIcon /> Add service</Button></div>}
+        {services.length ? <div className="divide-y">{services.map((service) => <Link key={service.id} to={base + "/services/" + service.id} onPointerEnter={() => queryClient.prefetchQuery({ queryKey: queryKeys.service(service.id), queryFn: ({ signal }) => api.service(service.id, signal) })} onFocus={() => queryClient.prefetchQuery({ queryKey: queryKeys.service(service.id), queryFn: ({ signal }) => api.service(service.id, signal) })} className="flex items-center gap-3 px-5 py-4 hover:bg-muted/35"><span className="grid size-9 place-items-center rounded-lg border bg-muted"><CubeIcon size={16} /></span><span className="min-w-0"><span className="block truncate text-xs font-semibold">{service.name}</span><span className="mt-1 block truncate text-[11px] text-muted-foreground">{service.repo_url} · {service.runtime}</span></span><span className="ml-auto font-mono text-[10px] text-muted-foreground">:{service.internal_port}</span></Link>)}</div> : <div className="px-6 py-14 text-center"><CubeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">No services yet</p><p className="mt-1 text-xs text-muted-foreground">Connect a repository to create the first deployable service.</p><Button className="mt-4" onClick={() => navigate(base + "/services/new")}><PlusIcon /> Add service</Button></div>}
       </section>
     </main>
   )
@@ -270,6 +283,16 @@ function ApplicationOverview({ applicationID }: { applicationID: string }) {
 export default function ApplicationsApp() {
   const [navigationOpen, setNavigationOpen] = useState(false)
   const { pathname: path } = useLocation()
+  useEffect(() => {
+    if (import.meta.env.MODE === "test") return
+    const warmRoutes = () => { void Promise.allSettled(routeModuleLoaders.map((load) => load())) }
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(warmRoutes, { timeout: 1500 })
+      return () => window.cancelIdleCallback(id)
+    }
+    const id = globalThis.setTimeout(warmRoutes, 250)
+    return () => globalThis.clearTimeout(id)
+  }, [])
   const dashboard = path === "/"
   const applicationsList = path === "/applications" || path === "/applications/"
   const creatingApplication = path === "/applications/new"
