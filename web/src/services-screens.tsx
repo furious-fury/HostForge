@@ -20,7 +20,9 @@ import {
 } from "@phosphor-icons/react"
 
 import { AppSelect } from "@/components/app-select"
+import { ApplicationTabs } from "@/components/application-tabs"
 import { RouteTabs } from "@/components/route-tabs"
+import { StackIdentity } from "@/components/stack-identity"
 import { StatusBadge } from "@/components/status-badge"
 import { ConfirmationAction } from "@/components/confirmation-action"
 import { Button } from "@/components/ui/button"
@@ -56,11 +58,6 @@ class InitialServiceDeploymentError extends Error {
   }
 }
 
-function ApplicationTabs({ active, applicationID }: { active: string; applicationID: string }) {
-  const tabs = ["Overview", "Services", "Deployments", "Domains", "Environment", "Activity", "Settings"]
-  return <RouteTabs active={active} label="Application navigation" tabs={tabs.map((tab) => ({ label: tab, href: tab === "Overview" ? "/applications/" + applicationID : "/applications/" + applicationID + "/" + tab.toLowerCase() }))} />
-}
-
 export function ServicesList({ applicationID }: { applicationID: string }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState("")
@@ -77,7 +74,7 @@ export function ServicesList({ applicationID }: { applicationID: string }) {
     <ApplicationTabs active="Services" applicationID={applicationID} />
     <section className="mb-5 grid grid-cols-2 overflow-hidden rounded-xl border bg-card lg:grid-cols-4">{[{ label: "Total services", value: services.length }, { label: "Running", value: running }, { label: "Stopped", value: services.filter((service) => bindings[service.id]?.find((item) => item.environment_id === environment?.id)?.desired_state === "stopped").length }, { label: "Awaiting deploy", value: services.length - running }].map((item) => <article key={item.label} className="hf-service-summary"><p className="text-xs text-muted-foreground">{item.label}</p><p className="mt-4 text-2xl font-semibold tracking-tight">{item.value}</p><p className="mt-1 text-[11px] text-muted-foreground">{environment?.name}</p></article>)}</section>
     <section className="overflow-hidden rounded-xl border bg-card"><header className="flex flex-col gap-3 border-b bg-muted/70 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold">All services</h2><p className="mt-0.5 text-xs text-muted-foreground">Source and release bindings</p></div><label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full bg-card pl-9 text-xs" placeholder="Search services" /></label></header>
-      {visibleRows.length ? <div className="overflow-x-auto"><Table className="w-full min-w-[880px]"><TableHeader><TableRow><TableHead>Service</TableHead><TableHead>Source</TableHead><TableHead>Runtime</TableHead><TableHead>Branch</TableHead><TableHead>Status</TableHead><TableHead>Active deployment</TableHead><TableHead>Port</TableHead></TableRow></TableHeader><TableBody>{visibleRows.map((service) => { const binding = bindings[service.id]?.find((item) => item.environment_id === environment?.id); const status = binding?.desired_state === "stopped" ? "Stopped" : binding?.active_deployment_id ? "Running" : binding?.branch ? "Awaiting deployment" : "Configuration required"; return <TableRow key={service.id}><TableCell><Link to={"/applications/" + applicationID + "/services/" + service.id} className="flex items-center gap-3 text-xs font-semibold hover:underline"><span className="grid size-9 place-items-center rounded-lg bg-accent text-accent-foreground"><CubeIcon size={17} weight="fill" /></span>{service.name}</Link></TableCell><TableCell className="max-w-64 truncate text-xs text-muted-foreground">{service.repo_url}</TableCell><TableCell className="text-xs">{service.runtime}</TableCell><TableCell className="font-mono text-xs">{binding?.branch || "Not set"}</TableCell><TableCell><StatusPill status={status} /></TableCell><TableCell className="font-mono text-xs text-muted-foreground">{binding?.active_deployment_id || "None"}</TableCell><TableCell className="font-mono text-xs">:{service.internal_port}</TableCell></TableRow> })}</TableBody></Table></div> : <div className="px-6 py-14 text-center"><CubeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">{services.length ? "No matching services" : "No services yet"}</p><Button className="mt-4" onClick={() => navigate("/applications/" + applicationID + "/services/new")}><PlusIcon />Add service</Button></div>}
+      {visibleRows.length ? <div className="p-4"><div className="overflow-x-auto rounded-lg border"><Table className="w-full min-w-[880px]"><TableHeader><TableRow><TableHead>Service</TableHead><TableHead>Source</TableHead><TableHead>Stack</TableHead><TableHead>Branch</TableHead><TableHead>Status</TableHead><TableHead>Active deployment</TableHead><TableHead>Port</TableHead></TableRow></TableHeader><TableBody>{visibleRows.map((service) => { const binding = bindings[service.id]?.find((item) => item.environment_id === environment?.id); const status = binding?.desired_state === "stopped" ? "Stopped" : binding?.active_deployment_id ? "Running" : binding?.branch ? "Awaiting deployment" : "Configuration required"; return <TableRow key={service.id}><TableCell><Link to={"/applications/" + applicationID + "/services/" + service.id} className="flex items-center gap-3 text-xs font-semibold hover:underline"><StackIdentity kind={service.stack_kind} label={service.stack_label} showLabel={false} iconClassName="bg-accent text-accent-foreground" />{service.name}</Link></TableCell><TableCell className="max-w-64 truncate text-xs text-muted-foreground">{service.repo_url}</TableCell><TableCell><StackIdentity kind={service.stack_kind} label={service.stack_label} iconClassName="size-7 rounded-md" /></TableCell><TableCell className="font-mono text-xs">{binding?.branch || "Not set"}</TableCell><TableCell><StatusPill status={status} /></TableCell><TableCell className="font-mono text-xs text-muted-foreground">{binding?.active_deployment_id || "None"}</TableCell><TableCell className="font-mono text-xs">:{service.internal_port}</TableCell></TableRow> })}</TableBody></Table></div></div> : <div className="px-6 py-14 text-center"><CubeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">{services.length ? "No matching services" : "No services yet"}</p><Button className="mt-4" onClick={() => navigate("/applications/" + applicationID + "/services/new")}><PlusIcon />Add service</Button></div>}
       <footer className="border-t bg-muted/30 px-5 py-3 text-[11px] text-muted-foreground">{visibleRows.length} services</footer>
     </section>
   </main>
@@ -114,7 +111,8 @@ export function AddService({ applicationID }: { applicationID: string }) {
   const environments = applicationQuery.data?.environments || []
   const environment = environments.find((item) => item.name === environmentName) || environments[0]
   const applicationName = applicationQuery.data?.application.name || "application"
-  const serviceName = name ?? applicationName
+  const repositoryServiceName = repository?.full_name.split("/").filter(Boolean).at(-1) || repository?.clone_url.split("/").filter(Boolean).at(-1)?.replace(/\.git$/i, "") || ""
+  const serviceName = name ?? repositoryServiceName
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!installation || !repository || !environment || !selectedBranch) throw new Error("Select an installation, repository, environment, and branch.")
@@ -219,7 +217,7 @@ export function ServiceOverview({ applicationID, service: serviceID }: { applica
   const mutationError = deployMutation.error || stopMutation.error || restartMutation.error
 
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
-    <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end"><div className="flex items-start gap-4"><span className="grid size-12 place-items-center rounded-xl bg-accent text-accent-foreground"><CubeIcon size={22} weight="fill" /></span><div><p className="mb-1"><StatusPill status={state} /></p><h1 className="text-3xl font-semibold tracking-[-0.035em]">{service.name}</h1><p className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground"><span className="flex items-center gap-1"><GithubLogoIcon size={13} />{service.repo_url}</span><span>{activeEnvironments.length} active {activeEnvironments.length === 1 ? "environment" : "environments"}</span></p></div></div>
+    <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end"><div className="flex items-start gap-4"><StackIdentity kind={service.stack_kind} label={service.stack_label} showLabel={false} iconClassName="size-12 rounded-xl bg-accent text-accent-foreground" /><div><p className="mb-1"><StatusPill status={state} /></p><h1 className="text-3xl font-semibold tracking-[-0.035em]">{service.name}</h1><p className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground"><span className="flex items-center gap-1"><GithubLogoIcon size={13} />{service.repo_url}</span><StackIdentity kind={service.stack_kind} label={service.stack_label} iconClassName="size-6 rounded-md" /><span>{activeEnvironments.length} active {activeEnvironments.length === 1 ? "environment" : "environments"}</span></p></div></div>
       <Button className="xl:ml-auto" variant="outline" onClick={() => navigate(base + "/settings")}>Configure environments</Button>
     </div>
     {mutationError && <div className="mb-5 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">{mutationError.message}</div>}

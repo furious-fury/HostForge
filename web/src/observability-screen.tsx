@@ -50,13 +50,14 @@ function Requests() {
   const [dateTo, setDateTo] = useState("")
   const [cursor, setCursor] = useState("")
   const [history, setHistory] = useState<string[]>([])
+  const [pageSize, setPageSize] = useState(50)
   const filters = {
     method: method === "All methods" ? undefined : method,
     statusClass: status === "Success" ? "success" as const : status === "Client error" ? "client_error" as const : status === "Server error" ? "server_error" as const : undefined,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo ? dateTo + "T23:59:59Z" : undefined,
     cursor: cursor || undefined,
-    limit: 50,
+    limit: pageSize,
   }
   const result = useQuery({ queryKey: queryKeys.observabilityRequests(filters), queryFn: ({ signal }) => api.observabilityRequests(filters, signal), refetchInterval: 10000 })
   if (result.isPending) return <Loading />
@@ -72,12 +73,12 @@ function Requests() {
       <Search value={query} onChange={setQuery} border={false} />
     </div>
     <RequestTable rows={rows} />
-    <PaginationFooter count={rows.length} noun="requests" cursor={cursor} history={history} nextCursor={result.data.next_cursor} fetching={result.isFetching} setCursor={setCursor} setHistory={setHistory} />
+    <PaginationFooter count={rows.length} noun="requests" cursor={cursor} history={history} nextCursor={result.data.next_cursor} fetching={result.isFetching} pageSize={pageSize} setPageSize={setPageSize} setCursor={setCursor} setHistory={setHistory} />
   </Panel>
 }
 
 function RequestTable({ rows }: { rows: HTTPRequestDTO[] }) {
-  return rows.length ? <div className="overflow-x-auto"><Table className="min-w-[920px]"><TableHeader><TableRow><TableHead>Started</TableHead><TableHead>Request ID</TableHead><TableHead>Scope</TableHead><TableHead>Method</TableHead><TableHead>Path</TableHead><TableHead>Status</TableHead><TableHead>Duration</TableHead></TableRow></TableHeader><TableBody>{rows.map((row) => <TableRow key={row.id}><TableCell className="font-mono text-[10px] text-muted-foreground">{new Date(row.started_at).toLocaleString()}</TableCell><TableCell className="font-mono text-[10px]">{row.request_id}</TableCell><TableCell><p className="font-mono text-[10px]">{row.service_id || row.application_id || "platform"}</p>{row.environment_id && <p className="font-mono text-[9px] text-muted-foreground">{row.environment_id}</p>}</TableCell><TableCell><Badge variant="secondary">{row.method}</Badge></TableCell><TableCell className="max-w-96 truncate font-mono text-xs">{row.path}</TableCell><TableCell><StatusBadge tone={row.status >= 500 ? "error" : row.status >= 400 ? "warning" : "success"}>{row.status}</StatusBadge></TableCell><TableCell className="text-xs text-muted-foreground">{row.duration_ms} ms</TableCell></TableRow>)}</TableBody></Table></div> : <Empty text="No request records match the current search." />
+  return rows.length ? <div className="p-4"><div className="overflow-x-auto rounded-lg border"><Table className="min-w-[920px]"><TableHeader><TableRow><TableHead>Started</TableHead><TableHead>Request ID</TableHead><TableHead>Scope</TableHead><TableHead>Method</TableHead><TableHead>Path</TableHead><TableHead>Status</TableHead><TableHead>Duration</TableHead></TableRow></TableHeader><TableBody>{rows.map((row) => <TableRow key={row.id}><TableCell className="font-mono text-[10px] text-muted-foreground">{new Date(row.started_at).toLocaleString()}</TableCell><TableCell className="font-mono text-[10px]">{row.request_id}</TableCell><TableCell><p className="font-mono text-[10px]">{row.service_id || row.application_id || "platform"}</p>{row.environment_id && <p className="font-mono text-[9px] text-muted-foreground">{row.environment_id}</p>}</TableCell><TableCell><Badge variant="secondary">{row.method}</Badge></TableCell><TableCell className="max-w-96 truncate font-mono text-xs">{row.path}</TableCell><TableCell><StatusBadge tone={row.status >= 500 ? "error" : row.status >= 400 ? "warning" : "success"}>{row.status}</StatusBadge></TableCell><TableCell className="text-xs text-muted-foreground">{row.duration_ms} ms</TableCell></TableRow>)}</TableBody></Table></div></div> : <Empty text="No request records match the current search." />
 }
 
 function DeploySteps() {
@@ -87,12 +88,13 @@ function DeploySteps() {
   const [dateTo, setDateTo] = useState("")
   const [cursor, setCursor] = useState("")
   const [history, setHistory] = useState<string[]>([])
+  const [pageSize, setPageSize] = useState(50)
   const filters = {
     status: status === "All statuses" ? undefined : status.toLowerCase(),
     dateFrom: dateFrom || undefined,
     dateTo: dateTo ? dateTo + "T23:59:59Z" : undefined,
     cursor: cursor || undefined,
-    limit: 50,
+    limit: pageSize,
   }
   const result = useQuery({ queryKey: queryKeys.observabilityDeploySteps(filters), queryFn: ({ signal }) => api.observabilityDeploySteps(filters, signal), refetchInterval: 10000 })
   if (result.isPending) return <Loading />
@@ -106,8 +108,8 @@ function DeploySteps() {
       <Input aria-label="Deployment steps to date" type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); resetPage() }} className="bg-card text-xs" />
       <Search value={query} onChange={setQuery} border={false} />
     </div>
-    {rows.length ? <div className="overflow-x-auto"><Table className="min-w-[880px]"><TableHeader><TableRow><TableHead>Ended</TableHead><TableHead>Service / environment</TableHead><TableHead>Deployment</TableHead><TableHead>Step</TableHead><TableHead>Status</TableHead><TableHead>Error code</TableHead><TableHead>Duration</TableHead></TableRow></TableHeader><TableBody>{rows.map((row) => <StepRow key={row.id} row={row} />)}</TableBody></Table></div> : <Empty text="No deployment steps match the current search." />}
-    <PaginationFooter count={rows.length} noun="steps" cursor={cursor} history={history} nextCursor={result.data.next_cursor} fetching={result.isFetching} setCursor={setCursor} setHistory={setHistory} />
+    {rows.length ? <div className="p-4"><div className="overflow-x-auto rounded-lg border"><Table className="min-w-[880px]"><TableHeader><TableRow><TableHead>Ended</TableHead><TableHead>Service / environment</TableHead><TableHead>Deployment</TableHead><TableHead>Step</TableHead><TableHead>Status</TableHead><TableHead>Error code</TableHead><TableHead>Duration</TableHead></TableRow></TableHeader><TableBody>{rows.map((row) => <StepRow key={row.id} row={row} />)}</TableBody></Table></div></div> : <Empty text="No deployment steps match the current search." />}
+    <PaginationFooter count={rows.length} noun="steps" cursor={cursor} history={history} nextCursor={result.data.next_cursor} fetching={result.isFetching} pageSize={pageSize} setPageSize={setPageSize} setCursor={setCursor} setHistory={setHistory} />
   </Panel>
 }
 
@@ -139,12 +141,13 @@ function Events() {
   const [dateTo, setDateTo] = useState("")
   const [cursor, setCursor] = useState("")
   const [history, setHistory] = useState<string[]>([])
-  const result = useQuery({ queryKey: [...queryKeys.events("", "", type === "All event types" ? "" : type), dateFrom, dateTo, cursor], queryFn: ({ signal }) => api.events({ type: type === "All event types" ? undefined : type, dateFrom: dateFrom || undefined, dateTo: dateTo ? dateTo + "T23:59:59Z" : undefined, cursor: cursor || undefined, limit: 50 }, signal), refetchInterval: 10000 })
+  const [pageSize, setPageSize] = useState(50)
+  const result = useQuery({ queryKey: [...queryKeys.events("", "", type === "All event types" ? "" : type), dateFrom, dateTo, cursor, pageSize], queryFn: ({ signal }) => api.events({ type: type === "All event types" ? undefined : type, dateFrom: dateFrom || undefined, dateTo: dateTo ? dateTo + "T23:59:59Z" : undefined, cursor: cursor || undefined, limit: pageSize }, signal), refetchInterval: 10000 })
   if (result.isPending) return <Loading />
   if (result.isError) return <ErrorState title="Platform events could not be loaded" retry={() => result.refetch()} />
   const rows = result.data.events.filter((row) => [row.event_type, row.message, row.detail, row.service_id, row.application_id].join(" ").toLowerCase().includes(query.toLowerCase()))
   const resetPage = () => { setCursor(""); setHistory([]) }
-  return <Panel title="Platform events" subtitle="Durable lifecycle and operator activity"><div className="grid gap-3 border-b bg-muted/30 p-4 lg:grid-cols-[12rem_10rem_10rem_minmax(14rem,1fr)]"><AppSelect options={["All event types", "deployment", "domain", "configuration", "runtime", "application", "service"]} value={type} onValueChange={(value) => { setType(value); resetPage() }} /><Input aria-label="Events from date" type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); resetPage() }} className="bg-card text-xs" /><Input aria-label="Events to date" type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); resetPage() }} className="bg-card text-xs" /><Search value={query} onChange={setQuery} border={false} /></div>{rows.length ? <div className="divide-y">{rows.map((row) => <EventRow key={row.id} row={row} />)}</div> : <Empty text="No platform events match the current filters." />}<footer className="flex items-center gap-2 border-t bg-muted/30 px-5 py-3"><span className="text-[11px] text-muted-foreground">{rows.length} events on this page</span><Button className="ml-auto" size="sm" variant="outline" disabled={!history.length || result.isFetching} onClick={() => { setCursor(history[history.length - 1] || ""); setHistory((items) => items.slice(0, -1)) }}>Previous</Button><Button size="sm" variant="outline" disabled={!result.data.next_cursor || result.isFetching} onClick={() => { setHistory((items) => [...items, cursor]); setCursor(result.data.next_cursor) }}>Next</Button></footer></Panel>
+  return <Panel title="Platform events" subtitle="Durable lifecycle and operator activity"><div className="grid gap-3 border-b bg-muted/30 p-4 lg:grid-cols-[12rem_10rem_10rem_minmax(14rem,1fr)]"><AppSelect options={["All event types", "deployment", "domain", "configuration", "runtime", "application", "service"]} value={type} onValueChange={(value) => { setType(value); resetPage() }} /><Input aria-label="Events from date" type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); resetPage() }} className="bg-card text-xs" /><Input aria-label="Events to date" type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); resetPage() }} className="bg-card text-xs" /><Search value={query} onChange={setQuery} border={false} /></div>{rows.length ? <div className="p-4"><div className="divide-y rounded-lg border">{rows.map((row) => <EventRow key={row.id} row={row} />)}</div></div> : <Empty text="No platform events match the current filters." />}<PaginationFooter count={rows.length} noun="events" cursor={cursor} history={history} nextCursor={result.data.next_cursor} fetching={result.isFetching} pageSize={pageSize} setPageSize={setPageSize} setCursor={setCursor} setHistory={setHistory} /></Panel>
 }
 
 function EventRow({ row }: { row: PlatformEventDTO }) {
@@ -155,8 +158,8 @@ function Search({ value, onChange, border = true }: { value: string; onChange: (
   return <label className={`relative block min-w-0 ${border ? "border-b bg-muted/30 p-4" : ""}`}><MagnifyingGlassIcon className={`absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground ${border ? "ml-4" : ""}`} size={14} /><Input value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-full bg-card pl-9 text-xs" placeholder="Search records" type="search" /></label>
 }
 
-function PaginationFooter({ count, noun, cursor, history, nextCursor, fetching, setCursor, setHistory }: { count: number; noun: string; cursor: string; history: string[]; nextCursor: string; fetching: boolean; setCursor: (value: string) => void; setHistory: React.Dispatch<React.SetStateAction<string[]>> }) {
-  return <footer className="flex items-center gap-2 border-t bg-muted/30 px-5 py-3"><span className="text-[11px] text-muted-foreground">{count} {noun} on this page</span><Button className="ml-auto" size="sm" variant="outline" disabled={!history.length || fetching} onClick={() => { setCursor(history[history.length - 1] || ""); setHistory((items) => items.slice(0, -1)) }}>Previous</Button><Button size="sm" variant="outline" disabled={!nextCursor || fetching} onClick={() => { setHistory((items) => [...items, cursor]); setCursor(nextCursor) }}>Next</Button></footer>
+function PaginationFooter({ count, noun, cursor, history, nextCursor, fetching, pageSize, setPageSize, setCursor, setHistory }: { count: number; noun: string; cursor: string; history: string[]; nextCursor: string; fetching: boolean; pageSize: number; setPageSize: (value: number) => void; setCursor: (value: string) => void; setHistory: React.Dispatch<React.SetStateAction<string[]>> }) {
+  return <footer className="flex flex-wrap items-center gap-2 border-t bg-muted/30 px-5 py-3"><span className="text-[11px] text-muted-foreground">{count} {noun} on this page</span><label className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground"><span>Rows</span><AppSelect aria-label={`${noun} per page`} options={["10", "20", "50", "100"]} value={String(pageSize)} onValueChange={(value) => { setPageSize(Number(value)); setCursor(""); setHistory([]) }} className="h-8 w-20 bg-card" /></label><Button size="sm" variant="outline" disabled={!history.length || fetching} onClick={() => { setCursor(history[history.length - 1] || ""); setHistory((items) => items.slice(0, -1)) }}>Previous</Button><Button size="sm" variant="outline" disabled={!nextCursor || fetching} onClick={() => { setHistory((items) => [...items, cursor]); setCursor(nextCursor) }}>Next</Button></footer>
 }
 
 function Loading() { return <div className="animate-pulse rounded-xl border bg-card p-6"><div className="h-72 rounded bg-muted" /></div> }

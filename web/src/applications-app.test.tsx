@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -37,10 +37,10 @@ const environments: EnvironmentDTO[] = application.environment_health!.map((envi
 
 function mockShellAPI() {
   vi.spyOn(api, "applications").mockResolvedValue({ applications: [application] })
-  vi.spyOn(api, "application").mockResolvedValue({ application, environments, services: null as unknown as never[], service_bindings: {} })
+  vi.spyOn(api, "application").mockResolvedValue({ application, environments, services: [], service_bindings: {} })
   vi.spyOn(api, "deployments").mockResolvedValue({ deployments: [], next_cursor: "" })
   vi.spyOn(api, "hostSnapshot").mockResolvedValue({ supported: false, error_code: "unsupported_host" })
-  vi.spyOn(api, "systemStatus").mockResolvedValue({ version: "v0.7.0", checks: [{ id: "docker", label: "Docker daemon", status: "RUNNING" }] })
+  vi.spyOn(api, "systemStatus").mockResolvedValue({ version: "v0.8.0", checks: [{ id: "docker", label: "Docker daemon", status: "RUNNING" }] })
   vi.spyOn(api, "onboarding").mockResolvedValue({ onboarding: { bootstrap_complete: false, bootstrap_enabled: false, bootstrap_expires_at: "", bootstrap_https_port: 443, bootstrap_public_ip: "", completed_at: "0001-01-01T00:00:00Z", github_app_complete: false, permanent_ingress_complete: false, platform_domain: "" } })
   vi.spyOn(api, "githubInstallations").mockResolvedValue({ installations: [] })
 }
@@ -82,5 +82,20 @@ describe("application shell with a newly created empty application", () => {
     expect(breadcrumbs).toHaveTextContent("Services")
     expect(breadcrumbs).toHaveTextContent("New service")
     expect(breadcrumbs.closest("header")).toBeNull()
+  })
+
+  it.each([
+    ["Deployments", `/applications/${application.id}/deployments`],
+    ["Settings", `/applications/${application.id}/settings`],
+  ])("keeps application navigation visible on %s", async (activeTab, path) => {
+    mockShellAPI()
+    renderApp(path)
+
+    expect(await screen.findByRole("heading", { name: activeTab === "Settings" ? "Application settings" : "Deployments" })).toBeInTheDocument()
+    const tabs = screen.getByRole("tablist", { name: "Application navigation" })
+    for (const label of ["Overview", "Services", "Deployments", "Domains", "Environment", "Activity", "Settings"]) {
+      expect(within(tabs).getByRole("tab", { name: label })).toBeInTheDocument()
+    }
+    expect(within(tabs).getByRole("tab", { name: activeTab })).toHaveAttribute("data-state", "active")
   })
 })

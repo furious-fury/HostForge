@@ -2,7 +2,8 @@ import { lazy, Suspense, useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { api, queryKeys } from "@/api"
 import { Link, useLocation, useNavigate } from "react-router-dom"
-import { RouteTabs } from "@/components/route-tabs"
+import { ApplicationTabs } from "@/components/application-tabs"
+import { StackIdentity } from "@/components/stack-identity"
 import {
   ActivityIcon,
   AppWindowIcon,
@@ -259,7 +260,6 @@ function ApplicationOverview({ applicationID }: { applicationID: string }) {
   const { application, environments, services } = applicationQuery.data
   const initials = application.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()
   const base = "/applications/" + application.id
-  const tabs = ["Overview", "Services", "Deployments", "Domains", "Environment", "Activity", "Settings"]
   return (
     <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
       <PageHeader eyebrow={<p className="mb-2 text-xs font-medium text-muted-foreground">{application.archived ? "Archived" : "Active application"}</p>} title={application.name} description={application.description || "No description provided."}>
@@ -271,10 +271,10 @@ function ApplicationOverview({ applicationID }: { applicationID: string }) {
         <div><p className="text-xs font-medium">{services.length} {services.length === 1 ? "service" : "services"}</p><p className="mt-1 text-xs text-muted-foreground">{environments.map((environment) => environment.name).join(" · ")}</p></div>
         <div className="sm:ml-auto sm:text-right"><p className="text-xs font-medium">Last updated</p><p className="mt-1 text-xs text-muted-foreground">{new Date(application.updated_at).toLocaleString()}</p></div>
       </div>
-      <RouteTabs active="Overview" label="Application navigation" tabs={tabs.map((tab) => ({ label: tab, href: tab === "Overview" ? base : base + "/" + tab.toLowerCase() }))} />
+      <ApplicationTabs active="Overview" applicationID={applicationID} />
       <section className="overflow-hidden rounded-xl border bg-card">
         <header className="flex min-h-14 items-center border-b bg-muted/75 px-5"><div><h2 className="text-sm font-semibold">Services</h2><p className="mt-0.5 text-xs text-muted-foreground">Deployable components in this application</p></div><Button className="ml-auto" variant="ghost" size="sm" onClick={() => navigate(base + "/services")}>View all <CaretRightIcon /></Button></header>
-        {services.length ? <div className="divide-y">{services.map((service) => <Link key={service.id} to={base + "/services/" + service.id} onPointerEnter={() => queryClient.prefetchQuery({ queryKey: queryKeys.service(service.id), queryFn: ({ signal }) => api.service(service.id, signal) })} onFocus={() => queryClient.prefetchQuery({ queryKey: queryKeys.service(service.id), queryFn: ({ signal }) => api.service(service.id, signal) })} className="flex items-center gap-3 px-5 py-4 hover:bg-muted/35"><span className="grid size-9 place-items-center rounded-lg border bg-muted"><CubeIcon size={16} /></span><span className="min-w-0"><span className="block truncate text-xs font-semibold">{service.name}</span><span className="mt-1 block truncate text-[11px] text-muted-foreground">{service.repo_url} · {service.runtime}</span></span><span className="ml-auto font-mono text-[10px] text-muted-foreground">:{service.internal_port}</span></Link>)}</div> : <div className="px-6 py-14 text-center"><CubeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">No services yet</p><p className="mt-1 text-xs text-muted-foreground">Connect a repository to create the first deployable service.</p><Button className="mt-4" onClick={() => navigate(base + "/services/new")}><PlusIcon /> Add service</Button></div>}
+        {services.length ? <div className="divide-y">{services.map((service) => <Link key={service.id} to={base + "/services/" + service.id} onPointerEnter={() => queryClient.prefetchQuery({ queryKey: queryKeys.service(service.id), queryFn: ({ signal }) => api.service(service.id, signal) })} onFocus={() => queryClient.prefetchQuery({ queryKey: queryKeys.service(service.id), queryFn: ({ signal }) => api.service(service.id, signal) })} className="flex items-center gap-3 px-5 py-4 hover:bg-muted/35"><StackIdentity kind={service.stack_kind} label={service.stack_label} showLabel={false} /><span className="min-w-0"><span className="block truncate text-xs font-semibold">{service.name}</span><span className="mt-1 block truncate text-[11px] text-muted-foreground">{service.repo_url}</span><span className="mt-1 block truncate text-[10px] font-medium text-muted-foreground">{service.stack_label || service.stack_kind || "Stack not detected yet"}</span></span><span className="ml-auto font-mono text-[10px] text-muted-foreground">:{service.internal_port}</span></Link>)}</div> : <div className="px-6 py-14 text-center"><CubeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">No services yet</p><p className="mt-1 text-xs text-muted-foreground">Connect a repository to create the first deployable service.</p><Button className="mt-4" onClick={() => navigate(base + "/services/new")}><PlusIcon /> Add service</Button></div>}
       </section>
     </main>
   )

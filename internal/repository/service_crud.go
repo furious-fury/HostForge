@@ -42,7 +42,12 @@ type CreateServiceInput struct {
 func (s *Store) GetService(ctx context.Context, id string) (Service, error) {
 	var item Service
 	var created, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT id,application_id,name,repo_url,github_installation_id,root_directory,deploy_runtime,deploy_install_cmd,deploy_build_cmd,deploy_start_cmd,internal_port,health_check_path,created_at,updated_at FROM services WHERE id=?`, strings.TrimSpace(id)).Scan(&item.ID, &item.ApplicationID, &item.Name, &item.RepoURL, &item.GitHubInstallationID, &item.RootDirectory, &item.DeployRuntime, &item.InstallCmd, &item.BuildCmd, &item.StartCmd, &item.InternalPort, &item.HealthCheckPath, &created, &updated)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT svc.id,svc.application_id,svc.name,svc.repo_url,
+		       COALESCE((SELECT d.stack_kind FROM deployments d WHERE d.service_id=svc.id AND (d.stack_kind<>'' OR d.stack_label<>'') ORDER BY d.created_at DESC,d.id DESC LIMIT 1),''),
+		       COALESCE((SELECT d.stack_label FROM deployments d WHERE d.service_id=svc.id AND (d.stack_kind<>'' OR d.stack_label<>'') ORDER BY d.created_at DESC,d.id DESC LIMIT 1),''),
+		       svc.github_installation_id,svc.root_directory,svc.deploy_runtime,svc.deploy_install_cmd,svc.deploy_build_cmd,svc.deploy_start_cmd,svc.internal_port,svc.health_check_path,svc.created_at,svc.updated_at
+		FROM services svc WHERE svc.id=?`, strings.TrimSpace(id)).Scan(&item.ID, &item.ApplicationID, &item.Name, &item.RepoURL, &item.StackKind, &item.StackLabel, &item.GitHubInstallationID, &item.RootDirectory, &item.DeployRuntime, &item.InstallCmd, &item.BuildCmd, &item.StartCmd, &item.InternalPort, &item.HealthCheckPath, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Service{}, ErrServiceNotFound
 	}

@@ -14,6 +14,7 @@ import {
 
 import { api, APIError, queryKeys, type EnvironmentDTO, type ServiceDTO, type ServiceEnvironmentDTO } from "@/api"
 import { AppSelect } from "@/components/app-select"
+import { ApplicationTabs } from "@/components/application-tabs"
 import { ConfirmationAction } from "@/components/confirmation-action"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
@@ -201,6 +202,7 @@ export function ApplicationSettings({ applicationID }: { applicationID: string }
   const form = draft || { name: application.name, description: application.description }
 
   return <Page title="Application settings" description={`Manage ${application.name} identity and lifecycle.`}>
+    <ApplicationTabs active="Settings" applicationID={applicationID} />
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Section title="General" description="Application identity shared by every environment and service." footer={<Button disabled={update.isPending || !form.name.trim()} onClick={() => update.mutate({ name: form.name.trim(), description: form.description.trim() })}>{update.isPending ? "Saving..." : "Save changes"}</Button>}>
         <Field label="Application name"><Input value={form.name} onChange={(event) => setDraft({ ...form, name: event.target.value })} className="h-10 bg-background text-xs" /></Field>

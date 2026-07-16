@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { APIError, api, queryKeys, type CaddySyncOutcomeDTO, type DNSGuidanceDTO } from "@/api"
 import {
@@ -22,6 +22,7 @@ import {
 } from "@phosphor-icons/react"
 
 import { AppSelect } from "@/components/app-select"
+import { ApplicationTabs } from "@/components/application-tabs"
 import { RouteTabs } from "@/components/route-tabs"
 import { StatusBadge } from "@/components/status-badge"
 import { ConfirmationAction } from "@/components/confirmation-action"
@@ -36,7 +37,7 @@ import { envExample, MAX_ENV_FILE_BYTES, parseEnvFile, type EnvFileEntry } from 
 
 function PageHeader({ title, description, back, children }: { title: string; description: string; back: { label: string; href: string }; children?: React.ReactNode }) {
   void back
-  return <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end"><div><h1 className="text-3xl font-semibold tracking-[-0.035em]">{title}</h1><p className="mt-2 text-sm text-muted-foreground">{description}</p></div>{children && <div className="flex flex-wrap gap-2 sm:ml-auto">{children}</div>}</div>
+  return <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end"><div><h1 className="text-3xl font-semibold tracking-[-0.035em]">{title}</h1><p className="mt-2 text-sm text-muted-foreground">{description}</p></div>{children && <div className="flex w-full flex-row flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:flex-nowrap sm:justify-end">{children}</div>}</div>
 }
 
 function Panel({ title, subtitle, action, children, className = "" }: { title: string; subtitle?: string; action?: React.ReactNode; children: React.ReactNode; className?: string }) {
@@ -46,11 +47,6 @@ function Panel({ title, subtitle, action, children, className = "" }: { title: s
 function ServiceTabs({ active, service, applicationID }: { active: string; service: string; applicationID: string }) {
   const tabs = ["Overview", "Deployments", "Logs", "Metrics", "Environment", "Domains", "Settings"]
   return <RouteTabs active={active} label="Service navigation" tabs={tabs.map((tab) => ({ label: tab, href: tab === "Overview" ? "/applications/" + applicationID + "/services/" + service : "/applications/" + applicationID + "/services/" + service + "/" + tab.toLowerCase() }))} />
-}
-
-function ApplicationTabs({ active, applicationID }: { active: string; applicationID: string }) {
-  const tabs = ["Overview", "Services", "Deployments", "Domains", "Environment", "Activity", "Settings"]
-  return <RouteTabs active={active} label="Application navigation" tabs={tabs.map((tab) => ({ label: tab, href: tab === "Overview" ? "/applications/" + applicationID : "/applications/" + applicationID + "/" + tab.toLowerCase() }))} />
 }
 
 export function ServiceLogs({ applicationID, service }: { applicationID: string; service: string }) {
@@ -64,10 +60,15 @@ export function ServiceLogs({ applicationID, service }: { applicationID: string;
   const binding = serviceQuery.data?.bindings.find((item) => item.environment_id === environment?.id)
   const deploymentID = binding?.active_deployment_id || ""
   const stream = useDeploymentLogStream(deploymentID, streaming && Boolean(deploymentID), "container")
+  const logViewport = useRef<HTMLDivElement>(null)
   const text = stream.text
   const connection = stream.connection
 
   const lines = text.split(/\r?\n/).filter((line) => line && line.toLowerCase().includes(query.toLowerCase()))
+  useEffect(() => {
+    if (!streaming || query || !logViewport.current) return
+    logViewport.current.scrollTop = logViewport.current.scrollHeight
+  }, [text, streaming, query])
   const base = "/applications/" + applicationID + "/services/" + service
   function download() {
     const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }))
@@ -81,8 +82,8 @@ export function ServiceLogs({ applicationID, service }: { applicationID: string;
   if (applicationQuery.isPending || serviceQuery.isPending) return <OperationLoading />
   if (applicationQuery.isError || serviceQuery.isError) return <OperationError title="Runtime logs could not be loaded" retry={() => { applicationQuery.refetch(); serviceQuery.refetch() }} />
 
-  return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9"><PageHeader title="Runtime logs" description="Live stdout and stderr from the active container." back={{ label: "Service overview", href: base }}><AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={(value) => { setEnvironmentName(value); stream.clear() }} className="h-9 min-w-36 bg-card text-xs" /><Button variant="outline" disabled={!text} onClick={download}><DownloadSimpleIcon />Download</Button><Button disabled={!deploymentID} onClick={() => setStreaming((current) => !current)}>{streaming ? <PauseIcon /> : <PlayIcon />}{streaming ? "Pause stream" : "Resume stream"}</Button></PageHeader><ServiceTabs active="Logs" service={service} applicationID={applicationID} />
-    {!deploymentID ? <StateCard title="No active container" description="Deploy this environment before opening runtime logs." /> : <section className="overflow-hidden rounded-xl border bg-card"><header className="flex flex-col gap-3 border-b bg-muted/75 p-4 sm:flex-row sm:items-center"><span className="flex items-center gap-2 text-xs font-semibold"><span className={`size-2 rounded-full ${connection === "connected" ? "bg-emerald-500" : connection === "error" ? "bg-red-500" : "animate-pulse bg-amber-500"}`} />{streaming ? connection : "paused"}</span><label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full bg-card pl-9 text-xs" placeholder="Search buffered logs" /></label><Button variant="outline" size="sm" onClick={stream.clear}>Clear buffer</Button></header>{stream.error && <p role="alert" className="border-b bg-destructive/5 px-4 py-2 text-xs text-destructive">{stream.error}</p>}<div className="hf-runtime-log min-h-[28rem]" role="log">{lines.length ? lines.map((line, index) => <div key={index} className="hf-runtime-log-line"><span className="col-span-full whitespace-pre-wrap break-all font-mono text-[11px] text-neutral-200">{line}</span></div>) : <p className="p-5 font-mono text-xs text-neutral-500">{connection === "connected" ? "Waiting for container output..." : connection === "error" ? "Runtime stream unavailable." : "Connecting to the runtime stream..."}</p>}</div><footer className="border-t bg-muted/30 px-4 py-2.5 text-[10px] text-muted-foreground">{lines.length} visible lines / buffer capped at 1 MB</footer></section>}
+  return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9"><PageHeader title="Runtime logs" description="Live stdout and stderr from the active container." back={{ label: "Service overview", href: base }}><AppSelect aria-label="Runtime log environment" options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={(value) => { setEnvironmentName(value); stream.clear() }} className="h-9 w-36 bg-card text-xs" /><Button variant="outline" disabled={!text} onClick={download}><DownloadSimpleIcon />Download</Button><Button disabled={!deploymentID} onClick={() => setStreaming((current) => !current)}>{streaming ? <PauseIcon /> : <PlayIcon />}{streaming ? "Pause stream" : "Resume stream"}</Button></PageHeader><ServiceTabs active="Logs" service={service} applicationID={applicationID} />
+    {!deploymentID ? <StateCard title="No active container" description="Deploy this environment before opening runtime logs." /> : <section className="overflow-hidden rounded-xl border bg-card"><header className="flex flex-col gap-3 border-b bg-muted/75 p-4 sm:flex-row sm:items-center"><span className="flex items-center gap-2 text-xs font-semibold"><span className={`size-2 rounded-full ${connection === "connected" ? "bg-emerald-500" : connection === "error" ? "bg-red-500" : "animate-pulse bg-amber-500"}`} />{streaming ? connection : "paused"}</span><label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full bg-card pl-9 text-xs" placeholder="Search buffered logs" /></label><Button variant="outline" size="sm" onClick={stream.clear}>Clear buffer</Button></header>{stream.error && <p role="alert" className="border-b bg-destructive/5 px-4 py-2 text-xs text-destructive">{stream.error}</p>}<div ref={logViewport} className="hf-runtime-log" role="log" aria-label="Runtime log output">{lines.length ? lines.map((line, index) => <div key={index} className="hf-runtime-log-line"><span aria-hidden="true" className="select-none text-right font-mono text-[10px] text-neutral-500">{index + 1}</span><code className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-neutral-200">{line}</code></div>) : <p className="p-5 font-mono text-xs text-neutral-500">{connection === "connected" ? "Waiting for container output..." : connection === "error" ? "Runtime stream unavailable." : "Connecting to the runtime stream..."}</p>}</div><footer className="border-t bg-muted/30 px-4 py-2.5 text-[10px] text-muted-foreground">{lines.length} visible lines / buffer capped at 1 MB</footer></section>}
   </main>
 }
 
@@ -107,7 +108,7 @@ export function ServiceMetrics({ applicationID, service }: { applicationID: stri
   const tx = metricRates(samples, "network_tx_bytes")
   const sampleTime = current?.sampled_at ? new Date(current.sampled_at).toLocaleTimeString() : "No sample"
   const times = samples.map((item) => item.sampled_at)
-  return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9"><PageHeader title="Metrics" description="Persisted Docker resource samples for the active container." back={{ label: "Service overview", href: base }}><AppSelect aria-label="Metric time range" options={["15 minutes", "1 hour", "2 hours"]} value={range} onValueChange={setRange} className="h-9 min-w-32 bg-card text-xs" /><AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-9 min-w-36 bg-card text-xs" /><Button variant="outline" onClick={() => metricsQuery.refetch()} disabled={metricsQuery.isFetching}><ActivityIcon />{metricsQuery.isFetching ? "Refreshing" : "Refresh"}</Button></PageHeader><ServiceTabs active="Metrics" service={service} applicationID={applicationID} />
+  return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9"><PageHeader title="Metrics" description="Persisted Docker resource samples for the active container." back={{ label: "Service overview", href: base }}><AppSelect aria-label="Metric time range" options={["15 minutes", "1 hour", "2 hours"]} value={range} onValueChange={setRange} className="h-9 w-32 bg-card text-xs" /><AppSelect aria-label="Metric environment" options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-9 w-36 bg-card text-xs" /><Button variant="outline" onClick={() => metricsQuery.refetch()} disabled={metricsQuery.isFetching}><ActivityIcon />{metricsQuery.isFetching ? "Refreshing" : "Refresh"}</Button></PageHeader><ServiceTabs active="Metrics" service={service} applicationID={applicationID} />
     {metricsQuery.data.stale && <div role="status" className="mb-5 rounded-xl border bg-muted/40 p-4 text-xs text-muted-foreground">{metricsQuery.data.stale_reason === "service_stopped" ? "The service is stopped. Showing the last persisted samples." : "Metric collection is delayed. Showing the most recent persisted samples."}</div>}
     {!current ? <StateCard title="Metric collector is warming up" description={`The server samples active containers every ${metricsQuery.data.sample_interval_seconds || 10} seconds.`} /> : <>
       <section className="mb-5 grid grid-cols-2 overflow-hidden rounded-xl border bg-card lg:grid-cols-4">{[{ label: "CPU", value: current.cpu_percent.toFixed(1) + "%", icon: CpuIcon }, { label: "Memory", value: formatBytes(current.memory_bytes), icon: MemoryIcon }, { label: "Network ingress", value: formatRate(rx[rx.length - 1] || 0), icon: WifiHighIcon }, { label: "Network egress", value: formatRate(tx[tx.length - 1] || 0), icon: HardDrivesIcon }].map((item) => { const Icon = item.icon; return <article key={item.label} className="hf-operation-summary"><div className="flex justify-between"><p className="text-xs text-muted-foreground">{item.label}</p><Icon size={16} /></div><p className="mt-4 text-2xl font-semibold">{item.value}</p><p className="mt-1 text-[11px] text-muted-foreground">Sampled {sampleTime}</p></article> })}</section>

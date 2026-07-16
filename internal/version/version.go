@@ -16,7 +16,7 @@ var Commit string
 // BuildTime is an RFC3339 or human build timestamp (optional; set via -ldflags).
 var BuildTime string
 
-// String returns the single-line release version (e.g. "0.7.0").
+// String returns the single-line release version (e.g. "0.8.0").
 func String() string {
 	s := strings.TrimSpace(raw)
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
@@ -28,7 +28,7 @@ func String() string {
 	return strings.TrimPrefix(s, "v")
 }
 
-// Display returns a v-prefixed release label for logs and UI (e.g. "v0.7.0").
+// Display returns a v-prefixed release label for logs and UI (e.g. "v0.8.0").
 func Display() string {
 	return "v" + String()
 }

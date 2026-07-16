@@ -54,6 +54,8 @@ type Service struct {
 	ApplicationID        string    `json:"application_id"`
 	Name                 string    `json:"name"`
 	RepoURL              string    `json:"repo_url"`
+	StackKind            string    `json:"stack_kind,omitempty"`
+	StackLabel           string    `json:"stack_label,omitempty"`
 	RootDirectory        string    `json:"root_directory"`
 	GitHubInstallationID int64     `json:"github_installation_id"`
 	DeployRuntime        string    `json:"runtime"`
@@ -191,7 +193,12 @@ func (s *Store) ListApplicationEnvironments(ctx context.Context, applicationID s
 }
 
 func (s *Store) ListApplicationServices(ctx context.Context, applicationID string) ([]Service, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,application_id,name,repo_url,github_installation_id,root_directory,deploy_runtime,deploy_install_cmd,deploy_build_cmd,deploy_start_cmd,internal_port,health_check_path,created_at,updated_at FROM services WHERE application_id=? ORDER BY name`, strings.TrimSpace(applicationID))
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT svc.id,svc.application_id,svc.name,svc.repo_url,
+		       COALESCE((SELECT d.stack_kind FROM deployments d WHERE d.service_id=svc.id AND (d.stack_kind<>'' OR d.stack_label<>'') ORDER BY d.created_at DESC,d.id DESC LIMIT 1),''),
+		       COALESCE((SELECT d.stack_label FROM deployments d WHERE d.service_id=svc.id AND (d.stack_kind<>'' OR d.stack_label<>'') ORDER BY d.created_at DESC,d.id DESC LIMIT 1),''),
+		       svc.github_installation_id,svc.root_directory,svc.deploy_runtime,svc.deploy_install_cmd,svc.deploy_build_cmd,svc.deploy_start_cmd,svc.internal_port,svc.health_check_path,svc.created_at,svc.updated_at
+		FROM services svc WHERE svc.application_id=? ORDER BY svc.name`, strings.TrimSpace(applicationID))
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +207,7 @@ func (s *Store) ListApplicationServices(ctx context.Context, applicationID strin
 	for rows.Next() {
 		var item Service
 		var created, updated string
-		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.Name, &item.RepoURL, &item.GitHubInstallationID, &item.RootDirectory, &item.DeployRuntime, &item.InstallCmd, &item.BuildCmd, &item.StartCmd, &item.InternalPort, &item.HealthCheckPath, &created, &updated); err != nil {
+		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.Name, &item.RepoURL, &item.StackKind, &item.StackLabel, &item.GitHubInstallationID, &item.RootDirectory, &item.DeployRuntime, &item.InstallCmd, &item.BuildCmd, &item.StartCmd, &item.InternalPort, &item.HealthCheckPath, &created, &updated); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = parseTime(created)

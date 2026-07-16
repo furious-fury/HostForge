@@ -71,6 +71,8 @@ export type ServiceDTO = {
   application_id: string
   name: string
   repo_url: string
+  stack_kind?: string
+  stack_label?: string
   github_installation_id: number
   root_directory: string
   runtime: string
