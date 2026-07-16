@@ -786,6 +786,17 @@ func TestSettingsActionsUseNormalizedErrors(t *testing.T) {
 	}
 }
 
+func TestPlatformDomainSettingsRejectInvalidAndUnconfiguredUpdates(t *testing.T) {
+	s := newAPITestServer(t)
+	invalid := httptest.NewRecorder()
+	s.handleSettingsRoutes(invalid, httptest.NewRequest(http.MethodPatch, "/api/settings/platform-domain", strings.NewReader(`{"domain":"not a domain"}`)))
+	assertAPIError(t, invalid, http.StatusBadRequest, "invalid_platform_domain")
+
+	unconfigured := httptest.NewRecorder()
+	s.handleSettingsRoutes(unconfigured, httptest.NewRequest(http.MethodPatch, "/api/settings/platform-domain", strings.NewReader(`{"domain":"forge.example.com"}`)))
+	assertAPIError(t, unconfigured, http.StatusConflict, "platform_domain_not_configured")
+}
+
 func TestRequestResourceScopeResolvesV2Routes(t *testing.T) {
 	s := newAPITestServer(t)
 	application, err := s.store.CreateApplication(context.Background(), "Payments", "")

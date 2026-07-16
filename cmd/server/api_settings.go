@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -31,6 +32,14 @@ func (s *server) handleSettingsRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleSettingsGet(w, r)
+		return
+	}
+	if p == "/api/settings/platform-domain" {
+		if r.Method != http.MethodPatch {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
+			return
+		}
+		s.handleSettingsPlatformDomainUpdate(w, r)
 		return
 	}
 	if strings.HasPrefix(p, "/api/settings/actions/") {
@@ -197,6 +206,20 @@ func (s *server) buildSettingsPayload(r *http.Request) map[string]any {
 		"detected_ipv4_source":  v4src,
 		"detected_ipv4_warning": v4warn,
 	}
+	platform := map[string]any{"domain": "", "configured": false, "managed_domain_count": 0}
+	if state, err := s.store.GetOnboardingState(r.Context()); err == nil {
+		platform["domain"] = state.PlatformDomain
+		platform["configured"] = state.BootstrapComplete && strings.TrimSpace(state.PlatformDomain) != ""
+	}
+	if domains, err := s.store.ListAllDomains(r.Context()); err == nil {
+		count := 0
+		for _, domain := range domains {
+			if domain.Kind == "platform" {
+				count++
+			}
+		}
+		platform["managed_domain_count"] = count
+	}
 
 	session := map[string]any{
 		"cookie_name":        cfg.SessionCookieName,
@@ -221,7 +244,89 @@ func (s *server) buildSettingsPayload(r *http.Request) map[string]any {
 		"webhooks": webhooks,
 		"dns":      dns,
 		"session":  session,
+		"platform": platform,
 	}
+}
+
+type platformDomainUpdateRequest struct {
+	Domain string `json:"domain"`
+}
+
+func (s *server) handleSettingsPlatformDomainUpdate(w http.ResponseWriter, r *http.Request) {
+	var in platformDomainUpdateRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_json"})
+		return
+	}
+	next := strings.ToLower(strings.TrimSpace(in.Domain))
+	if err := dnsops.ValidateDomainName(next); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_platform_domain"})
+		return
+	}
+	state, err := s.store.GetOnboardingState(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "onboarding_state_failed"})
+		return
+	}
+	current := strings.ToLower(strings.TrimSpace(state.PlatformDomain))
+	if !state.BootstrapComplete || current == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "platform_domain_not_configured"})
+		return
+	}
+	if current == next {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "unchanged", "platform_domain": current})
+		return
+	}
+	expectedIPv4, _, _ := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
+	if expectedIPv4 == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "expected_public_ipv4_unavailable"})
+		return
+	}
+	timeout := time.Duration(s.cfg.DNSDetectTimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 2500 * time.Millisecond
+	}
+	apexStatus, _ := dnsops.CheckRegistrarARecord(r.Context(), next, expectedIPv4, timeout)
+	wildcardProbe := "hostforge-wildcard-check." + next
+	wildcardStatus, _ := dnsops.CheckRegistrarARecord(r.Context(), wildcardProbe, expectedIPv4, timeout)
+	if apexStatus != "ok" || wildcardStatus != "ok" {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"status": "error", "error": "platform_dns_not_ready",
+			"checks": map[string]string{"apex": apexStatus, "wildcard": wildcardStatus},
+		})
+		return
+	}
+	if strings.TrimSpace(s.cfg.CaddyRootConfig) == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "caddy_root_config_required"})
+		return
+	}
+	if err := s.store.UpdatePlatformDomain(r.Context(), current, next); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "platform_domain_update_failed"})
+		return
+	}
+	rollback := func() {
+		if err := s.store.UpdatePlatformDomain(context.Background(), next, current); err != nil {
+			s.requestLog(r).Error("rollback platform domain database failed", "error", err)
+		}
+		if err := caddy.ReplaceRoot(context.Background(), s.cfg.CaddyBin, s.cfg.CaddyRootConfig, caddy.RenderPermanentControlPlaneConfig(current, s.cfg.CaddyGeneratedPath)); err != nil {
+			s.requestLog(r).Error("rollback platform domain caddy root failed", "error", err)
+		}
+		if err := services.SyncCaddyRoutes(context.Background(), s.requestLog(r), s.cfg, s.store); err != nil {
+			s.requestLog(r).Error("rollback platform domain routes failed", "error", err)
+		}
+	}
+	if err := caddy.ReplaceRoot(r.Context(), s.cfg.CaddyBin, s.cfg.CaddyRootConfig, caddy.RenderPermanentControlPlaneConfig(next, s.cfg.CaddyGeneratedPath)); err != nil {
+		rollback()
+		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "platform_caddy_update_failed"})
+		return
+	}
+	if err := services.SyncCaddyRoutes(r.Context(), s.requestLog(r), s.cfg, s.store); err != nil {
+		rollback()
+		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "platform_routes_update_failed"})
+		return
+	}
+	_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "configuration", Status: "updated", Actor: "operator", Message: "Platform domain changed", Detail: current + " -> " + next})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "platform_domain": next})
 }
 
 func dirSizeBytes(root string) (int64, error) {

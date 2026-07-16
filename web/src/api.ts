@@ -318,6 +318,8 @@ export type SettingsDTO = {
   webhooks: { base_path: string; async: boolean; rate_limit_per_minute: number; secret_set: boolean }
   dns: { server_ipv4: string; detected_ipv4: string; detected_ipv4_source: string; detected_ipv4_warning: string }
   session: { ttl_minutes: number; cookie_secure: boolean; session_secret_set: boolean; api_token_set: boolean }
+  health: { path: string; timeout_ms: number; retries: number; interval_ms: number; expected_min: number; expected_max: number }
+  platform: { domain: string; configured: boolean; managed_domain_count: number }
 }
 
 export type ObservabilityFilter = {
@@ -367,6 +369,7 @@ export const api = {
   systemStatus: (signal?: AbortSignal) => apiRequest<SystemStatusDTO>("/api/system/status", { signal }),
   settings: (signal?: AbortSignal) => apiRequest<SettingsDTO>("/api/settings", { signal }),
   settingsAction: (action: "caddy-validate" | "caddy-sync" | "refresh-status" | "detect-public-ipv4") => apiRequest<Record<string, unknown>>("/api/settings/actions/" + action, { method: "POST" }),
+  updatePlatformDomain: (domain: string) => apiRequest<{ status: string; platform_domain: string }>("/api/settings/platform-domain", { method: "PATCH", body: JSON.stringify({ domain }) }),
 
   applications: async (signal?: AbortSignal) => {
     const payload = await apiRequest<{ applications: ApplicationDTO[] | null }>("/api/applications", { signal })

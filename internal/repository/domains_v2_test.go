@@ -54,7 +54,25 @@ func TestEnsurePlatformServiceDomainIsStableAndCustomDomainsRemainPreferred(t *t
 	if len(domains) != 2 || domains[0].ID != custom.ID || domains[1].ID != generated.ID {
 		t.Fatalf("custom domain should be preferred: %+v", domains)
 	}
-	if err := store.DeleteServiceDomain(ctx, app.ID, environments[0].ID, generated.ID); err != ErrManagedDomain {
+	if err := store.UpdatePlatformDomain(ctx, "forge.example.com", "host.example.net"); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := store.GetServiceDomain(ctx, app.ID, environments[0].ID, generated.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldLabel := strings.TrimSuffix(generated.DomainName, ".forge.example.com")
+	if moved.DomainName != oldLabel+".host.example.net" {
+		t.Fatalf("managed label was not preserved: before=%s after=%s", generated.DomainName, moved.DomainName)
+	}
+	customAfterMove, err := store.GetServiceDomain(ctx, app.ID, environments[0].ID, custom.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if customAfterMove.DomainName != custom.DomainName {
+		t.Fatalf("custom domain changed during platform move: %+v", customAfterMove)
+	}
+	if err := store.DeleteServiceDomain(ctx, app.ID, environments[0].ID, moved.ID); err != ErrManagedDomain {
 		t.Fatalf("managed domain deletion error=%v", err)
 	}
 }

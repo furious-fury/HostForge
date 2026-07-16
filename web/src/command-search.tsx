@@ -100,8 +100,10 @@ export function CommandSearch() {
             <CommandPrimitive.Input
               ref={inputRef}
               value={query}
-              onValueChange={setQuery}
-              onFocus={() => setOpen(true)}
+              onValueChange={(value) => {
+                setQuery(value)
+                if (!open) setOpen(true)
+              }}
               onClick={() => setOpen(true)}
               placeholder="Search HostForge..."
               aria-label="Search HostForge"

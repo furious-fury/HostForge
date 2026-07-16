@@ -26,6 +26,10 @@ function Loading() {
   return <main className="mx-auto w-full max-w-[1400px] animate-pulse px-4 py-8 sm:px-6 lg:px-8"><div className="h-9 w-48 rounded bg-muted" /><div className="mt-7 h-96 rounded-xl border bg-card" /></main>
 }
 
+function DeletingApplication({ name }: { name: string }) {
+  return <main className="grid min-h-[calc(100svh-4rem)] place-items-center px-4 py-12"><section className="w-full max-w-md rounded-xl border bg-card p-8 text-center shadow-sm" role="status" aria-live="polite"><span className="mx-auto grid size-12 place-items-center rounded-xl bg-destructive/10 text-destructive"><TrashIcon className="animate-pulse" size={22} /></span><h1 className="mt-4 text-base font-semibold">Deleting {name}</h1><p className="mt-2 text-xs leading-5 text-muted-foreground">Removing services, environments, deployments, domains, and configuration. You’ll return to the applications list when deletion is complete.</p><div className="mx-auto mt-5 h-1.5 w-48 overflow-hidden rounded-full bg-muted"><span className="block h-full w-2/3 animate-pulse rounded-full bg-destructive" /></div></section></main>
+}
+
 function ErrorState({ retry }: { retry: () => void }) {
   return <main className="mx-auto w-full max-w-[1400px] px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-8 text-center"><WarningCircleIcon className="mx-auto text-destructive" size={24} /><h1 className="mt-3 text-sm font-semibold">Settings could not be loaded</h1><p className="mt-2 text-xs text-muted-foreground">HostForge did not substitute local defaults for unavailable server data.</p><Button className="mt-4" variant="outline" onClick={retry}>Retry</Button></section></main>
 }
@@ -59,6 +63,7 @@ export function GlobalSettings() {
   const installationsQuery = useQuery({ queryKey: queryKeys.githubInstallations, queryFn: ({ signal }) => api.githubInstallations(signal), enabled: githubAppQuery.data?.app.configured === true })
   const [result, setResult] = useState("")
   const [githubResult, setGithubResult] = useState("")
+  const [platformDraft, setPlatformDraft] = useState("")
   const action = useMutation({
     mutationFn: api.settingsAction,
     onSuccess: async (payload, kind) => {
@@ -91,14 +96,38 @@ export function GlobalSettings() {
       ])
     },
   })
+  const updatePlatformDomain = useMutation({
+    mutationFn: (domain: string) => api.updatePlatformDomain(domain),
+    onSuccess: async (payload) => {
+      setPlatformDraft("")
+      toast(`Platform domain changed to ${payload.platform_domain}`)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.onboarding }),
+        queryClient.invalidateQueries({ queryKey: ["services"] }),
+        queryClient.invalidateQueries({ queryKey: ["deployments"] }),
+      ])
+    },
+  })
   if (settingsQuery.isPending || statusQuery.isPending) return <Loading />
   if (settingsQuery.isError || statusQuery.isError) return <ErrorState retry={() => { settingsQuery.refetch(); statusQuery.refetch() }} />
   const settings = settingsQuery.data
   const checks = statusQuery.data.checks
   const githubApp = githubAppQuery.data?.app
+  const platformDomain = settings.platform.domain
+  const nextPlatformDomain = platformDraft.trim().toLowerCase()
+  const platformDomainChanged = Boolean(nextPlatformDomain && nextPlatformDomain !== platformDomain)
 
-  return <Page title="Settings" description="Inspect the active control-plane configuration and run safe validation actions. Server configuration is environment-managed and read-only here.">
+  return <Page title="Settings" description="Manage platform identity and inspect the active control-plane configuration. Runtime environment variables remain server-managed.">
     <div className="grid gap-5 xl:grid-cols-2">
+      <Section title="Platform domain" description="Control-plane address and the parent domain used for generated deployment share URLs.">
+        {settings.platform.configured ? <>
+          <div className="overflow-hidden rounded-lg border"><Row label="Control plane" value={<a href={"https://" + platformDomain} target="_blank" rel="noreferrer" className="hover:underline">https://{platformDomain}</a>} mono /><Row label="Deployment wildcard" value={`*.${platformDomain}`} mono /><Row label="Managed share URLs" value={settings.platform.managed_domain_count} /><Row label="Expected IPv4" value={settings.dns.detected_ipv4 || settings.dns.server_ipv4 || "Unavailable"} mono /></div>
+          <div className="rounded-lg border bg-muted/20 p-4"><Field label="Change platform domain" hint="Before saving, point both the new apex and wildcard A records to this server. Existing generated URL labels are preserved beneath the new domain."><Input value={platformDraft} onChange={(event) => setPlatformDraft(event.target.value.toLowerCase())} placeholder="forge.example.com" className="h-10 bg-background font-mono text-xs" /></Field><div className="mt-3 flex justify-end"><ConfirmationAction title={`Change platform domain to ${nextPlatformDomain || "the entered hostname"}?`} description={`HostForge will verify ${nextPlatformDomain || "the new domain"} and *.${nextPlatformDomain || "the new domain"}, migrate managed share URLs, and reload Caddy. Existing custom domains are unchanged.`} confirmLabel="Change platform domain" onConfirm={() => updatePlatformDomain.mutate(nextPlatformDomain)} trigger={<Button disabled={!platformDomainChanged || updatePlatformDomain.isPending}>{updatePlatformDomain.isPending ? "Changing domain..." : "Verify DNS and change"}</Button>} /></div></div>
+          {updatePlatformDomain.isError && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-[11px] text-destructive">{platformDomainError(updatePlatformDomain.error)}</p>}
+        </> : <div className="rounded-lg border border-dashed p-6 text-center"><GlobeIcon className="mx-auto text-muted-foreground" size={22} /><p className="mt-3 text-sm font-semibold">Platform domain is not configured</p><p className="mt-1 text-xs text-muted-foreground">Complete permanent ingress setup to enable control-plane HTTPS and generated deployment URLs.</p><Button asChild className="mt-4"><Link to="/onboarding">Complete setup</Link></Button></div>}
+      </Section>
+
       <Section title="Installation" description="Build, process, authentication, and storage information returned by the server.">
         <div className="overflow-hidden rounded-lg border"><Row label="HostForge" value={settings.build.version_display} mono /><Row label="Commit" value={settings.build.commit || "development"} mono /><Row label="Go runtime" value={settings.build.go_version} mono /><Row label="Platform" value={settings.build.os + " / " + settings.build.arch} mono /><Row label="Authentication" value={settings.auth.scheme} /><Row label="Session expiry" value={settings.auth.expires_at ? new Date(settings.auth.expires_at).toLocaleString() : "API token request"} /></div>
         <div className="overflow-hidden rounded-lg border"><Row label="Data directory" value={settings.paths.data_dir} mono /><Row label="Database" value={settings.paths.db_path} mono /><Row label="Logs" value={settings.paths.logs_dir} mono /></div>
@@ -124,8 +153,24 @@ export function GlobalSettings() {
         {result && <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-[11px] text-emerald-800">{result}</p>}
         {action.isError && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-[11px] text-destructive">{mutationMessage(action.error)}</p>}
       </Section>
+
+      <Section title="Deployment runtime" description="Active port allocation and health-check defaults used during release cutover.">
+        <div className="overflow-hidden rounded-lg border"><Row label="Host port range" value={`${settings.network.port_start}–${settings.network.port_end}`} mono /><Row label="Default container port" value={settings.network.container_port} mono /><Row label="Health-check path" value={settings.health.path} mono /><Row label="Health timeout" value={`${settings.health.timeout_ms} ms`} /><Row label="Retries" value={settings.health.retries} /><Row label="Expected response" value={`${settings.health.expected_min}–${settings.health.expected_max}`} mono /><Row label="Automatic route sync" value={settings.caddy.domain_sync_after_mutate ? "Enabled" : "Disabled"} /></div>
+      </Section>
+
+      <Section title="Security and delivery" description="Authentication, webhook, and session safeguards currently enforced by the server.">
+        <div className="overflow-hidden rounded-lg border"><Row label="Session cookies" value={settings.session.cookie_secure ? "Secure HTTPS only" : "Secure flag disabled"} /><Row label="Session lifetime" value={`${settings.session.ttl_minutes} minutes`} /><Row label="Session secret" value={settings.session.session_secret_set ? "Configured" : "Missing"} /><Row label="API token" value={settings.session.api_token_set ? "Configured" : "Not configured"} /><Row label="Webhook secret" value={settings.webhooks.secret_set ? "Configured" : "Missing"} /><Row label="Webhook processing" value={settings.webhooks.async ? "Asynchronous" : "Synchronous"} /><Row label="Webhook rate limit" value={`${settings.webhooks.rate_limit_per_minute}/minute`} /></div>
+      </Section>
     </div>
   </Page>
+}
+
+function platformDomainError(error: unknown) {
+  if (!(error instanceof APIError)) return mutationMessage(error)
+  if (error.code === "platform_dns_not_ready") return "The new apex or wildcard A record does not resolve to this server yet."
+  if (error.code === "expected_public_ipv4_unavailable") return "HostForge cannot determine the server IPv4. Configure HOSTFORGE_DNS_SERVER_IPV4 first."
+  if (error.code === "platform_caddy_update_failed" || error.code === "platform_routes_update_failed") return "Caddy could not apply the new platform domain. HostForge restored the previous domain and routes."
+  return error.message.replaceAll("_", " ")
 }
 
 export function ApplicationSettings({ applicationID }: { applicationID: string }) {
@@ -138,10 +183,21 @@ export function ApplicationSettings({ applicationID }: { applicationID: string }
     mutationFn: (input: { name?: string; description?: string; archived?: boolean }) => api.updateApplication(applicationID, input),
     onSuccess: async () => { setDraft(null); await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }); await queryClient.invalidateQueries({ queryKey: queryKeys.applications }) },
   })
-  const remove = useMutation({ mutationFn: () => api.deleteApplication(applicationID), onSuccess: async (result) => { await queryClient.invalidateQueries({ queryKey: queryKeys.applications }); if (result.routing_warning) toast(`Application deleted, but Caddy routing cleanup needs attention: ${result.routing_warning.replaceAll("_", " ")}. Run route synchronization from Settings.`, { tone: "warning", duration: 15000 }); else toast("Application deleted."); navigate("/applications", { replace: true }) } })
+  const remove = useMutation({
+    mutationFn: () => api.deleteApplication(applicationID),
+    onSuccess: async (result) => {
+      navigate("/applications", { replace: true })
+      await queryClient.cancelQueries({ queryKey: queryKeys.application(applicationID) })
+      queryClient.removeQueries({ queryKey: queryKeys.application(applicationID) })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.applications })
+      if (result.routing_warning) toast(`Application deleted, but Caddy routing cleanup needs attention: ${result.routing_warning.replaceAll("_", " ")}. Run route synchronization from Settings.`, { tone: "warning", duration: 15000 })
+      else toast("Application deleted.")
+    },
+  })
   if (query.isPending) return <Loading />
   if (query.isError) return <ErrorState retry={() => query.refetch()} />
   const application = query.data.application
+  if (remove.isPending) return <DeletingApplication name={application.name} />
   const form = draft || { name: application.name, description: application.description }
 
   return <Page title="Application settings" description={`Manage ${application.name} identity and lifecycle.`}>
@@ -155,7 +211,7 @@ export function ApplicationSettings({ applicationID }: { applicationID: string }
       </Section>
       <Section title="Lifecycle" description="Archive or permanently remove this application.">
         <div className="rounded-lg border p-4"><HardDrivesIcon size={18} /><p className="mt-3 text-xs font-semibold">{application.archived ? "Application is archived" : "Archive application"}</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Archiving removes it from active workflows without deleting deployment history.</p><Button className="mt-4" variant="outline" disabled={update.isPending} onClick={() => update.mutate({ archived: !application.archived })}>{application.archived ? "Restore application" : "Archive application"}</Button></div>
-        <div className="rounded-lg border border-destructive/30 p-4"><TrashIcon className="text-destructive" size={18} /><p className="mt-3 text-xs font-semibold">Delete application</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Permanently deletes its services, environments, deployment records, variables, domains, metrics, and events.</p><ConfirmationAction title={`Delete ${application.name} permanently?`} description="This cascades through every service and environment record and cannot be undone." confirmLabel="Delete application" destructive onConfirm={() => remove.mutate()} trigger={<Button className="mt-4" variant="destructive" disabled={remove.isPending}>Delete application</Button>} /></div>
+        <div className="rounded-lg border border-destructive/30 p-4"><TrashIcon className="text-destructive" size={18} /><p className="mt-3 text-xs font-semibold">Delete application</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Permanently deletes its services, environments, deployment records, variables, domains, metrics, and events.</p><ConfirmationAction title={`Delete ${application.name} permanently?`} description="This cascades through every service and environment record and cannot be undone." confirmLabel="Delete application" destructive onConfirm={() => remove.mutate()} trigger={<Button className="mt-4" variant="destructive">Delete application</Button>} /></div>
         {remove.isError && <p role="alert" className="text-xs text-destructive">{mutationMessage(remove.error)}</p>}
       </Section>
     </div>

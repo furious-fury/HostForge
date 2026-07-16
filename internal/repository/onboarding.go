@@ -49,3 +49,45 @@ func (s *Store) CompleteOnboarding(ctx context.Context, domain string) error {
 	}
 	return nil
 }
+
+// UpdatePlatformDomain changes the control-plane hostname and preserves every
+// managed share URL label while moving it beneath the new platform domain.
+func (s *Store) UpdatePlatformDomain(ctx context.Context, currentDomain, nextDomain string) error {
+	current := strings.ToLower(strings.TrimSpace(currentDomain))
+	next := strings.ToLower(strings.TrimSpace(nextDomain))
+	if current == "" || next == "" {
+		return fmt.Errorf("current and next platform domains are required")
+	}
+	if current == next {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var mismatched int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM domains WHERE kind='platform' AND domain_name NOT LIKE ?`, "%."+current).Scan(&mismatched); err != nil {
+		return err
+	}
+	if mismatched > 0 {
+		return fmt.Errorf("managed platform domains do not match current suffix")
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE domains
+		SET domain_name=substr(domain_name,1,length(domain_name)-length(?)) || ?,
+		    ssl_status='PENDING',last_cert_message='',cert_checked_at='',updated_at=?
+		WHERE kind='platform'`,
+		current, next, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("move managed platform domains: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE onboarding_state SET platform_domain=?,updated_at=? WHERE id=1 AND platform_domain=?`, next, time.Now().UTC().Format(time.RFC3339), current)
+	if err != nil {
+		return fmt.Errorf("update platform domain: %w", err)
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return fmt.Errorf("platform domain changed concurrently")
+	}
+	return tx.Commit()
+}
