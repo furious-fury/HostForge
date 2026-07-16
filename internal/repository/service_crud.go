@@ -34,6 +34,9 @@ type CreateServiceInput struct {
 	DeployRuntime, InstallCmd, BuildCmd, StartCmd string
 	InternalPort                                  int
 	HealthCheckPath                               string
+	InitialEnvironmentID                          string
+	InitialBranch                                 string
+	InitialAutoDeploy                             bool
 }
 
 func (s *Store) GetService(ctx context.Context, id string) (Service, error) {
@@ -62,7 +65,7 @@ func (s *Store) CreateService(ctx context.Context, in CreateServiceInput) (Servi
 		in.InternalPort = 3000
 	}
 	if strings.TrimSpace(in.HealthCheckPath) == "" {
-		in.HealthCheckPath = "/health"
+		in.HealthCheckPath = "/"
 	}
 	if strings.TrimSpace(in.DeployRuntime) == "" {
 		in.DeployRuntime = "auto"
@@ -75,6 +78,20 @@ func (s *Store) CreateService(ctx context.Context, in CreateServiceInput) (Servi
 	envs, err := s.ListApplicationEnvironments(ctx, item.ApplicationID)
 	if err != nil {
 		return Service{}, err
+	}
+	initialEnvironmentID := strings.TrimSpace(in.InitialEnvironmentID)
+	initialBranch := strings.TrimSpace(in.InitialBranch)
+	if initialEnvironmentID != "" {
+		found := false
+		for _, env := range envs {
+			if env.ID == initialEnvironmentID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return Service{}, ErrEnvironmentNotFound
+		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -89,7 +106,15 @@ func (s *Store) CreateService(ctx context.Context, in CreateServiceInput) (Servi
 		return Service{}, err
 	}
 	for _, env := range envs {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO service_environments(service_id,environment_id,branch,auto_deploy,created_at,updated_at) VALUES(?,?,?,0,?,?)`, item.ID, env.ID, "", stamp, stamp); err != nil {
+		branch := ""
+		autoDeploy := 0
+		if env.ID == initialEnvironmentID {
+			branch = initialBranch
+			if in.InitialAutoDeploy {
+				autoDeploy = 1
+			}
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO service_environments(service_id,environment_id,branch,auto_deploy,created_at,updated_at) VALUES(?,?,?,?,?,?)`, item.ID, env.ID, branch, autoDeploy, stamp, stamp); err != nil {
 			return Service{}, err
 		}
 	}

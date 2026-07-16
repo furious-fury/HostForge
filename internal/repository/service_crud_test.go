@@ -130,6 +130,38 @@ func TestCreateEnvironmentBindsExistingServicesTransactionally(t *testing.T) {
 	}
 }
 
+func TestCreateServiceStoresInitialEnvironmentBindingTransactionally(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	application, err := store.CreateApplication(ctx, "Ledger", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := store.ListApplicationEnvironments(ctx, application.ID)
+	if err != nil || len(environments) == 0 {
+		t.Fatalf("list environments: %v, count=%d", err, len(environments))
+	}
+	service, err := store.CreateService(ctx, CreateServiceInput{
+		ApplicationID:        application.ID,
+		Name:                 "api",
+		RepoURL:              "https://github.com/acme/ledger.git",
+		InternalPort:         3000,
+		InitialEnvironmentID: environments[0].ID,
+		InitialBranch:        "main",
+		InitialAutoDeploy:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := store.GetServiceEnvironment(ctx, service.ID, environments[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.Branch != "main" || !binding.AutoDeploy {
+		t.Fatalf("unexpected initial binding: %+v", binding)
+	}
+}
+
 func TestApplicationSummaryIncludesHealthDomainAndLatestDeployment(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

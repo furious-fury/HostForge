@@ -25,6 +25,7 @@ import { ConfirmationAction } from "@/components/confirmation-action"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/toast-provider"
 import "@/services.css"
 
@@ -47,10 +48,10 @@ function serviceSourceError(error: unknown) {
   return error.message.replaceAll("_", " ")
 }
 
-class InitialServiceBindingError extends Error {
-  constructor(public service: ServiceDTO, public bindingError: unknown) {
-    super("The service was created, but its initial environment branch could not be saved.")
-    this.name = "InitialServiceBindingError"
+class InitialServiceDeploymentError extends Error {
+  constructor(public service: ServiceDTO, public deploymentError: unknown) {
+    super("The service and branch were saved, but the first deployment could not be started.")
+    this.name = "InitialServiceDeploymentError"
   }
 }
 
@@ -97,7 +98,8 @@ export function AddService({ applicationID }: { applicationID: string }) {
   const [buildCmd, setBuildCmd] = useState("")
   const [startCmd, setStartCmd] = useState("")
   const [internalPort, setInternalPort] = useState("3000")
-  const [healthPath, setHealthPath] = useState("/health")
+  const [healthPath, setHealthPath] = useState("/")
+  const [autoDeploy, setAutoDeploy] = useState(true)
   const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
   const installationsQuery = useQuery({ queryKey: queryKeys.githubInstallations, queryFn: ({ signal }) => api.githubInstallations(signal) })
   const installations = installationsQuery.data?.installations.filter((item) => !item.suspended) || []
@@ -117,6 +119,9 @@ export function AddService({ applicationID }: { applicationID: string }) {
         name,
         repo_url: repository.clone_url,
         github_installation_id: installation.installation_id,
+        environment_id: environment.id,
+        branch: selectedBranch,
+        auto_deploy: autoDeploy,
         root_directory: rootDirectory,
         runtime,
         install_cmd: installCmd,
@@ -126,21 +131,21 @@ export function AddService({ applicationID }: { applicationID: string }) {
         health_check_path: healthPath,
       })
       try {
-        await api.updateServiceBinding(result.service.id, environment.id, { branch: selectedBranch, auto_deploy: true })
+        const deployment = await api.deploy(result.service.id, environment.id)
+        return { service: result.service, deployment: deployment.deployment }
       } catch (error) {
-        throw new InitialServiceBindingError(result.service, error)
+        throw new InitialServiceDeploymentError(result.service, error)
       }
-      return result.service
     },
-    onSuccess: async (service) => {
+    onSuccess: async ({ deployment }) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) })
-      navigate("/applications/" + applicationID + "/services/" + service.id)
+      navigate("/deployments/" + deployment.id)
     },
     onError: async (error) => {
-      if (!(error instanceof InitialServiceBindingError)) return
+      if (!(error instanceof InitialServiceDeploymentError)) return
       await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) })
-      toast(`${error.message} ${serviceSourceError(error.bindingError)}`, { tone: "warning", duration: 15000 })
-      navigate("/applications/" + applicationID + "/services/" + error.service.id + "/settings")
+      toast(`${error.message} ${serviceSourceError(error.deploymentError)}`, { tone: "warning", duration: 15000 })
+      navigate("/applications/" + applicationID + "/services/" + error.service.id)
     },
   })
   if (applicationQuery.isPending || installationsQuery.isPending) return <main className="mx-auto w-full max-w-5xl animate-pulse px-4 py-8 sm:px-6 lg:px-8"><div className="h-8 w-48 rounded bg-muted" /><div className="mt-8 h-64 rounded-xl border bg-card" /></main>
@@ -152,10 +157,11 @@ export function AddService({ applicationID }: { applicationID: string }) {
     <Link to={"/applications/" + applicationID + "/services"} className="mb-5 inline-flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground"><ArrowLeftIcon size={14} />Back to services</Link>
     <div className="mb-8"><h1 className="text-3xl font-semibold tracking-[-0.035em]">Add service</h1><p className="mt-2 text-sm text-muted-foreground">Connect a GitHub App repository to {applicationName}.</p></div>
     <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}>
-      <Panel title="GitHub source" subtitle="HostForge uses installation tokens; PAT and SSH credentials are not accepted"><div className="grid gap-5 p-6 sm:grid-cols-2"><Field label="Installation"><AppSelect options={installations.map((item) => item.account_login)} value={installation?.account_login || installationName} onValueChange={(value) => { setInstallationName(value); setRepositoryName(""); setBranch("") }} className="h-10 w-full bg-background text-xs" /></Field><Field label="Repository"><AppSelect options={repositories.map((item) => item.full_name)} value={repository?.full_name || repositoryName} onValueChange={(value) => { setRepositoryName(value); setBranch("") }} disabled={!installation || repositoriesQuery.isPending} className="h-10 w-full bg-background text-xs" /></Field><Field label="Environment"><AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-10 w-full bg-background text-xs" /></Field><Field label="Branch"><AppSelect options={branches} value={selectedBranch} onValueChange={setBranch} disabled={!repository || branchesQuery.isPending} className="h-10 w-full bg-background text-xs" /></Field></div><div className="border-t px-6 py-3 text-xs" aria-live="polite">{repositoriesQuery.isPending ? <p className="text-muted-foreground">Loading repositories from GitHub...</p> : repositoriesQuery.isError ? <p role="alert" className="flex items-center justify-between gap-3 text-destructive"><span>Repositories could not be loaded for this installation.</span><Button type="button" size="sm" variant="outline" onClick={() => repositoriesQuery.refetch()}>Retry</Button></p> : !repositories.length ? <p className="text-muted-foreground">This installation does not expose any repositories. Update its repository access on GitHub.</p> : branchesQuery.isPending ? <p className="text-muted-foreground">Loading repository branches...</p> : branchesQuery.isError ? <p role="alert" className="flex items-center justify-between gap-3 text-destructive"><span>Branches could not be loaded for this repository.</span><Button type="button" size="sm" variant="outline" onClick={() => branchesQuery.refetch()}>Retry</Button></p> : !branches.length ? <p className="text-muted-foreground">No branches are available in this repository.</p> : <p className="text-muted-foreground">Source access is ready. HostForge revalidates the repository and branch when you create the service.</p>}</div></Panel>
-      <Panel title="Build and runtime" subtitle="These settings are owned by the service and shared by its environments"><div className="grid gap-5 p-6 sm:grid-cols-2"><Field label="Service name"><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="api" /></Field><Field label="Runtime"><AppSelect options={["auto", "bun"]} value={runtime} onValueChange={setRuntime} className="h-10 w-full bg-background text-xs" /></Field><Field label="Root directory"><Input value={rootDirectory} onChange={(event) => setRootDirectory(event.target.value)} placeholder="Repository root" /></Field><Field label="Internal port"><Input type="number" min="1" max="65535" value={internalPort} onChange={(event) => setInternalPort(event.target.value)} /></Field><Field label="Install command"><Input value={installCmd} onChange={(event) => setInstallCmd(event.target.value)} placeholder="Auto-detected" /></Field><Field label="Build command"><Input value={buildCmd} onChange={(event) => setBuildCmd(event.target.value)} placeholder="Auto-detected" /></Field><Field label="Start command"><Input value={startCmd} onChange={(event) => setStartCmd(event.target.value)} placeholder="Auto-detected" /></Field><Field label="Health-check path"><Input value={healthPath} onChange={(event) => setHealthPath(event.target.value)} placeholder="/health" /></Field></div></Panel>
-      {createMutation.isError && !(createMutation.error instanceof InitialServiceBindingError) && <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">{serviceSourceError(createMutation.error)}</div>}
-      <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => navigate("/applications/" + applicationID + "/services")}>Cancel</Button><Button type="submit" disabled={!name.trim() || !installation || !repository || !selectedBranch || createMutation.isPending}><PlusIcon />{createMutation.isPending ? "Creating..." : "Create service"}</Button></div>
+      <Panel title="GitHub source" subtitle="Choose exactly what HostForge should deploy for the first release"><div className="grid gap-5 p-6 sm:grid-cols-2"><Field label="Installation"><AppSelect options={installations.map((item) => item.account_login)} value={installation?.account_login || installationName} onValueChange={(value) => { setInstallationName(value); setRepositoryName(""); setBranch("") }} className="h-10 w-full bg-background text-xs" /></Field><Field label="Repository"><AppSelect options={repositories.map((item) => item.full_name)} value={repository?.full_name || repositoryName} onValueChange={(value) => { setRepositoryName(value); setBranch("") }} disabled={!installation || repositoriesQuery.isPending} className="h-10 w-full bg-background text-xs" /></Field><Field label="Environment"><AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-10 w-full bg-background text-xs" /></Field><Field label="Branch"><AppSelect options={branches} value={selectedBranch} onValueChange={setBranch} disabled={!repository || branchesQuery.isPending} className="h-10 w-full bg-background text-xs" /></Field></div><div className="border-t px-6 py-3 text-xs" aria-live="polite">{repositoriesQuery.isPending ? <p className="text-muted-foreground">Loading repositories from GitHub...</p> : repositoriesQuery.isError ? <p role="alert" className="flex items-center justify-between gap-3 text-destructive"><span>Repositories could not be loaded for this installation.</span><Button type="button" size="sm" variant="outline" onClick={() => repositoriesQuery.refetch()}>Retry</Button></p> : !repositories.length ? <p className="text-muted-foreground">This installation does not expose any repositories. Update its repository access on GitHub.</p> : branchesQuery.isPending ? <p className="text-muted-foreground">Loading repository branches...</p> : branchesQuery.isError ? <p role="alert" className="flex items-center justify-between gap-3 text-destructive"><span>Branches could not be loaded for this repository.</span><Button type="button" size="sm" variant="outline" onClick={() => branchesQuery.refetch()}>Retry</Button></p> : !branches.length ? <p className="text-muted-foreground">No branches are available in this repository.</p> : <p className="text-muted-foreground">Ready to deploy <span className="font-mono font-semibold text-foreground">{selectedBranch}</span> to <span className="font-semibold text-foreground">{environment?.name}</span>.</p>}</div></Panel>
+      <Panel title="Build and runtime" subtitle="Railpack detects framework defaults during the first deployment"><div className="grid gap-5 p-6 sm:grid-cols-2"><Field label="Service name"><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="api" /></Field><Field label="Runtime"><AppSelect options={["auto", "bun"]} value={runtime} onValueChange={setRuntime} className="h-10 w-full bg-background text-xs" /></Field><Field label="Root directory"><Input value={rootDirectory} onChange={(event) => setRootDirectory(event.target.value)} placeholder="Repository root" /></Field><Field label="Internal port"><Input type="number" min="1" max="65535" value={internalPort} onChange={(event) => setInternalPort(event.target.value)} /></Field><Field label="Install command"><Input value={installCmd} onChange={(event) => setInstallCmd(event.target.value)} placeholder="Auto-detected" /></Field><Field label="Build command"><Input value={buildCmd} onChange={(event) => setBuildCmd(event.target.value)} placeholder="Auto-detected" /></Field><Field label="Start command"><Input value={startCmd} onChange={(event) => setStartCmd(event.target.value)} placeholder="Auto-detected" /></Field><Field label="Health-check path"><Input value={healthPath} onChange={(event) => setHealthPath(event.target.value)} placeholder="/" /><span className="mt-1.5 block text-[10px] leading-4 text-muted-foreground">Use `/` for zero-config framework apps. Set a dedicated endpoint only when the application provides one.</span></Field></div></Panel>
+      <Panel title="Release behavior" subtitle="The first deployment starts immediately after the service is created"><div className="p-6"><label className="flex items-center justify-between gap-5 rounded-lg border bg-muted/25 p-4"><span><span className="block text-xs font-semibold">Deploy future pushes automatically</span><span className="mt-1 block text-[11px] leading-5 text-muted-foreground">When enabled, pushes to {selectedBranch || "the selected branch"} will create new deployments for {environment?.name || "this environment"}.</span></span><Switch checked={autoDeploy} onCheckedChange={setAutoDeploy} aria-label="Deploy future pushes automatically" /></label><p className="mt-4 text-[11px] leading-5 text-muted-foreground">Railpack detects the application stack, build method, and runtime commands during the first deployment. You will be taken to live deployment details to watch detection and build progress.</p></div></Panel>
+      {createMutation.isError && !(createMutation.error instanceof InitialServiceDeploymentError) && <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">{serviceSourceError(createMutation.error)}</div>}
+      <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => navigate("/applications/" + applicationID + "/services")}>Cancel</Button><Button type="submit" disabled={!name.trim() || !installation || !repository || !selectedBranch || createMutation.isPending}><RocketLaunchIcon weight="fill" />{createMutation.isPending ? "Creating and starting deployment..." : "Create and deploy"}</Button></div>
     </form>
   </main>
 }

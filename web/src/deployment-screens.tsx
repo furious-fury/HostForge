@@ -22,9 +22,9 @@ import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { formatDuration } from "@/duration-format"
 import "@/deployments.css"
 import { useDeploymentLogStream } from "@/use-deployment-log-stream"
-
 
 function StatusPill({ status }: { status: string }) {
   const tone = status === "Healthy" ? "success" : status === "Building" || status === "Releasing" || status === "Queued" ? "info" : status === "Failed" ? "error" : "neutral"
@@ -175,7 +175,7 @@ export function DeploymentDetail({ deploymentID }: { deploymentID: string }) {
 
       <div className="mb-5 grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.65fr)]">
         <Panel title="Deployment timeline" subtitle={stepsQuery.isPending ? "Loading recorded stages" : steps.length ? steps.length + " recorded stages" : "No stages have been recorded yet"}>
-          {stepsQuery.isError ? <div className="p-6 text-center"><p className="text-xs text-muted-foreground">Deployment stages could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => stepsQuery.refetch()}>Retry stages</Button></div> : steps.length ? <div className="p-5">{steps.map((step, index) => <div key={step.id} className="relative flex gap-4 pb-6 last:pb-0"><div className="relative z-10 grid size-7 shrink-0 place-items-center rounded-full bg-muted text-foreground ring-1 ring-border"><CheckCircleIcon size={15} weight={step.status === "success" ? "fill" : "regular"} /></div>{index < steps.length - 1 && <span className="absolute left-[13px] top-7 h-[calc(100%-1.75rem)] w-px bg-border" />}<div className="min-w-0 flex-1 pt-0.5"><div className="flex flex-wrap items-center gap-2"><p className="text-xs font-semibold">{step.step}</p><span className="ml-auto font-mono text-[10px] text-muted-foreground">{step.duration_ms} ms</span></div><p className="mt-1 text-[11px] text-muted-foreground">{step.status}{step.error_code ? " / " + step.error_code : ""}</p></div></div>)}</div> : <div className="p-8 text-center text-xs text-muted-foreground">Stages will appear as the deployment advances.</div>}
+          {stepsQuery.isError ? <div className="p-6 text-center"><p className="text-xs text-muted-foreground">Deployment stages could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => stepsQuery.refetch()}>Retry stages</Button></div> : steps.length ? <div className="p-5">{steps.map((step, index) => <div key={step.id} className="relative flex gap-4 pb-6 last:pb-0"><div className="relative z-10 grid size-7 shrink-0 place-items-center rounded-full bg-muted text-foreground ring-1 ring-border"><CheckCircleIcon size={15} weight={step.status === "success" ? "fill" : "regular"} /></div>{index < steps.length - 1 && <span className="absolute left-[13px] top-7 h-[calc(100%-1.75rem)] w-px bg-border" />}<div className="min-w-0 flex-1 pt-0.5"><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold">{step.step}</p><span className="ml-auto font-mono text-xs font-medium text-muted-foreground">{formatDuration(step.duration_ms)}</span></div><p className="mt-1 text-xs text-muted-foreground">{step.status}{step.error_code ? " / " + step.error_code : ""}</p></div></div>)}</div> : <div className="p-8 text-center text-xs text-muted-foreground">Stages will appear as the deployment advances.</div>}
         </Panel>
 
         <Panel title="Deployment information" subtitle="Server-recorded build and release data">

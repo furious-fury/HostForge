@@ -122,12 +122,21 @@ func resolveDeployGitAuth(ctx context.Context, job DeployJob, resolver GitAuthRe
 	return resolver.ResolveInstallationAuth(ctx, job.Target.Service.GitHubInstallationID)
 }
 
-func (j DeployJob) healthConfig(cfg *config.Config) *config.Config {
-	if strings.TrimSpace(j.Target.Service.HealthCheckPath) == "" {
+func (j DeployJob) healthConfig(cfg *config.Config, detectedStackKind string) *config.Config {
+	servicePath := strings.TrimSpace(j.Target.Service.HealthCheckPath)
+	if servicePath == "" {
 		return cfg
 	}
 	copy := *cfg
-	copy.HealthPath = j.Target.Service.HealthCheckPath
+	copy.HealthPath = servicePath
+	// Early v2 services stored /health as an automatic default. Standard Next.js
+	// applications serve / without defining that route, so use Railpack's stack
+	// detection to preserve zero-config deployments for those existing services.
+	if strings.EqualFold(j.Target.Service.DeployRuntime, "auto") &&
+		servicePath == "/health" &&
+		detectedStackKind == "node_next" {
+		copy.HealthPath = "/"
+	}
 	return &copy
 }
 

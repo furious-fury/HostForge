@@ -403,8 +403,15 @@ export const api = {
     )
     return { ...payload, bindings: payload.bindings ?? [], environment_states: payload.environment_states ?? [] }
   },
-  createService: (applicationID: string, input: Omit<ServiceDTO, "id" | "application_id" | "created_at" | "updated_at">) =>
-    apiRequest<{ service: ServiceDTO }>(`/api/applications/${encodeURIComponent(applicationID)}/services`, {
+  createService: (
+    applicationID: string,
+    input: Omit<ServiceDTO, "id" | "application_id" | "created_at" | "updated_at"> & {
+      environment_id?: string
+      branch?: string
+      auto_deploy?: boolean
+    },
+  ) =>
+    apiRequest<{ service: ServiceDTO; binding?: ServiceEnvironmentDTO }>(`/api/applications/${encodeURIComponent(applicationID)}/services`, {
       method: "POST",
       body: JSON.stringify(input),
     }),

@@ -210,6 +210,7 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 
 	t1 := time.Now()
 	buildStep := "railpack_build"
+	detectedStackKind := ""
 	{
 		log.Info("deploy step", "step", "railpack_build_start", "dir", job.BuildDirectory, "image", job.ImageRef)
 		railpackBuilder, err := newRailpackAdapter(cfg)
@@ -246,6 +247,7 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 			log.Info("deploy step", "step", "deployment_stack_persist", "status", "ok", "stack_kind", buildResult.StackKind, "stack_label", buildResult.StackLabel, "builder", buildResult.Kind)
 			_, _ = fmt.Fprintf(combinedOut, "hostforge: detected stack kind=%q label=%q builder=%q\n", buildResult.StackKind, buildResult.StackLabel, buildResult.Kind)
 		}
+		detectedStackKind = buildResult.StackKind
 		_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== RAILPACK BUILDKIT IMAGE BUILD SUCCEEDED image=%s =====\n\n", job.ImageRef)
 		msRailpack := time.Since(t1).Milliseconds()
 		log.Info("deploy step", "step", "railpack_build_end", "status", "ok", "duration_ms", msRailpack)
@@ -293,7 +295,7 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	}
 
 	t2 := time.Now()
-	if err := WaitForHealthy(ctx, log, hostPortValue, job.healthConfig(cfg)); err != nil {
+	if err := WaitForHealthy(ctx, log, hostPortValue, job.healthConfig(cfg, detectedStackKind)); err != nil {
 		e := ErrCode("health_check_failed", err)
 		markFailed(e)
 		cleanupCandidate("health check failure")

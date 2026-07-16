@@ -49,6 +49,9 @@ type serviceRequest struct {
 	Name                 string `json:"name"`
 	RepoURL              string `json:"repo_url"`
 	GitHubInstallationID int64  `json:"github_installation_id"`
+	EnvironmentID        string `json:"environment_id"`
+	Branch               string `json:"branch"`
+	AutoDeploy           bool   `json:"auto_deploy"`
 	RootDirectory        string `json:"root_directory"`
 	Runtime              string `json:"runtime"`
 	InstallCmd           string `json:"install_cmd"`
@@ -133,7 +136,13 @@ func decodeServiceRequest(w http.ResponseWriter, r *http.Request, applicationID 
 		}
 	}
 	sourceChanged := current == nil || current.GitHubInstallationID != req.GitHubInstallationID || currentRepoURL != repoURL
-	return repository.CreateServiceInput{ApplicationID: applicationID, Name: req.Name, RepoURL: repoURL, GitHubInstallationID: req.GitHubInstallationID, RootDirectory: req.RootDirectory, DeployRuntime: runtime, InstallCmd: install, BuildCmd: build, StartCmd: start, InternalPort: req.InternalPort, HealthCheckPath: req.HealthCheckPath}, sourceChanged, true
+	return repository.CreateServiceInput{
+		ApplicationID: applicationID, Name: req.Name, RepoURL: repoURL,
+		GitHubInstallationID: req.GitHubInstallationID, RootDirectory: req.RootDirectory,
+		DeployRuntime: runtime, InstallCmd: install, BuildCmd: build, StartCmd: start,
+		InternalPort: req.InternalPort, HealthCheckPath: req.HealthCheckPath,
+		InitialEnvironmentID: req.EnvironmentID, InitialBranch: req.Branch, InitialAutoDeploy: req.AutoDeploy,
+	}, sourceChanged, true
 }
 
 func (s *server) validateServiceSource(w http.ResponseWriter, r *http.Request, in repository.CreateServiceInput) bool {

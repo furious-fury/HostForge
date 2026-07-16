@@ -83,23 +83,53 @@ describe("add service", () => {
     expect(screen.getByRole("link", { name: "Configure GitHub App" })).toHaveAttribute("href", "/onboarding")
   })
 
-  it("reports partial success and avoids retrying service creation when initial branch binding fails", async () => {
+  it("creates a deployable service and starts its first deployment", async () => {
     const user = userEvent.setup()
     mockApplication()
     vi.spyOn(api, "githubInstallations").mockResolvedValue({ installations: [{ installation_id: 42, account_login: "acme", suspended: false }] })
     vi.spyOn(api, "githubRepositories").mockResolvedValue({ repositories: [{ id: 7, full_name: "acme/payments", private: true, default_branch: "main", clone_url: "https://github.com/acme/payments.git" }] })
     vi.spyOn(api, "repositoryBranches").mockResolvedValue({ branches: ["main"], default_branch: "main" })
     const create = vi.spyOn(api, "createService").mockResolvedValue({ service })
-    const bind = vi.spyOn(api, "updateServiceBinding").mockRejectedValue(new APIError(422, "branch_not_accessible"))
+    const deploy = vi.spyOn(api, "deploy").mockResolvedValue({ deployment: {
+      id: "deployment-1",
+      service_id: service.id,
+      environment_id: environment.id,
+      status: "QUEUED",
+      commit_hash: "",
+      trigger: "manual",
+      created_at: "2026-07-01T00:00:00Z",
+      updated_at: "2026-07-01T00:00:00Z",
+    } })
 
     renderScreen()
-    expect(await screen.findByText(/Source access is ready/)).toBeInTheDocument()
+    expect(await screen.findByText(/Ready to deploy/)).toBeInTheDocument()
     await user.type(screen.getByLabelText("Service name"), "API")
-    await user.click(screen.getByRole("button", { name: "Create service" }))
+    await user.click(screen.getByRole("button", { name: "Create and deploy" }))
 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
-    expect(bind).toHaveBeenCalledWith(service.id, environment.id, { branch: "main", auto_deploy: true })
-    expect(await screen.findByText(/service was created, but its initial environment branch could not be saved/i)).toBeInTheDocument()
+    expect(create).toHaveBeenCalledWith(application.id, expect.objectContaining({
+      environment_id: environment.id,
+      branch: "main",
+      auto_deploy: true,
+    }))
+    expect(deploy).toHaveBeenCalledWith(service.id, environment.id)
+  })
+
+  it("reports partial success without recreating the service when deployment cannot start", async () => {
+    const user = userEvent.setup()
+    mockApplication()
+    vi.spyOn(api, "githubInstallations").mockResolvedValue({ installations: [{ installation_id: 42, account_login: "acme", suspended: false }] })
+    vi.spyOn(api, "githubRepositories").mockResolvedValue({ repositories: [{ id: 7, full_name: "acme/payments", private: true, default_branch: "main", clone_url: "https://github.com/acme/payments.git" }] })
+    vi.spyOn(api, "repositoryBranches").mockResolvedValue({ branches: ["main"], default_branch: "main" })
+    const create = vi.spyOn(api, "createService").mockResolvedValue({ service })
+    vi.spyOn(api, "deploy").mockRejectedValue(new APIError(503, "docker_unavailable"))
+
+    renderScreen()
+    await screen.findByText(/Ready to deploy/)
+    await user.type(screen.getByLabelText("Service name"), "API")
+    await user.click(screen.getByRole("button", { name: "Create and deploy" }))
+
+    expect(await screen.findByText(/service and branch were saved, but the first deployment could not be started/i)).toBeInTheDocument()
     expect(create).toHaveBeenCalledTimes(1)
   })
 })

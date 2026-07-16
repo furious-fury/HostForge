@@ -77,13 +77,34 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 		if !s.validateServiceSource(w, r, in) {
 			return
 		}
+		if in.InitialEnvironmentID != "" {
+			environment, err := s.store.GetEnvironment(r.Context(), in.InitialEnvironmentID)
+			if err != nil || environment.ApplicationID != app.ID {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"status": "error", "error": "environment_not_found", "fields": map[string]string{"environment_id": "not_found"}})
+				return
+			}
+			if strings.TrimSpace(in.InitialBranch) == "" {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"status": "error", "error": "service_environment_branch_required", "fields": map[string]string{"branch": "required"}})
+				return
+			}
+			candidate := repository.Service{ApplicationID: app.ID, RepoURL: in.RepoURL, GitHubInstallationID: in.GitHubInstallationID}
+			if !s.validateServiceBranch(w, r, candidate, in.InitialBranch) {
+				return
+			}
+		}
 		item, err := s.store.CreateService(r.Context(), in)
 		if err != nil {
 			writeServiceError(w, err)
 			return
 		}
 		_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: app.ID, ServiceID: item.ID, EventType: "service", Status: "created", Actor: "operator", Message: "Service created", Detail: item.Name})
-		writeJSON(w, http.StatusCreated, map[string]any{"status": "created", "service": item})
+		response := map[string]any{"status": "created", "service": item}
+		if in.InitialEnvironmentID != "" {
+			if binding, err := s.store.GetServiceEnvironment(r.Context(), item.ID, in.InitialEnvironmentID); err == nil {
+				response["binding"] = binding
+			}
+		}
+		writeJSON(w, http.StatusCreated, response)
 		return
 	}
 	if len(parts) == 3 && parts[1] == "environments" && r.Method == http.MethodPatch {

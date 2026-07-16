@@ -363,8 +363,15 @@ func TestServicesV2RequireRepositoryFromActiveGitHubInstallation(t *testing.T) {
 	if err := s.store.UpsertGitHubInstallation(context.Background(), repository.UpsertGitHubInstallationInput{InstallationID: 42, AccountLogin: "acme"}); err != nil {
 		t.Fatal(err)
 	}
-	s.githubRepoLister = fakeGitHubRepositoryLister{repositories: []githubapp.Repository{{CloneURL: "https://github.com/acme/payments.git"}}}
-	body := `{"name":"api","repo_url":"https://github.com/acme/payments.git","github_installation_id":42,"runtime":"auto","internal_port":3000,"health_check_path":"/health"}`
+	environments, err := s.store.ListApplicationEnvironments(context.Background(), application.ID)
+	if err != nil || len(environments) == 0 {
+		t.Fatalf("list environments: %v, count=%d", err, len(environments))
+	}
+	s.githubRepoLister = fakeGitHubRepositoryLister{
+		repositories: []githubapp.Repository{{CloneURL: "https://github.com/acme/payments.git"}},
+		branches:     []string{"main"},
+	}
+	body := `{"name":"api","repo_url":"https://github.com/acme/payments.git","github_installation_id":42,"environment_id":"` + environments[0].ID + `","branch":"main","auto_deploy":true,"runtime":"auto","internal_port":3000,"health_check_path":"/health"}`
 	recorder := httptest.NewRecorder()
 	s.handleApplications(recorder, httptest.NewRequest(http.MethodPost, "/api/applications/"+application.ID+"/services", strings.NewReader(body)))
 	if recorder.Code != http.StatusCreated {
@@ -373,6 +380,41 @@ func TestServicesV2RequireRepositoryFromActiveGitHubInstallation(t *testing.T) {
 	service := decodeResponse(t, recorder)["service"].(map[string]any)
 	if service["repo_url"] != "https://github.com/acme/payments" || service["github_installation_id"] != float64(42) {
 		t.Fatalf("unexpected service source: %#v", service)
+	}
+	binding := decodeResponse(t, recorder)["binding"].(map[string]any)
+	if binding["environment_id"] != environments[0].ID || binding["branch"] != "main" || binding["auto_deploy"] != true {
+		t.Fatalf("unexpected initial binding: %#v", binding)
+	}
+}
+
+func TestServicesV2RejectInitialBranchWithoutCreatingPartialService(t *testing.T) {
+	s := newAPITestServer(t)
+	ctx := context.Background()
+	application, err := s.store.CreateApplication(ctx, "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := s.store.ListApplicationEnvironments(ctx, application.ID)
+	if err != nil || len(environments) == 0 {
+		t.Fatalf("list environments: %v, count=%d", err, len(environments))
+	}
+	if err := s.store.UpsertGitHubInstallation(ctx, repository.UpsertGitHubInstallationInput{InstallationID: 42, AccountLogin: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+	s.githubRepoLister = fakeGitHubRepositoryLister{
+		repositories: []githubapp.Repository{{CloneURL: "https://github.com/acme/payments.git"}},
+		branches:     []string{"main"},
+	}
+	body := `{"name":"api","repo_url":"https://github.com/acme/payments.git","github_installation_id":42,"environment_id":"` + environments[0].ID + `","branch":"missing","auto_deploy":true,"runtime":"auto","internal_port":3000}`
+	recorder := httptest.NewRecorder()
+	s.handleApplications(recorder, httptest.NewRequest(http.MethodPost, "/api/applications/"+application.ID+"/services", strings.NewReader(body)))
+	assertAPIError(t, recorder, http.StatusUnprocessableEntity, "branch_not_accessible")
+	services, err := s.store.ListApplicationServices(ctx, application.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(services) != 0 {
+		t.Fatalf("invalid initial branch created partial services: %#v", services)
 	}
 }
 
