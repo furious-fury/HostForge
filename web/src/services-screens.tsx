@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { api, APIError, queryKeys, type ServiceDTO } from "@/api"
+import { api, APIError, queryKeys, type EnvironmentDTO, type ServiceDTO, type ServiceEnvironmentDTO } from "@/api"
 import { Link, useNavigate } from "react-router-dom"
 import {
   ActivityIcon,
@@ -61,23 +61,40 @@ class InitialServiceDeploymentError extends Error {
 export function ServicesList({ applicationID }: { applicationID: string }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState("")
-  const [environmentName, setEnvironmentName] = useState("Production")
   const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
   if (applicationQuery.isPending) return <main className="mx-auto w-full max-w-[1600px] animate-pulse px-4 py-8 sm:px-6 lg:px-8"><div className="h-8 w-48 rounded bg-muted" /><div className="mt-6 h-80 rounded-xl border bg-card" /></main>
   if (applicationQuery.isError) return <main className="mx-auto w-full max-w-[1600px] px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-8 text-center"><h1 className="text-sm font-semibold">Services could not be loaded</h1><Button className="mt-4" variant="outline" onClick={() => applicationQuery.refetch()}>Retry</Button></section></main>
   const { application, environments, services, service_bindings: bindings } = applicationQuery.data
-  const environment = environments.find((item) => item.name === environmentName) || environments[0]
   const visibleRows = services.filter((service) => [service.name, service.repo_url, service.runtime].join(" ").toLowerCase().includes(query.toLowerCase()))
-  const running = services.filter((service) => bindings[service.id]?.find((item) => item.environment_id === environment?.id)?.active_deployment_id && bindings[service.id]?.find((item) => item.environment_id === environment?.id)?.desired_state === "running").length
+  const states = services.map((service) => serviceListState(bindings[service.id] || [], environments))
+  const running = states.filter((state) => state.status === "Running").length
+  const stopped = states.filter((state) => state.status === "Stopped").length
+  const awaiting = states.filter((state) => state.status === "Awaiting deployment").length
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
-    <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end"><div><h1 className="text-3xl font-semibold tracking-[-0.035em]">Services</h1><p className="mt-2 text-sm text-muted-foreground">Deployable components of {application.name}.</p></div><div className="flex gap-2 sm:ml-auto"><AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-9 min-w-36 bg-card text-xs" /><Button onClick={() => navigate("/applications/" + applicationID + "/services/new")}><PlusIcon />Add service</Button></div></div>
+    <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end"><div><h1 className="text-3xl font-semibold tracking-[-0.035em]">Services</h1><p className="mt-2 text-sm text-muted-foreground">Deployable components of {application.name} across every environment.</p></div><Button className="sm:ml-auto" onClick={() => navigate("/applications/" + applicationID + "/services/new")}><PlusIcon />Add service</Button></div>
     <ApplicationTabs active="Services" applicationID={applicationID} />
-    <section className="mb-5 grid grid-cols-2 overflow-hidden rounded-xl border bg-card lg:grid-cols-4">{[{ label: "Total services", value: services.length }, { label: "Running", value: running }, { label: "Stopped", value: services.filter((service) => bindings[service.id]?.find((item) => item.environment_id === environment?.id)?.desired_state === "stopped").length }, { label: "Awaiting deploy", value: services.length - running }].map((item) => <article key={item.label} className="hf-service-summary"><p className="text-xs text-muted-foreground">{item.label}</p><p className="mt-4 text-2xl font-semibold tracking-tight">{item.value}</p><p className="mt-1 text-[11px] text-muted-foreground">{environment?.name}</p></article>)}</section>
+    <section className="mb-5 grid grid-cols-2 overflow-hidden rounded-xl border bg-card lg:grid-cols-4">{[{ label: "Total services", value: services.length }, { label: "Running", value: running }, { label: "Stopped", value: stopped }, { label: "Awaiting deploy", value: awaiting }].map((item) => <article key={item.label} className="hf-service-summary"><p className="text-xs text-muted-foreground">{item.label}</p><p className="mt-4 text-2xl font-semibold tracking-tight">{item.value}</p><p className="mt-1 text-[11px] text-muted-foreground">Across all environments</p></article>)}</section>
     <section className="overflow-hidden rounded-xl border bg-card"><header className="flex flex-col gap-3 border-b bg-muted/70 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold">All services</h2><p className="mt-0.5 text-xs text-muted-foreground">Source and release bindings</p></div><label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full bg-card pl-9 text-xs" placeholder="Search services" /></label></header>
-      {visibleRows.length ? <div className="p-4"><div className="overflow-x-auto rounded-lg border"><Table className="w-full min-w-[880px]"><TableHeader><TableRow><TableHead>Service</TableHead><TableHead>Source</TableHead><TableHead>Stack</TableHead><TableHead>Branch</TableHead><TableHead>Status</TableHead><TableHead>Active deployment</TableHead><TableHead>Port</TableHead></TableRow></TableHeader><TableBody>{visibleRows.map((service) => { const binding = bindings[service.id]?.find((item) => item.environment_id === environment?.id); const status = binding?.desired_state === "stopped" ? "Stopped" : binding?.active_deployment_id ? "Running" : binding?.branch ? "Awaiting deployment" : "Configuration required"; return <TableRow key={service.id}><TableCell><Link to={"/applications/" + applicationID + "/services/" + service.id} className="flex items-center gap-3 text-xs font-semibold hover:underline"><StackIdentity kind={service.stack_kind} label={service.stack_label} showLabel={false} iconClassName="bg-accent text-accent-foreground" />{service.name}</Link></TableCell><TableCell className="max-w-64 truncate text-xs text-muted-foreground">{service.repo_url}</TableCell><TableCell><StackIdentity kind={service.stack_kind} label={service.stack_label} iconClassName="size-7 rounded-md" /></TableCell><TableCell className="font-mono text-xs">{binding?.branch || "Not set"}</TableCell><TableCell><StatusPill status={status} /></TableCell><TableCell className="font-mono text-xs text-muted-foreground">{binding?.active_deployment_id || "None"}</TableCell><TableCell className="font-mono text-xs">:{service.internal_port}</TableCell></TableRow> })}</TableBody></Table></div></div> : <div className="px-6 py-14 text-center"><CubeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">{services.length ? "No matching services" : "No services yet"}</p><Button className="mt-4" onClick={() => navigate("/applications/" + applicationID + "/services/new")}><PlusIcon />Add service</Button></div>}
+      {visibleRows.length ? <div className="p-4"><div className="overflow-x-auto rounded-lg border"><Table className="w-full min-w-[880px]"><TableHeader><TableRow><TableHead>Service</TableHead><TableHead>Source</TableHead><TableHead>Stack</TableHead><TableHead>Branch</TableHead><TableHead>Status</TableHead><TableHead>Active deployment</TableHead><TableHead>Port</TableHead></TableRow></TableHeader><TableBody>{visibleRows.map((service) => { const state = serviceListState(bindings[service.id] || [], environments); return <TableRow key={service.id}><TableCell><Link to={"/applications/" + applicationID + "/services/" + service.id} className="flex items-center gap-3 text-xs font-semibold hover:underline"><StackIdentity kind={service.stack_kind} label={service.stack_label} showLabel={false} />{service.name}</Link></TableCell><TableCell className="max-w-64 truncate text-xs text-muted-foreground">{service.repo_url}</TableCell><TableCell><StackIdentity kind={service.stack_kind} label={service.stack_label} iconClassName="size-7 rounded-md" /></TableCell><TableCell><span className="font-mono text-xs">{state.binding?.branch || "Not set"}</span>{state.environment && <span className="mt-1 block text-[10px] text-muted-foreground">{state.environment.name}</span>}</TableCell><TableCell><StatusPill status={state.status} />{state.environment && <span className="mt-1 block text-[10px] text-muted-foreground">{state.environment.name}</span>}</TableCell><TableCell className="font-mono text-xs text-muted-foreground">{state.binding?.active_deployment_id || "None"}</TableCell><TableCell className="font-mono text-xs">:{service.internal_port}</TableCell></TableRow> })}</TableBody></Table></div></div> : <div className="px-6 py-14 text-center"><CubeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">{services.length ? "No matching services" : "No services yet"}</p><Button className="mt-4" onClick={() => navigate("/applications/" + applicationID + "/services/new")}><PlusIcon />Add service</Button></div>}
       <footer className="border-t bg-muted/30 px-5 py-3 text-[11px] text-muted-foreground">{visibleRows.length} services</footer>
     </section>
   </main>
+}
+
+function serviceListState(bindings: ServiceEnvironmentDTO[], environments: EnvironmentDTO[]) {
+  const binding = bindings.find((item) => item.active_deployment_id && item.desired_state === "running")
+    || bindings.find((item) => item.active_deployment_id)
+    || bindings.find((item) => item.branch)
+    || bindings[0]
+  const environment = environments.find((item) => item.id === binding?.environment_id)
+  const status = binding?.desired_state === "stopped" && binding.active_deployment_id
+    ? "Stopped"
+    : binding?.active_deployment_id
+      ? "Running"
+      : binding?.branch
+        ? "Awaiting deployment"
+        : "Configuration required"
+  return { binding, environment, status }
 }
 
 export function AddService({ applicationID }: { applicationID: string }) {

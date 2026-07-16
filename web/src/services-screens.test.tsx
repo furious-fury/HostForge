@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { APIError, api, type ApplicationDTO, type EnvironmentDTO, type ServiceDTO } from "@/api"
-import { AddService, ServiceOverview } from "@/services-screens"
+import { AddService, ServiceOverview, ServicesList } from "@/services-screens"
 import { ToastProvider } from "@/toast-provider"
 
 const application: ApplicationDTO = {
@@ -63,6 +63,17 @@ function renderOverview() {
     <QueryClientProvider client={client}>
       <MemoryRouter>
         <ToastProvider><ServiceOverview applicationID={application.id} service={service.id} /></ToastProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+}
+
+function renderServicesList() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <ToastProvider><ServicesList applicationID={application.id} /></ToastProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -214,7 +225,48 @@ describe("service overview", () => {
     expect(await screen.findByRole("link", { name: /staging\.payments\.example\.com/i })).toHaveAttribute("href", "https://staging.payments.example.com")
     expect(screen.getByText("Production")).toBeInTheDocument()
     expect(screen.getByText("Staging")).toBeInTheDocument()
-    expect(screen.getAllByTitle("Node.js · Vite stack").length).toBeGreaterThan(0)
+    expect(screen.getAllByRole("img", { name: "Node.js · Vite stack icon" }).length).toBeGreaterThan(0)
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument()
+  })
+})
+
+describe("services list", () => {
+  it("shows an active staging binding instead of an empty production binding", async () => {
+    const staging = { ...environment, id: "env-staging", name: "Staging", slug: "staging", kind: "staging" as const }
+    vi.spyOn(api, "application").mockResolvedValue({
+      application,
+      environments: [environment, staging],
+      services: [service],
+      service_bindings: {
+        [service.id]: [{
+          service_id: service.id,
+          environment_id: environment.id,
+          branch: "",
+          auto_deploy: false,
+          active_deployment_id: "",
+          desired_state: "running",
+          created_at: "2026-07-01T00:00:00Z",
+          updated_at: "2026-07-01T00:00:00Z",
+        }, {
+          service_id: service.id,
+          environment_id: staging.id,
+          branch: "develop",
+          auto_deploy: true,
+          active_deployment_id: "deployment-staging",
+          desired_state: "running",
+          created_at: "2026-07-01T00:00:00Z",
+          updated_at: "2026-07-01T00:00:00Z",
+        }],
+      },
+    })
+
+    renderServicesList()
+
+    expect(await screen.findByText("develop")).toBeInTheDocument()
+    expect(screen.getByText("deployment-staging")).toBeInTheDocument()
+    expect(screen.getAllByText("Staging")).toHaveLength(2)
+    expect(screen.getAllByText("Running").length).toBeGreaterThan(0)
+    expect(screen.queryByText("Configuration required")).not.toBeInTheDocument()
+    expect(screen.getAllByRole("img", { name: "Node.js · Vite stack icon" }).length).toBeGreaterThan(0)
   })
 })
