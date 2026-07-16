@@ -68,6 +68,18 @@ The `hostforge` user should include the `caddy` group. The root Caddyfile should
 
 Once those checks pass, return to `https://hostforge.mrfury.dev/`, hard-refresh with `Ctrl+Shift+R`, and retry **Verify and register domain**. Successful registration replaces the bootstrap IP route in `control-plane.caddy` with the permanent `hostforge.mrfury.dev` route. Generated deployment URLs continue to use `routes.caddy`.
 
+If an older checkout stops with `scripts/migrate-caddy-layout.sh: Permission denied`, the update has not restarted HostForge. Run the migration through Bash, finish the installation, and restart the service:
+
+```bash
+cd /opt/hostforge &&
+bash ./scripts/migrate-caddy-layout.sh &&
+./scripts/install.sh --with-systemd &&
+systemctl restart hostforge-server &&
+systemctl --no-pager --full status hostforge-server
+```
+
+The installer invokes the migration through Bash in current releases, so the script does not depend on the executable bit being preserved by Git.
+
 ### Custom Caddyfile
 
 The installer does not rewrite an unrecognized or operator-customized Caddyfile. If it prints a migration warning:
