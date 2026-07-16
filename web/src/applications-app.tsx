@@ -114,8 +114,8 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         <div className="border-t p-3">
           <div className="mb-2 flex items-center gap-2 rounded-md px-2 py-2 text-xs text-muted-foreground"><span className={"size-2 rounded-full " + (connected ? "bg-emerald-500" : "bg-red-500")} />{connected ? "Server connected" : statusQuery.isPending ? "Connecting..." : "Server unavailable"}<span className="ml-auto font-mono text-[10px]">{statusQuery.data?.version || ""}</span></div>
           <button disabled={logout.isPending} onClick={() => logout.mutate()} className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-muted disabled:opacity-60">
-            <span className="grid size-8 place-items-center rounded-full bg-foreground text-xs font-semibold text-background">OP</span>
-            <span className="min-w-0 flex-1"><span className="block text-xs font-medium">Operator</span><span className="block text-[11px] text-muted-foreground">{logout.isPending ? "Signing out..." : "Authenticated session"}</span></span>
+            <span className="grid size-8 place-items-center rounded-full bg-foreground text-xs font-semibold text-background">HF</span>
+            <span className="min-w-0 flex-1"><span className="block text-xs font-medium">HostForge Admin</span><span className="block text-[11px] text-muted-foreground">{logout.isPending ? "Signing out..." : "Secure control session"}</span></span>
             <SignOutIcon size={16} className="text-muted-foreground" />
           </button>
         </div>
@@ -208,9 +208,10 @@ function ApplicationsList() {
     const services = application.service_count || 0
     const healthy = application.healthy_service_count || 0
     const status = services === 0 ? "No services" : production?.status === "healthy" ? "Healthy" : activeEnvironment ? `Active in ${activeEnvironment.name}` : application.environment_health?.some((environment) => environment.status === "degraded") ? "Degraded" : "Not deployed"
-    return { id: application.id, name: application.name, description: application.description, initials: application.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(), services, healthy, domains: application.domain_count || 0, status, deployment: application.latest_deployment ? new Date(application.latest_deployment.created_at).toLocaleString() : "Never", updated: new Date(application.updated_at).toLocaleDateString() }
+    const view = application.archived ? "Archived" : production?.status === "healthy" ? "Production live" : activeEnvironment ? "Staging only" : application.environment_health?.some((environment) => environment.status === "degraded") ? "Needs attention" : "Setup needed"
+    return { id: application.id, name: application.name, description: application.description, initials: application.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(), services, healthy, domains: application.domain_count || 0, status, view, deployment: application.latest_deployment ? new Date(application.latest_deployment.created_at).toLocaleString() : "Never", updated: new Date(application.updated_at).toLocaleDateString() }
   })
-  const visibleApplications = applications.filter((application) => (filter === "All" || (filter === "Active" ? application.status.startsWith("Active in ") : application.status === filter)) && [application.name, application.description].join(" ").toLowerCase().includes(query.toLowerCase()))
+  const visibleApplications = applications.filter((application) => (filter === "All" || application.view === filter) && [application.name, application.description].join(" ").toLowerCase().includes(query.toLowerCase()))
 
   return (
     <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
@@ -221,7 +222,7 @@ function ApplicationsList() {
       <section className="overflow-hidden rounded-xl border bg-card">
         <header className="flex flex-col gap-3 border-b bg-muted/70 p-4 sm:flex-row sm:items-center">
           <div className="flex flex-wrap gap-1 rounded-lg border bg-card p-1">
-            {["All", "Healthy", "Active", "Degraded", "Not deployed", "No services"].map((item) => <button key={item} onClick={() => setFilter(item)} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${filter === item ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{item}</button>)}
+            {["All", "Production live", "Staging only", "Needs attention", "Setup needed", "Archived"].map((item) => <button key={item} onClick={() => setFilter(item)} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${filter === item ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{item}</button>)}
           </div>
           <label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full rounded-md border bg-card pl-9 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20" placeholder="Search applications" /></label>
         </header>
@@ -244,7 +245,7 @@ function ApplicationsList() {
             </TableBody>
           </Table>
         </div>
-        {!visibleApplications.length && <div className="grid place-items-center px-6 py-16 text-center"><span className="grid size-11 place-items-center rounded-xl border bg-muted"><MagnifyingGlassIcon size={20} /></span><p className="mt-4 text-sm font-semibold">Create your first application</p><p className="mt-1 text-xs text-muted-foreground">Applications group the services that make up a product. Clear filters if you expected an existing application.</p><Button className="mt-4" size="sm" onClick={() => navigate("/applications/new")}><PlusIcon />Create application</Button></div>}
+        {!visibleApplications.length && <div className="grid place-items-center px-6 py-16 text-center"><span className="grid size-11 place-items-center rounded-xl border bg-muted"><MagnifyingGlassIcon size={20} /></span>{applications.length ? <><p className="mt-4 text-sm font-semibold">No applications match this view</p><p className="mt-1 text-xs text-muted-foreground">{query ? `No results found for “${query}” within ${filter === "All" ? "your applications" : `the ${filter.toLowerCase()} category`}.` : `You do not currently have any applications in the ${filter.toLowerCase()} category.`}</p><Button className="mt-4" size="sm" variant="outline" onClick={() => { setFilter("All"); setQuery("") }}>View all applications</Button></> : <><p className="mt-4 text-sm font-semibold">No applications yet</p><p className="mt-1 text-xs text-muted-foreground">Create an application to group related services, environments, deployments, and domains.</p><Button className="mt-4" size="sm" onClick={() => navigate("/applications/new")}><PlusIcon />Create application</Button></>}</div>}
         <footer className="flex items-center justify-between border-t bg-muted/30 px-5 py-3 text-[11px] text-muted-foreground"><span>{visibleApplications.length} of {applications.length} applications</span><span>Updated just now</span></footer>
       </section>
     </main>

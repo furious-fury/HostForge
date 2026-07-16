@@ -15,6 +15,7 @@ import {
 import { api, APIError, queryKeys, type EnvironmentDTO, type ServiceDTO, type ServiceEnvironmentDTO } from "@/api"
 import { AppSelect } from "@/components/app-select"
 import { ApplicationTabs } from "@/components/application-tabs"
+import { ServiceTabs } from "@/components/service-tabs"
 import { ConfirmationAction } from "@/components/confirmation-action"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
@@ -255,6 +256,7 @@ export function ServiceSettings({ applicationID, serviceID }: { applicationID: s
   const set = <K extends keyof ServiceDTO>(key: K, value: ServiceDTO[K]) => setDraft((current) => ({ ...current, [key]: value }))
 
   return <Page title="Service settings" description={`Configure source, build, and runtime values for ${query.data.service.name}.`}>
+    <ServiceTabs active="Settings" serviceID={serviceID} applicationID={applicationID} />
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Section title="Service configuration" description="Changes apply to future deployments; active releases are not rebuilt automatically." footer={<Button disabled={update.isPending || !Object.keys(draft).length} onClick={() => update.mutate()}>{update.isPending ? "Saving..." : "Save changes"}</Button>}>
         <div className="grid gap-5 sm:grid-cols-2"><Field label="Service name"><Input value={service.name} onChange={(event) => set("name", event.target.value)} className="h-10 bg-background text-xs" /></Field><Field label="Runtime"><AppSelect options={["auto", "bun"]} value={service.runtime} onValueChange={(value) => set("runtime", value)} className="h-10 bg-background font-mono text-xs" /></Field></div>

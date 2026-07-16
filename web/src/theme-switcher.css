@@ -12,7 +12,7 @@
 .hf-theme-modes button { display: flex; height: 2.25rem; align-items: center; justify-content: center; gap: 0.35rem; border: 1px solid var(--border); border-radius: 0.4rem; color: var(--muted-foreground); font-size: 0.65rem; font-weight: 600; }
 .hf-theme-modes button:hover { background: var(--muted); color: var(--foreground); }
 .hf-theme-modes .hf-theme-mode-active { border-color: var(--accent); background: var(--accent); color: var(--accent-foreground); }
-.hf-accent-options { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.35rem; }
+.hf-accent-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.55rem 0.35rem; }
 .hf-accent-options button { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: 0.38rem; color: var(--muted-foreground); font-size: 0.56rem; }
 .hf-accent-swatch { display: grid; width: 2rem; height: 2rem; place-items: center; border: 2px solid var(--card); border-radius: 999px; color: white; box-shadow: 0 0 0 1px var(--border); }
 .hf-theme-popover > footer { border-top: 1px solid var(--border); background: color-mix(in oklch, var(--muted) 45%, var(--card)); padding: 0.7rem 1rem; color: var(--muted-foreground); font-size: 0.6rem; line-height: 1rem; }

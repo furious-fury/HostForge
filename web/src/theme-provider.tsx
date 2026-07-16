@@ -9,7 +9,7 @@ function isThemeMode(value: string | null): value is ThemeMode {
 }
 
 function isAccent(value: string | null): value is Accent {
-  return value === "neutral" || value === "ocean" || value === "forest" || value === "amber" || value === "rose"
+  return value === "neutral" || value === "ocean" || value === "indigo" || value === "cyan" || value === "forest" || value === "amber" || value === "rose" || value === "violet"
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -42,4 +42,3 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   return <ThemeContext value={{ accent, mode, setAccent, setMode }}>{children}</ThemeContext>
 }
-

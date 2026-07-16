@@ -21,7 +21,7 @@ import {
 
 import { AppSelect } from "@/components/app-select"
 import { ApplicationTabs } from "@/components/application-tabs"
-import { RouteTabs } from "@/components/route-tabs"
+import { ServiceTabs } from "@/components/service-tabs"
 import { StackIdentity } from "@/components/stack-identity"
 import { StatusBadge } from "@/components/status-badge"
 import { ConfirmationAction } from "@/components/confirmation-action"
@@ -229,7 +229,6 @@ export function ServiceOverview({ applicationID, service: serviceID }: { applica
   const latest = deploymentsQuery.data?.deployments[0]
   const activeEnvironments = serviceQuery.data.environment_states.filter((item) => item.active_deployment_id)
   const state = activeEnvironments.some((item) => item.desired_state === "running") ? "Running" : activeEnvironments.length ? "Stopped" : serviceQuery.data.bindings.some((item) => item.branch) ? "Awaiting deployment" : "Configuration required"
-  const tabs = ["Overview", "Deployments", "Logs", "Metrics", "Environment", "Domains", "Settings"]
   const base = "/applications/" + applicationID + "/services/" + serviceID
   const mutationError = deployMutation.error || stopMutation.error || restartMutation.error
 
@@ -238,7 +237,7 @@ export function ServiceOverview({ applicationID, service: serviceID }: { applica
       <Button className="xl:ml-auto" variant="outline" onClick={() => navigate(base + "/settings")}>Configure environments</Button>
     </div>
     {mutationError && <div className="mb-5 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">{mutationError.message}</div>}
-    <RouteTabs active="Overview" label="Service navigation" tabs={tabs.map((tab) => ({ label: tab, href: tab === "Overview" ? base : base + "/" + tab.toLowerCase() }))} />
+    <ServiceTabs active="Overview" serviceID={serviceID} applicationID={applicationID} />
 
     <section className="mb-5">
       <div className="mb-3"><h2 className="text-sm font-semibold">Environment deployments</h2><p className="mt-1 text-xs text-muted-foreground">Active releases and public URLs across this service. No environment switch is required.</p></div>

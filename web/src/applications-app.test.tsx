@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { api, type ApplicationDTO, type EnvironmentDTO } from "@/api"
+import { api, type ApplicationDTO, type EnvironmentDTO, type ServiceDTO } from "@/api"
 import ApplicationsApp from "@/applications-app"
 import { ThemeProvider } from "@/theme-provider"
 import { ToastProvider } from "@/toast-provider"
@@ -35,6 +35,25 @@ const environments: EnvironmentDTO[] = application.environment_health!.map((envi
   updated_at: application.updated_at,
 }))
 
+const service: ServiceDTO = {
+  id: "service-1",
+  application_id: application.id,
+  name: "Fundraiser",
+  repo_url: "https://github.com/acme/fundraiser",
+  stack_kind: "node_vite",
+  stack_label: "Node.js · Vite",
+  github_installation_id: 42,
+  root_directory: "",
+  runtime: "auto",
+  install_cmd: "",
+  build_cmd: "",
+  start_cmd: "",
+  internal_port: 3000,
+  health_check_path: "/",
+  created_at: application.created_at,
+  updated_at: application.updated_at,
+}
+
 function mockShellAPI() {
   vi.spyOn(api, "applications").mockResolvedValue({ applications: [application] })
   vi.spyOn(api, "application").mockResolvedValue({ application, environments, services: [], service_bindings: {} })
@@ -43,6 +62,8 @@ function mockShellAPI() {
   vi.spyOn(api, "systemStatus").mockResolvedValue({ version: "v0.8.0", checks: [{ id: "docker", label: "Docker daemon", status: "RUNNING" }] })
   vi.spyOn(api, "onboarding").mockResolvedValue({ onboarding: { bootstrap_complete: false, bootstrap_enabled: false, bootstrap_expires_at: "", bootstrap_https_port: 443, bootstrap_public_ip: "", completed_at: "0001-01-01T00:00:00Z", github_app_complete: false, permanent_ingress_complete: false, platform_domain: "" } })
   vi.spyOn(api, "githubInstallations").mockResolvedValue({ installations: [] })
+  vi.spyOn(api, "service").mockResolvedValue({ service, bindings: [], environment_states: [] })
+  vi.spyOn(api, "repositoryBranches").mockResolvedValue({ branches: ["main"], default_branch: "main" })
 }
 
 function renderApp(path: string) {
@@ -71,6 +92,8 @@ describe("application shell with a newly created empty application", () => {
     await user.click(screen.getByPlaceholderText("Search HostForge..."))
     await waitFor(() => expect(api.application).toHaveBeenCalledWith(application.id, expect.any(AbortSignal)))
     expect(screen.queryByText("This screen could not be rendered")).not.toBeInTheDocument()
+    expect(screen.getByText("HostForge Admin")).toBeInTheDocument()
+    expect(screen.getByText("Secure control session")).toBeInTheDocument()
   })
 
   it("renders the add-service GitHub prerequisite state", async () => {
@@ -84,6 +107,30 @@ describe("application shell with a newly created empty application", () => {
     expect(breadcrumbs.closest("header")).toBeNull()
   })
 
+  it("offers operational application filters instead of raw deployment states", async () => {
+    const user = userEvent.setup()
+    mockShellAPI()
+    renderApp("/applications")
+
+    expect(await screen.findByRole("heading", { name: "Applications" })).toBeInTheDocument()
+    for (const label of ["Production live", "Staging only", "Needs attention", "Setup needed", "Archived"]) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument()
+    }
+    expect(screen.queryByRole("button", { name: "Not deployed" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "No services" })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Setup needed" }))
+    expect(screen.getByRole("link", { name: /test/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Production live" }))
+    expect(screen.getByText("No applications match this view")).toBeInTheDocument()
+    expect(screen.getByText("You do not currently have any applications in the production live category.")).toBeInTheDocument()
+    expect(screen.queryByText("Create your first application")).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "View all applications" }))
+    expect(screen.getByRole("link", { name: /test/i })).toBeInTheDocument()
+  })
+
   it.each([
     ["Deployments", `/applications/${application.id}/deployments`],
     ["Settings", `/applications/${application.id}/settings`],
@@ -94,6 +141,21 @@ describe("application shell with a newly created empty application", () => {
     expect(await screen.findByRole("heading", { name: activeTab === "Settings" ? "Application settings" : "Deployments" })).toBeInTheDocument()
     const tabs = screen.getByRole("tablist", { name: "Application navigation" })
     for (const label of ["Overview", "Services", "Deployments", "Domains", "Environment", "Activity", "Settings"]) {
+      expect(within(tabs).getByRole("tab", { name: label })).toBeInTheDocument()
+    }
+    expect(within(tabs).getByRole("tab", { name: activeTab })).toHaveAttribute("data-state", "active")
+  })
+
+  it.each([
+    ["Deployments", `/applications/${application.id}/services/${service.id}/deployments`],
+    ["Settings", `/applications/${application.id}/services/${service.id}/settings`],
+  ])("keeps service navigation visible on %s", async (activeTab, path) => {
+    mockShellAPI()
+    renderApp(path)
+
+    expect(await screen.findByRole("heading", { name: activeTab === "Settings" ? "Service settings" : "Deployments" })).toBeInTheDocument()
+    const tabs = screen.getByRole("tablist", { name: "Service navigation" })
+    for (const label of ["Overview", "Deployments", "Logs", "Metrics", "Environment", "Domains", "Settings"]) {
       expect(within(tabs).getByRole("tab", { name: label })).toBeInTheDocument()
     }
     expect(within(tabs).getByRole("tab", { name: activeTab })).toHaveAttribute("data-state", "active")

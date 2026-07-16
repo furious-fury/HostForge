@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react"
 
 export type ThemeMode = "light" | "dark" | "system"
-export type Accent = "neutral" | "ocean" | "forest" | "amber" | "rose"
+export type Accent = "neutral" | "ocean" | "indigo" | "cyan" | "forest" | "amber" | "rose" | "violet"
 
 export type ThemeContextValue = {
   accent: Accent
