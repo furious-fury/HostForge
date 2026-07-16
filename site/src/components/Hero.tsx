@@ -1,5 +1,4 @@
 import { motion } from "framer-motion";
-import { Play } from "lucide-react";
 import { Link } from "react-router-dom";
 
 export function Hero() {
@@ -22,7 +21,7 @@ export function Hero() {
         initial={{ opacity: 0, y: 16 }}
         transition={{ duration: 0.6, delay: 0.1 }}
       >
-        Ship from Git in <span className="text-primary">one</span> command.
+        Ship from GitHub to <span className="text-primary">your</span> server.
       </motion.h1>
 
       <motion.p
@@ -31,9 +30,9 @@ export function Hero() {
         initial={{ opacity: 0, y: 16 }}
         transition={{ duration: 0.6, delay: 0.2 }}
       >
-        Push to GitHub (or run the CLI): HostForge clones your repo, builds with Nixpacks, runs a Docker container on a
-        published host port, and—when you wire Caddy—terminates TLS on the public internet. SQLite keeps projects,
-        deployments, domains, and observability rows.
+        HostForge maps GitHub App repositories and branches to production or staging, builds with Railpack and
+        BuildKit, keeps containers on private host ports, and publishes only validated Caddy routes. SQLite stores
+        applications, services, deployments, encrypted configuration, and observability data.
       </motion.p>
 
       <motion.div
@@ -48,13 +47,6 @@ export function Hero() {
         >
           Read the docs
         </Link>
-        <button
-          type="button"
-          className="flex h-11 w-11 items-center justify-center border border-border bg-surface text-text shadow-[0_2px_12px_rgba(0,0,0,0.35)] transition-colors hover:bg-surface-alt"
-          aria-label="Play overview (coming soon)"
-        >
-          <Play className="h-4 w-4 fill-text" />
-        </button>
       </motion.div>
     </div>
   );

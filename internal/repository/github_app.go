@@ -114,6 +114,9 @@ func (s *Store) DeleteGitHubApp(ctx context.Context) error {
 	if n == 0 {
 		return sql.ErrNoRows
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE onboarding_state SET github_app_complete=0, updated_at=? WHERE id=1`, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("reset github app onboarding state: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
@@ -204,7 +207,7 @@ func (s *Store) ListGitHubInstallations(ctx context.Context) ([]models.GitHubIns
 		return nil, fmt.Errorf("list installations: %w", err)
 	}
 	defer rows.Close()
-	var out []models.GitHubInstallation
+	out := make([]models.GitHubInstallation, 0)
 	for rows.Next() {
 		var item models.GitHubInstallation
 		var createdAt string

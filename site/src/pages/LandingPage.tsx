@@ -23,7 +23,7 @@ import {
 
 const TITLE = "HostForge — self-hosted PaaS from Git";
 const DESCRIPTION =
-  "Ship Git repos to Docker on a single Linux host. Nixpacks builds, Caddy zero-downtime cutover, live logs, encrypted env, and a React control plane — all self-hosted.";
+  "Ship GitHub App repositories to Docker on one Linux host with Railpack and BuildKit, validated Caddy cutover, live logs, encrypted environment configuration, and a self-hosted control plane.";
 
 const STRUCTURED_DATA = {
   "@context": "https://schema.org",

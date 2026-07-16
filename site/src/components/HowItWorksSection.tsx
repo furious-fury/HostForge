@@ -10,12 +10,12 @@ const STEPS: Step[] = [
   {
     number: "01",
     title: "Clone",
-    body: "Repo cloned into a deterministic worktree keyed by project + commit.",
+    body: "The selected service repository is cloned at the environment's exact branch or commit.",
   },
   {
     number: "02",
     title: "Build",
-    body: "Nixpacks detects the stack and ships hostforge/<slug>:<utc-build-id>.",
+    body: "Railpack detects the stack and BuildKit produces an isolated HostForge image.",
   },
   {
     number: "03",
@@ -54,7 +54,7 @@ export function HowItWorksSection() {
             Push a commit. Five steps later it's live.
           </h2>
           <p className="mt-4 text-base text-muted md:text-lg">
-            The same deterministic path runs on every deploy — from a manual CLI push to a GitHub webhook.
+            The same deterministic path runs for an operator deployment, redeploy, rollback, or matching GitHub webhook.
           </p>
         </motion.div>
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/obs"
@@ -47,15 +48,39 @@ func (s *server) handleDeploymentsV2Collection(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
+	status := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status")))
+	if status != "" && status != models.DeploymentQueued && status != models.DeploymentBuilding && status != models.DeploymentSuccess && status != models.DeploymentFailed && status != models.DeploymentCancelled {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_status"})
+		return
+	}
+	trigger := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("trigger")))
+	if trigger != "" && trigger != "manual" && trigger != "webhook" && trigger != "redeploy" && trigger != "rollback" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_trigger"})
+		return
+	}
+	dateFrom, fromTime, ok := parseDeploymentDateFilter(r.URL.Query().Get("date_from"))
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_date_from"})
+		return
+	}
+	dateTo, toTime, ok := parseDeploymentDateFilter(r.URL.Query().Get("date_to"))
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_date_to"})
+		return
+	}
+	if !fromTime.IsZero() && !toTime.IsZero() && fromTime.After(toTime) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_date_range"})
+		return
+	}
 	items, nextCursor, err := s.store.ListServiceDeploymentsFiltered(r.Context(), repository.ServiceDeploymentFilter{
 		ApplicationID: r.URL.Query().Get("application_id"),
 		ServiceID:     r.URL.Query().Get("service_id"),
 		EnvironmentID: r.URL.Query().Get("environment_id"),
-		Status:        r.URL.Query().Get("status"),
-		Trigger:       r.URL.Query().Get("trigger"),
+		Status:        status,
+		Trigger:       trigger,
 		Branch:        r.URL.Query().Get("branch"),
-		DateFrom:      r.URL.Query().Get("date_from"),
-		DateTo:        r.URL.Query().Get("date_to"),
+		DateFrom:      dateFrom,
+		DateTo:        dateTo,
 		Cursor:        cursor,
 		Limit:         limit,
 	})
@@ -79,6 +104,18 @@ func (s *server) handleDeploymentsV2Collection(w http.ResponseWriter, r *http.Re
 		out = append(out, row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deployments": out, "next_cursor": nextCursor})
+}
+
+func parseDeploymentDateFilter(raw string) (string, time.Time, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", time.Time{}, true
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	return parsed.UTC().Format(time.RFC3339), parsed, true
 }
 
 func (s *server) handleServiceDeployActionV2(w http.ResponseWriter, r *http.Request, serviceID, environmentID string) {

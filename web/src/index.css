@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "@fontsource-variable/manrope";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -79,6 +80,7 @@
   .min-h-svh.bg-background {
     @apply min-w-80 bg-background text-foreground antialiased;
     margin: 0;
+    font-family: "Manrope Variable", sans-serif;
     background-image: radial-gradient(circle, var(--body-pattern) 0.9px, transparent 1px);
     background-position: 0 0;
     background-size: 20px 20px;

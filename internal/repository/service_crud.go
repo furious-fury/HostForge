@@ -225,7 +225,7 @@ func (s *Store) ListServiceEnvironments(ctx context.Context, serviceID string) (
 		return nil, err
 	}
 	defer rows.Close()
-	var out []ServiceEnvironment
+	out := make([]ServiceEnvironment, 0)
 	for rows.Next() {
 		var item ServiceEnvironment
 		var auto int

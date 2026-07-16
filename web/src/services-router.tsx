@@ -37,7 +37,7 @@ export function ServicesRouter({ path }: { path: string }) {
 
   const serviceDeployments = path.match(/^\/applications\/[^/]+\/services\/([^/]+)\/deployments\/?$/)
   if (serviceDeployments) {
-    return <DeploymentsList scope="service" service={serviceDeployments[1]} />
+    return <DeploymentsList scope="service" service={serviceDeployments[1]} applicationID={path.split("/")[2]} />
   }
 
   const serviceMatch = path.match(/^\/applications\/[^/]+\/services\/([^/]+)\/?$/)

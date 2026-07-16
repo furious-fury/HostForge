@@ -64,4 +64,23 @@ describe("useDeploymentLogStream", () => {
     expect(result.current.text).toBe("fresh output")
     expect(second.url).toContain("source=container")
   })
+
+  it("stops reconnecting after a terminal build frame", () => {
+    vi.useFakeTimers()
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+    const { result } = renderHook(() => useDeploymentLogStream("deploy-terminal", true))
+    const socket = FakeWebSocket.instances[0]
+
+    act(() => {
+      socket.onopen?.()
+      socket.onmessage?.({ data: JSON.stringify({ t: "chunk", d: "complete\n", end: 9 }) })
+      socket.onmessage?.({ data: JSON.stringify({ t: "end", reason: "deployment_terminal", status: "SUCCESS", eof: 9 }) })
+      socket.onclose?.()
+      vi.advanceTimersByTime(30_000)
+    })
+
+    expect(result.current.connection).toBe("ended")
+    expect(result.current.text).toBe("complete\n")
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
 })

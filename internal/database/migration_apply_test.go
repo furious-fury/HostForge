@@ -132,11 +132,12 @@ func TestPopulatedProjectCutoverCreatesBackupAndPreservesRelationships(t *testin
 		t.Fatalf("migration backup missing: %v", err)
 	}
 
-	var appID, serviceID, productionBranch, stagingBranch, activeDeployment string
+	var appID, serviceID, serviceRepo, productionBranch, stagingBranch, activeDeployment string
+	var githubInstallationID int64
 	if err := migrated.QueryRowContext(ctx, `SELECT id FROM applications WHERE id='project-1'`).Scan(&appID); err != nil {
 		t.Fatal(err)
 	}
-	if err := migrated.QueryRowContext(ctx, `SELECT id FROM services WHERE id='project-1' AND application_id='project-1'`).Scan(&serviceID); err != nil {
+	if err := migrated.QueryRowContext(ctx, `SELECT id,repo_url,github_installation_id FROM services WHERE id='project-1' AND application_id='project-1'`).Scan(&serviceID, &serviceRepo, &githubInstallationID); err != nil {
 		t.Fatal(err)
 	}
 	if err := migrated.QueryRowContext(ctx, `SELECT branch,active_deployment_id FROM service_environments WHERE service_id='project-1' AND environment_id='project-1_production'`).Scan(&productionBranch, &activeDeployment); err != nil {
@@ -145,8 +146,8 @@ func TestPopulatedProjectCutoverCreatesBackupAndPreservesRelationships(t *testin
 	if err := migrated.QueryRowContext(ctx, `SELECT branch FROM service_environments WHERE service_id='project-1' AND environment_id='project-1_staging'`).Scan(&stagingBranch); err != nil {
 		t.Fatal(err)
 	}
-	if appID != "project-1" || serviceID != "project-1" || productionBranch != "main" || stagingBranch != "" || activeDeployment != "deploy-1" {
-		t.Fatalf("cutover mismatch app=%q service=%q production=%q staging=%q active=%q", appID, serviceID, productionBranch, stagingBranch, activeDeployment)
+	if appID != "project-1" || serviceID != "project-1" || serviceRepo != "https://github.com/acme/legacy.git" || githubInstallationID != 42 || productionBranch != "main" || stagingBranch != "" || activeDeployment != "deploy-1" {
+		t.Fatalf("cutover mismatch app=%q service=%q repo=%q installation=%d production=%q staging=%q active=%q", appID, serviceID, serviceRepo, githubInstallationID, productionBranch, stagingBranch, activeDeployment)
 	}
 
 	for table, id := range map[string]string{"deployments": "deploy-1", "containers": "container-1", "domains": "domain-1", "environment_variables": "var-1"} {
@@ -164,6 +165,29 @@ func TestPopulatedProjectCutoverCreatesBackupAndPreservesRelationships(t *testin
 	}
 	if deploymentService != "project-1" || deploymentEnvironment != "project-1_production" || deploymentBranch != "main" || stepService != deploymentService || stepEnvironment != deploymentEnvironment {
 		t.Fatalf("ownership not reassociated deployment=%s/%s branch=%s step=%s/%s", deploymentService, deploymentEnvironment, deploymentBranch, stepService, stepEnvironment)
+	}
+	var containerDeployment string
+	if err := migrated.QueryRowContext(ctx, `SELECT deployment_id FROM containers WHERE id='container-1'`).Scan(&containerDeployment); err != nil {
+		t.Fatal(err)
+	}
+	if containerDeployment != "deploy-1" {
+		t.Fatalf("container reassociated to deployment %q", containerDeployment)
+	}
+	var domainApplication, domainEnvironment, domainService string
+	if err := migrated.QueryRowContext(ctx, `SELECT application_id,environment_id,service_id FROM domains WHERE id='domain-1'`).Scan(&domainApplication, &domainEnvironment, &domainService); err != nil {
+		t.Fatal(err)
+	}
+	if domainApplication != "project-1" || domainEnvironment != "project-1_production" || domainService != "project-1" {
+		t.Fatalf("domain ownership not reassociated: %s/%s/%s", domainApplication, domainEnvironment, domainService)
+	}
+	var variableApplication, variableEnvironment, variableLast4 string
+	var variableService sql.NullString
+	var variableCiphertext []byte
+	if err := migrated.QueryRowContext(ctx, `SELECT application_id,environment_id,service_id,value_ct,value_last4 FROM environment_variables WHERE id='var-1'`).Scan(&variableApplication, &variableEnvironment, &variableService, &variableCiphertext, &variableLast4); err != nil {
+		t.Fatal(err)
+	}
+	if variableApplication != "project-1" || variableEnvironment != "project-1_production" || variableService.Valid || string(variableCiphertext) != string([]byte{1, 2}) || variableLast4 != "last" {
+		t.Fatalf("variable migration mismatch app=%q environment=%q service=%v ciphertext=%v last4=%q", variableApplication, variableEnvironment, variableService, variableCiphertext, variableLast4)
 	}
 	for _, table := range []string{"projects", "project_env_vars", "project_git_auth", "project_ssh_keys"} {
 		var count int

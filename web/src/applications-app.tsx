@@ -112,14 +112,20 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   )
 }
 
-function Topbar({ onOpenNavigation, application, section }: { onOpenNavigation: () => void; application?: string; section?: string }) {
+function Topbar({ onOpenNavigation, applicationID, section }: { onOpenNavigation: () => void; applicationID?: string; section?: string }) {
+  const applicationQuery = useQuery({
+    queryKey: queryKeys.application(applicationID || ""),
+    queryFn: ({ signal }) => api.application(applicationID!, signal),
+    enabled: Boolean(applicationID),
+  })
+  const applicationName = applicationQuery.data?.application.name || (applicationQuery.isPending ? "Loading application..." : "Application")
   return (
-    <header className="hf-topbar sticky top-0 z-30 flex h-16 items-center border-b bg-background/90 px-4 backdrop-blur-md sm:px-6 lg:px-8">
+    <header className="hf-topbar sticky top-0 z-30 flex h-16 items-center border-b px-4 backdrop-blur-md sm:px-6 lg:px-8">
       <button className="mr-3 rounded-md p-2 hover:bg-muted lg:hidden" onClick={onOpenNavigation} aria-label="Open navigation"><ListIcon size={20} /></button>
       <div className="flex min-w-0 items-center gap-2 text-sm">
         {section ? <span className="font-medium">{section}</span> : <>
-          <Link to="/applications" className={application ? "text-muted-foreground hover:text-foreground" : "font-medium"}>Applications</Link>
-          {application && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><span className="truncate font-medium">{application}</span></>}
+          <Link to="/applications" className={applicationID ? "text-muted-foreground hover:text-foreground" : "font-medium"}>Applications</Link>
+          {applicationID && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><span className="truncate font-medium">{applicationName}</span></>}
         </>}
       </div>
       <div className="absolute left-1/2 top-1/2 hidden w-[clamp(20rem,38vw,36rem)] -translate-x-1/2 -translate-y-1/2 lg:block">
@@ -182,7 +188,7 @@ function ApplicationsList() {
           <div className="flex flex-wrap gap-1 rounded-lg border bg-card p-1">
             {["All", "Healthy", "Degraded", "No services"].map((item) => <button key={item} onClick={() => setFilter(item)} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${filter === item ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{item}</button>)}
           </div>
-          <label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full rounded-md border bg-card pl-9 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20" placeholder="Search applications or services" /></label>
+          <label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full rounded-md border bg-card pl-9 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20" placeholder="Search applications" /></label>
         </header>
 
         <div className="overflow-x-auto">
@@ -261,5 +267,5 @@ export default function ApplicationsApp() {
   const applicationDomains = path === applicationBase + "/domains"
   const serviceArea = Boolean(applicationBase) && path.startsWith(applicationBase + "/services")
   const applicationOverview = /^\/applications\/[^/]+\/?$/.test(path) && path !== "/applications/new"
-  return <div className="min-h-svh bg-background text-foreground"><Sidebar open={navigationOpen} onClose={() => setNavigationOpen(false)} /><div className="lg:pl-60"><Topbar application={applicationID} section={dashboard ? "Overview" : globalSettings ? "Settings" : documentation ? "Documentation" : systemStatus ? "System status" : observability ? "Observability" : globalDeployments ? "Deployments" : undefined} onOpenNavigation={() => setNavigationOpen(true)} /><Suspense fallback={<ScreenLoading />}>{dashboard ? <DashboardScreen /> : documentation ? <DocumentationScreen /> : systemStatus ? <SystemStatusScreen /> : globalSettings ? <GlobalSettings /> : applicationSettings ? <ApplicationSettings applicationID={applicationID!} /> : observability ? <ObservabilityScreen /> : deploymentDetailMatch ? <DeploymentDetail deploymentID={deploymentDetailMatch[1]} /> : globalDeployments ? <DeploymentsList /> : applicationDeployments ? <DeploymentsList scope="application" applicationID={applicationID!} /> : applicationActivity ? <ApplicationActivity applicationID={applicationID!} /> : applicationEnvironment ? <EnvironmentScreen scope="application" applicationID={applicationID!} /> : applicationDomains ? <DomainsScreen scope="application" applicationID={applicationID!} /> : serviceArea ? <ServicesRouter path={path} /> : creatingApplication ? <CreateApplication /> : applicationOverview && applicationID ? <ApplicationOverview applicationID={applicationID} /> : applicationsList ? <ApplicationsList /> : <NotFoundScreen />}</Suspense></div></div>
+  return <div className="min-h-svh bg-background text-foreground"><Sidebar open={navigationOpen} onClose={() => setNavigationOpen(false)} /><div className="lg:pl-60"><Topbar applicationID={applicationID} section={dashboard ? "Overview" : globalSettings ? "Settings" : documentation ? "Documentation" : systemStatus ? "System status" : observability ? "Observability" : globalDeployments ? "Deployments" : undefined} onOpenNavigation={() => setNavigationOpen(true)} /><Suspense fallback={<ScreenLoading />}>{dashboard ? <DashboardScreen /> : documentation ? <DocumentationScreen /> : systemStatus ? <SystemStatusScreen /> : globalSettings ? <GlobalSettings /> : applicationSettings ? <ApplicationSettings applicationID={applicationID!} /> : observability ? <ObservabilityScreen /> : deploymentDetailMatch ? <DeploymentDetail deploymentID={deploymentDetailMatch[1]} /> : globalDeployments ? <DeploymentsList /> : applicationDeployments ? <DeploymentsList scope="application" applicationID={applicationID!} /> : applicationActivity ? <ApplicationActivity applicationID={applicationID!} /> : applicationEnvironment ? <EnvironmentScreen scope="application" applicationID={applicationID!} /> : applicationDomains ? <DomainsScreen scope="application" applicationID={applicationID!} /> : serviceArea ? <ServicesRouter path={path} /> : creatingApplication ? <CreateApplication /> : applicationOverview && applicationID ? <ApplicationOverview applicationID={applicationID} /> : applicationsList ? <ApplicationsList /> : <NotFoundScreen />}</Suspense></div></div>
 }

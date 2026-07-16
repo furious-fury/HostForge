@@ -14,13 +14,14 @@ export const SITE_URL = rawSiteUrl.replace(/\/$/, "");
 export const SITE_NAME = "HostForge";
 export const SITE_TAGLINE = "Self-hosted PaaS from Git";
 export const SITE_DESCRIPTION =
-  "HostForge is a self-hosted PaaS that ships your Git repos to Docker on a single Linux host. Git → Nixpacks → Docker with Caddy zero-downtime cutover, live logs, and first-class observability.";
+  "HostForge is a self-hosted PaaS that ships GitHub App repositories to Docker on one Linux host. Railpack and BuildKit produce releases that cut over through validated Caddy routes with live logs and first-class observability.";
 
 export const DEFAULT_KEYWORDS = [
   "self-hosted PaaS",
   "hostforge",
   "docker deployment",
-  "nixpacks",
+  "railpack",
+  "buildkit",
   "caddy",
   "zero-downtime deploy",
   "heroku alternative",

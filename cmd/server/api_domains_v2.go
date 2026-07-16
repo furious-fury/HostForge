@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/hostforge/hostforge/internal/dnsops"
 	"github.com/hostforge/hostforge/internal/repository"
@@ -43,6 +44,10 @@ func (s *server) handleServiceDomains(w http.ResponseWriter, r *http.Request, ap
 			}
 			expectedIPv4, source, warning := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
 			guidance := dnsops.BuildGuidanceWithIPv4(r.Context(), s.cfg, names, expectedIPv4, source, warning)
+			if r.URL.Query().Get("check_dns") == "1" || strings.EqualFold(r.URL.Query().Get("check_dns"), "true") {
+				timeout := time.Duration(s.cfg.DNSDetectTimeoutMS) * time.Millisecond
+				guidance.Checks = dnsops.CheckRegistrarARecords(r.Context(), names, expectedIPv4, timeout)
+			}
 			writeJSON(w, http.StatusOK, map[string]any{"domains": items, "dns_guidance": guidance})
 		case http.MethodPost:
 			var req serviceDomainRequest

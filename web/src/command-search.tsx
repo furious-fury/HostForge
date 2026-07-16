@@ -23,7 +23,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command"
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
-import { api, queryKeys } from "@/api"
+import { api, queryKeys, type ApplicationDTO, type ServiceDTO } from "@/api"
 
 const destinationGroups = [
   {
@@ -45,14 +45,26 @@ const destinationGroups = [
   },
 ]
 
+function applicationResourceItems(detail: { application: ApplicationDTO; services?: ServiceDTO[] | null } | undefined) {
+  if (!detail?.application) return []
+
+  const application = detail.application
+  const services = Array.isArray(detail.services) ? detail.services : []
+  return [
+    { label: application.name, detail: application.description || "Application overview", href: "/applications/" + application.id, icon: AppWindowIcon },
+    ...services.map((service) => ({ label: service.name, detail: application.name + " service", href: "/applications/" + application.id + "/services/" + service.id, icon: CubeIcon })),
+  ]
+}
+
 export function CommandSearch() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
   const applicationsQuery = useQuery({ queryKey: queryKeys.applications, queryFn: ({ signal }) => api.applications(signal) })
-  const detailQueries = useQueries({ queries: (applicationsQuery.data?.applications || []).map((application) => ({ queryKey: queryKeys.application(application.id), queryFn: ({ signal }) => api.application(application.id, signal) })) })
-  const resourceItems = detailQueries.flatMap((detail) => detail.data ? [{ label: detail.data.application.name, detail: detail.data.application.description || "Application overview", href: "/applications/" + detail.data.application.id, icon: AppWindowIcon }, ...detail.data.services.map((service) => ({ label: service.name, detail: detail.data.application.name + " service", href: "/applications/" + detail.data.application.id + "/services/" + service.id, icon: CubeIcon }))] : [])
+  const applications = Array.isArray(applicationsQuery.data?.applications) ? applicationsQuery.data.applications : []
+  const detailQueries = useQueries({ queries: applications.map((application) => ({ queryKey: queryKeys.application(application.id), queryFn: ({ signal }) => api.application(application.id, signal) })) })
+  const resourceItems = detailQueries.flatMap((detail) => applicationResourceItems(detail.data))
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -115,7 +127,7 @@ export function CommandSearch() {
               <p className="text-xs font-semibold">No matching destination</p>
               <p className="mt-1 text-[11px] text-muted-foreground">Try an application, deployment, or setting.</p>
             </CommandEmpty>
-            {resourceItems.length > 0 && <CommandGroup heading="Applications and services" className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.14em]">{resourceItems.map((item) => { const ItemIcon = item.icon; return <CommandItem key={item.href} value={item.label + " " + item.detail} onSelect={() => openDestination(item.href)} className="cursor-pointer rounded-lg px-2.5 py-2.5 data-[selected=true]:!bg-accent data-[selected=true]:text-white data-[selected=true]:[&_span]:text-white"><span className="grid size-8 shrink-0 place-items-center rounded-lg border bg-card text-muted-foreground"><ItemIcon size={15} /></span><span className="min-w-0"><span className="block text-xs font-semibold">{item.label}</span><span className="block truncate text-[10px] text-muted-foreground">{item.detail}</span></span></CommandItem> })}</CommandGroup>}
+            {resourceItems.length > 0 && <CommandGroup heading="Applications and services" className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.14em]">{resourceItems.map((item) => { const ItemIcon = item.icon; return <CommandItem key={item.href} value={item.label + " " + item.detail} onSelect={() => openDestination(item.href)} className="hf-command-item cursor-pointer rounded-lg px-2.5 py-2.5"><span className="hf-command-item-icon grid size-8 shrink-0 place-items-center rounded-lg border bg-card text-muted-foreground"><ItemIcon size={15} /></span><span className="min-w-0"><span className="block text-xs font-semibold">{item.label}</span><span className="hf-command-item-detail block truncate text-[10px] text-muted-foreground">{item.detail}</span></span></CommandItem> })}</CommandGroup>}
             {destinationGroups.map((group) => (
               <CommandGroup key={group.label} heading={group.label} className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.14em]">
                 {group.items.map((item) => {
@@ -125,14 +137,14 @@ export function CommandSearch() {
                       key={item.href}
                       value={`${item.label} ${item.detail}`}
                       onSelect={() => openDestination(item.href)}
-                      className="cursor-pointer rounded-lg px-2.5 py-2.5 data-[selected=true]:!bg-accent data-[selected=true]:text-white data-[selected=true]:[&_span]:text-white data-[selected=true]:[&_kbd]:text-white"
+                      className="hf-command-item cursor-pointer rounded-lg px-2.5 py-2.5"
                     >
-                      <span className="grid size-8 shrink-0 place-items-center rounded-lg border bg-card text-muted-foreground shadow-sm">
+                      <span className="hf-command-item-icon grid size-8 shrink-0 place-items-center rounded-lg border bg-card text-muted-foreground shadow-sm">
                         <ItemIcon size={15} />
                       </span>
                       <span className="min-w-0">
                         <span className="block text-xs font-semibold">{item.label}</span>
-                        <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{item.detail}</span>
+                        <span className="hf-command-item-detail mt-0.5 block truncate text-[10px] text-muted-foreground">{item.detail}</span>
                       </span>
                       <CommandShortcut><kbd className="hf-command-key">Enter</kbd></CommandShortcut>
                     </CommandItem>

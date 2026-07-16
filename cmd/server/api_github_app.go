@@ -86,7 +86,7 @@ func (s *server) handleGitHubAppRoutes(w http.ResponseWriter, r *http.Request) {
 		s.handleGitHubApp(w, r)
 	case path == "app/manifest":
 		s.handleGitHubAppManifest(w, r)
-	case path == "app/exchange":
+	case path == "app/manifest/exchange":
 		s.handleGitHubAppExchange(w, r)
 	case path == "installations":
 		s.handleGitHubInstallations(w, r)

@@ -71,7 +71,7 @@ func (s *Store) ListApplications(ctx context.Context) ([]Application, error) {
 		return nil, fmt.Errorf("list applications: %w", err)
 	}
 	defer rows.Close()
-	var out []Application
+	out := make([]Application, 0)
 	for rows.Next() {
 		var item Application
 		var archived int
@@ -175,7 +175,7 @@ func (s *Store) ListApplicationEnvironments(ctx context.Context, applicationID s
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Environment
+	out := make([]Environment, 0)
 	for rows.Next() {
 		var item Environment
 		var created, updated string
@@ -195,7 +195,7 @@ func (s *Store) ListApplicationServices(ctx context.Context, applicationID strin
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Service
+	out := make([]Service, 0)
 	for rows.Next() {
 		var item Service
 		var created, updated string

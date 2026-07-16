@@ -69,6 +69,13 @@ func TestGitHubAppRoundTrip(t *testing.T) {
 	if err := s.DeleteGitHubApp(ctx); err != nil {
 		t.Fatal(err)
 	}
+	onboarding, err := s.GetOnboardingState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onboarding.GitHubAppComplete {
+		t.Fatal("expected GitHub App onboarding state to reset after deletion")
+	}
 	if err := s.DeleteGitHubApp(ctx); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("expected sql.ErrNoRows on second delete, got %v", err)
 	}

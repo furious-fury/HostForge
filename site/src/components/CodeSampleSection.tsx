@@ -3,13 +3,15 @@ import { motion } from "framer-motion";
 import { CodeBlock } from "./CodeBlock";
 
 const INSTALL_SNIPPET = `# On a fresh Debian/Ubuntu host
-curl -fsSL https://raw.githubusercontent.com/your-org/hostforge/main/scripts/install.sh | sudo bash`;
+git clone https://github.com/furious-fury/HostForge.git /opt/hostforge
+cd /opt/hostforge
+sudo ./scripts/install.sh --with-systemd`;
 
-const CLI_SNIPPET = `# Authenticate once, then deploy any repo
-hostforge login https://forge.example.com
-hostforge project create api-prod --repo https://github.com/acme/api
-hostforge deploy api-prod --ref main
-hostforge caddy sync`;
+const CLI_SNIPPET = `# Continue in the authenticated control plane
+# 1. Configure the GitHub App and synchronize installations
+# 2. Create an application and add a repository-backed service
+# 3. Select production/staging branches, then deploy
+# 4. Add a domain; HostForge validates Caddy before reload`;
 
 const VIEWPORT = { once: true, margin: "0px 0px -10% 0px" } as const;
 
@@ -26,7 +28,7 @@ export function CodeSampleSection() {
         >
           <p className="mb-3 font-mono text-xs font-semibold uppercase tracking-[0.22em] text-primary">Installation</p>
           <h2 id="install-heading" className="font-mono text-3xl font-semibold tracking-tight text-text md:text-4xl">
-            One script on one host. Deploys in minutes.
+            One installer on one host. Deploys stay under your control.
           </h2>
           <p className="mt-4 text-base leading-relaxed text-muted md:text-lg">
             The installer provisions the daemon, Docker, Caddy, and the control plane. Point a DNS record at the box and

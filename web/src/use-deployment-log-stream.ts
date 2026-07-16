@@ -10,6 +10,12 @@ type LogMessage = {
   code?: string
   msg?: string
   resume?: boolean
+  reason?: string
+  status?: string
+  deployment_id?: string
+  application_id?: string
+  service_id?: string
+  environment_id?: string
 }
 
 const maxBufferedCharacters = 1_000_000
@@ -61,6 +67,7 @@ export function useDeploymentLogStream(deploymentID: string, enabled: boolean, s
           setText("")
           socket?.close()
         } else if (message.t === "end") {
+          if (typeof message.eof === "number") cursor.current = message.eof
           stopped = true
           setConnection("ended")
           socket?.close()

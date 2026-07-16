@@ -37,6 +37,7 @@ Functions:
 - List and search applications with live service health and latest deployment data.
 - Create an application; production and staging are created by the server.
 - Update name/description, archive/restore, and permanently delete with confirmation.
+- Rename production and staging operator labels without changing stable environment IDs or deployment targeting.
 - View services and durable application events.
 
 ## Services and environments
@@ -53,6 +54,7 @@ Functions:
 
 - Create services only from repositories exposed through a GitHub App installation.
 - Discover installations, repositories, and branches.
+- Revalidate active installation, repository access, and changed branches at the server boundary before persisting source configuration.
 - Configure production/staging branch and automatic deployment independently.
 - Edit each environment binding from service settings using branches returned by the linked GitHub installation.
 - Edit source, build, runtime, port, and health-check configuration.

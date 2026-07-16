@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
+	githubapp "github.com/hostforge/hostforge/internal/github/app"
 	"github.com/hostforge/hostforge/internal/repository"
 	platformservices "github.com/hostforge/hostforge/internal/services"
 )
@@ -55,17 +58,22 @@ type serviceRequest struct {
 	HealthCheckPath      string `json:"health_check_path"`
 }
 
-func decodeServiceRequest(w http.ResponseWriter, r *http.Request, applicationID string, current *repository.Service) (repository.CreateServiceInput, bool) {
+type githubRepositoryLister interface {
+	ListInstallationRepositories(context.Context, int64) ([]githubapp.Repository, error)
+	ListRepositoryBranches(context.Context, int64, string, string) ([]string, error)
+}
+
+func decodeServiceRequest(w http.ResponseWriter, r *http.Request, applicationID string, current *repository.Service) (repository.CreateServiceInput, bool, bool) {
 	body, readErr := io.ReadAll(r.Body)
 	if readErr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_json_payload"})
-		return repository.CreateServiceInput{}, false
+		return repository.CreateServiceInput{}, false, false
 	}
 	var req serviceRequest
 	var present map[string]json.RawMessage
 	if err := json.Unmarshal(body, &req); err != nil || json.Unmarshal(body, &present) != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_json_payload"})
-		return repository.CreateServiceInput{}, false
+		return repository.CreateServiceInput{}, false, false
 	}
 	if current != nil {
 		if _, ok := present["name"]; !ok {
@@ -102,22 +110,126 @@ func decodeServiceRequest(w http.ResponseWriter, r *http.Request, applicationID 
 	repoURL, err := platformservices.CanonicalRepoURL(req.RepoURL)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_repository_clone_url"})
-		return repository.CreateServiceInput{}, false
+		return repository.CreateServiceInput{}, false, false
 	}
 	runtime, install, build, start, code := platformservices.ValidateDeployFields(req.Runtime, req.InstallCmd, req.BuildCmd, req.StartCmd)
 	if code != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": code})
-		return repository.CreateServiceInput{}, false
+		return repository.CreateServiceInput{}, false, false
 	}
 	if _, err := platformservices.ResolveServiceBuildDirectory("/repository", req.RootDirectory); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_root_directory"})
-		return repository.CreateServiceInput{}, false
+		return repository.CreateServiceInput{}, false, false
 	}
 	if req.InternalPort < 1 || req.InternalPort > 65535 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_internal_port"})
-		return repository.CreateServiceInput{}, false
+		return repository.CreateServiceInput{}, false, false
 	}
-	return repository.CreateServiceInput{ApplicationID: applicationID, Name: req.Name, RepoURL: repoURL, GitHubInstallationID: req.GitHubInstallationID, RootDirectory: req.RootDirectory, DeployRuntime: runtime, InstallCmd: install, BuildCmd: build, StartCmd: start, InternalPort: req.InternalPort, HealthCheckPath: req.HealthCheckPath}, true
+	currentRepoURL := ""
+	if current != nil {
+		currentRepoURL = current.RepoURL
+		if canonical, err := platformservices.CanonicalRepoURL(currentRepoURL); err == nil {
+			currentRepoURL = canonical
+		}
+	}
+	sourceChanged := current == nil || current.GitHubInstallationID != req.GitHubInstallationID || currentRepoURL != repoURL
+	return repository.CreateServiceInput{ApplicationID: applicationID, Name: req.Name, RepoURL: repoURL, GitHubInstallationID: req.GitHubInstallationID, RootDirectory: req.RootDirectory, DeployRuntime: runtime, InstallCmd: install, BuildCmd: build, StartCmd: start, InternalPort: req.InternalPort, HealthCheckPath: req.HealthCheckPath}, sourceChanged, true
+}
+
+func (s *server) validateServiceSource(w http.ResponseWriter, r *http.Request, in repository.CreateServiceInput) bool {
+	if !s.validateGitHubInstallation(w, r, in.GitHubInstallationID) {
+		return false
+	}
+	lister, ok := s.githubRepositoryAPI(w, r)
+	if !ok {
+		return false
+	}
+	repositories, err := lister.ListInstallationRepositories(r.Context(), in.GitHubInstallationID)
+	if err != nil {
+		s.requestLog(r).Error("validate service repository failed", "installation_id", in.GitHubInstallationID, "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "repositories_list_failed"})
+		return false
+	}
+	for _, candidate := range repositories {
+		canonical, err := platformservices.CanonicalRepoURL(candidate.CloneURL)
+		if err == nil && canonical == in.RepoURL {
+			return true
+		}
+	}
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"status": "error", "error": "repository_not_accessible", "fields": map[string]string{"repo_url": "not_accessible_by_installation"}})
+	return false
+}
+
+func (s *server) validateGitHubInstallation(w http.ResponseWriter, r *http.Request, installationID int64) bool {
+	if installationID <= 0 {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"status": "error", "error": "github_installation_required", "fields": map[string]string{"github_installation_id": "required"}})
+		return false
+	}
+	installation, err := s.store.GetGitHubInstallation(r.Context(), installationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"status": "error", "error": "github_installation_not_found", "fields": map[string]string{"github_installation_id": "not_found"}})
+		return false
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "github_installation_lookup_failed"})
+		return false
+	}
+	if strings.TrimSpace(installation.SuspendedAt) != "" {
+		writeJSON(w, http.StatusConflict, map[string]any{"status": "error", "error": "github_installation_suspended", "fields": map[string]string{"github_installation_id": "suspended"}})
+		return false
+	}
+	return true
+}
+
+func (s *server) githubRepositoryAPI(w http.ResponseWriter, r *http.Request) (githubRepositoryLister, bool) {
+	lister := s.githubRepoLister
+	if lister == nil {
+		client, err := s.loadAppClient(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "app_client_load_failed"})
+			return nil, false
+		}
+		if client == nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "app_not_configured"})
+			return nil, false
+		}
+		lister = client
+	}
+	return lister, true
+}
+
+func (s *server) validateServiceBranch(w http.ResponseWriter, r *http.Request, service repository.Service, branch string) bool {
+	if !s.validateGitHubInstallation(w, r, service.GitHubInstallationID) {
+		return false
+	}
+	parsed, err := url.Parse(service.RepoURL)
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "github.com") {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"status": "error", "error": "invalid_github_repository", "fields": map[string]string{"repo_url": "github_repository_required"}})
+		return false
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) != 2 {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"status": "error", "error": "invalid_github_repository", "fields": map[string]string{"repo_url": "github_repository_required"}})
+		return false
+	}
+	parts[1] = strings.TrimSuffix(parts[1], ".git")
+	lister, ok := s.githubRepositoryAPI(w, r)
+	if !ok {
+		return false
+	}
+	branches, err := lister.ListRepositoryBranches(r.Context(), service.GitHubInstallationID, parts[0], parts[1])
+	if err != nil {
+		s.requestLog(r).Error("validate service branch failed", "service_id", service.ID, "installation_id", service.GitHubInstallationID, "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "repository_branches_list_failed"})
+		return false
+	}
+	for _, candidate := range branches {
+		if candidate == branch {
+			return true
+		}
+	}
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"status": "error", "error": "branch_not_accessible", "fields": map[string]string{"branch": "not_found_in_repository"}})
+	return false
 }
 
 func writeServiceError(w http.ResponseWriter, err error) {
@@ -154,8 +266,11 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"service": service, "bindings": bindings, "environment_states": s.serviceEnvironmentStates(r, service, bindings)})
 		case http.MethodPatch:
-			in, ok := decodeServiceRequest(w, r, service.ApplicationID, &service)
+			in, sourceChanged, ok := decodeServiceRequest(w, r, service.ApplicationID, &service)
 			if !ok {
+				return
+			}
+			if sourceChanged && !s.validateServiceSource(w, r, in) {
 				return
 			}
 			item, err := s.store.UpdateService(r.Context(), service.ID, in)
@@ -172,9 +287,13 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			response := map[string]any{"status": "deleted"}
+			eventStatus, eventDetail := "deleted", service.Name
 			if result.CaddySyncError != "" {
 				response["routing_warning"] = result.CaddySyncError
+				eventStatus = "warning"
+				eventDetail += "; routing cleanup: " + result.CaddySyncError
 			}
+			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: service.ApplicationID, EventType: "service", Status: eventStatus, Actor: "operator", Message: "Service deleted", Detail: eventDetail})
 			writeJSON(w, http.StatusOK, response)
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
@@ -228,11 +347,13 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_json_payload"})
 				return
 			}
-			if req.Branch != "" {
-				if _, err := s.store.GetApplication(r.Context(), service.ApplicationID); err != nil {
-					writeServiceError(w, err)
-					return
-				}
+			current, err := s.store.GetServiceEnvironment(r.Context(), service.ID, environment.ID)
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			if req.Branch != "" && req.Branch != current.Branch && !s.validateServiceBranch(w, r, service, req.Branch) {
+				return
 			}
 			item, err := s.store.UpdateServiceEnvironment(r.Context(), service.ID, environment.ID, req.Branch, req.AutoDeploy)
 			if err != nil {

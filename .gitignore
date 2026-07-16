@@ -4,10 +4,18 @@
 # Optional operator-only bulk tools (clone + DB); keep local if you need them—do not commit.
 cmd/backfill-deploy-stack/
 scripts/backfill-deployment-stack.sh
+
+# HostForge local runtime data and SQLite artifacts
 /.hostforge/
+.hostforge-local/
 *.db
+*.db-shm
+*.db-wal
+*.db.bak
+*.tsbuildinfo
 .env
 .hostforge.env
+.hostforge.wsl.env
 *.exe
 coverage.out
 

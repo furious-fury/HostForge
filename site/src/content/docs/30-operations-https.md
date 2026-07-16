@@ -17,7 +17,7 @@ The main repository ships a staged runbook: **`docs/operator-validation-phase1.m
 
 Sections:
 
-1. **§1.1 — Docker runtime proof** — recorded **PASS** (example: WSL2 + Docker Engine, 2026-04-19 in the project task list).
+1. **§1.1 — Docker runtime proof** — recorded **PASS** (example: WSL2 + Docker Engine, 2026-04-19 in the operator validation record).
 2. **§1.2 — Public HTTPS + restarts** — **Pending** until exercised on a VPS with real DNS and Caddy.
 3. **§1.3 — Zero-downtime redeploy** — **Pending** until observed under load or a scripted curl loop through Caddy.
 

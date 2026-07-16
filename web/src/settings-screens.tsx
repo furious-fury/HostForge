@@ -56,8 +56,10 @@ export function GlobalSettings() {
   const queryClient = useQueryClient()
   const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: ({ signal }) => api.settings(signal) })
   const statusQuery = useQuery({ queryKey: queryKeys.systemStatus, queryFn: ({ signal }) => api.systemStatus(signal) })
-  const installationsQuery = useQuery({ queryKey: queryKeys.githubInstallations, queryFn: ({ signal }) => api.githubInstallations(signal) })
+  const githubAppQuery = useQuery({ queryKey: queryKeys.githubApp, queryFn: ({ signal }) => api.githubApp(signal) })
+  const installationsQuery = useQuery({ queryKey: queryKeys.githubInstallations, queryFn: ({ signal }) => api.githubInstallations(signal), enabled: githubAppQuery.data?.app.configured === true })
   const [result, setResult] = useState("")
+  const [githubResult, setGithubResult] = useState("")
   const action = useMutation({
     mutationFn: api.settingsAction,
     onSuccess: async (payload, kind) => {
@@ -68,15 +70,33 @@ export function GlobalSettings() {
   })
   const syncInstallations = useMutation({
     mutationFn: api.syncGitHubInstallations,
+    onMutate: () => setGithubResult(""),
     onSuccess: async () => {
       toast("GitHub installations synchronized")
       await queryClient.invalidateQueries({ queryKey: queryKeys.githubInstallations })
+    },
+  })
+  const disconnectGitHubApp = useMutation({
+    mutationFn: api.deleteGitHubApp,
+    onMutate: () => setGithubResult(""),
+    onSuccess: async () => {
+      queryClient.removeQueries({ queryKey: queryKeys.githubRepositoriesRoot })
+      queryClient.removeQueries({ queryKey: queryKeys.repositoryBranchesRoot })
+      setGithubResult("GitHub App credentials and synchronized installation records were removed from HostForge.")
+      toast("GitHub App disconnected")
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.githubApp }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.githubInstallations }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.onboarding }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.systemStatus }),
+      ])
     },
   })
   if (settingsQuery.isPending || statusQuery.isPending) return <Loading />
   if (settingsQuery.isError || statusQuery.isError) return <ErrorState retry={() => { settingsQuery.refetch(); statusQuery.refetch() }} />
   const settings = settingsQuery.data
   const checks = statusQuery.data.checks
+  const githubApp = githubAppQuery.data?.app
 
   return <Page title="Settings" description="Inspect the active control-plane configuration and run safe validation actions. Server configuration is environment-managed and read-only here.">
     <div className="grid gap-5 xl:grid-cols-2">
@@ -91,9 +111,12 @@ export function GlobalSettings() {
       </Section>
 
       <Section title="GitHub App" description="GitHub App is the only supported private-source authentication path.">
-        {installationsQuery.isPending ? <p className="text-xs text-muted-foreground">Loading installations...</p> : installationsQuery.isError ? <p className="text-xs text-destructive">GitHub installations could not be loaded.</p> : installationsQuery.data.installations.length ? <div className="overflow-hidden rounded-lg border">{installationsQuery.data.installations.map((installation) => <div key={installation.installation_id} className="flex items-center gap-3 border-b p-4 last:border-b-0"><GithubLogoIcon size={18} /><div><p className="text-xs font-semibold">{installation.account_login}</p><p className="mt-1 font-mono text-[10px] text-muted-foreground">Installation {installation.installation_id}</p></div><StatusBadge className="ml-auto" tone={installation.suspended ? "warning" : "success"}>{installation.suspended ? "Suspended" : "Connected"}</StatusBadge></div>)}</div> : <div className="rounded-lg border border-dashed p-6 text-center"><GithubLogoIcon className="mx-auto text-muted-foreground" size={22} /><p className="mt-3 text-sm font-semibold">No GitHub installation connected</p><p className="mt-1 text-xs text-muted-foreground">Complete GitHub App setup before adding private services.</p></div>}
-        <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={syncInstallations.isPending} onClick={() => syncInstallations.mutate()}><GithubLogoIcon />{syncInstallations.isPending ? "Synchronizing..." : "Sync installations"}</Button><Button asChild variant="outline"><Link to="/onboarding">Open GitHub App setup</Link></Button></div>
+        {githubAppQuery.isPending ? <div className="h-20 animate-pulse rounded-lg bg-muted" /> : githubAppQuery.isError ? <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4"><p className="text-xs text-destructive">GitHub App configuration could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => githubAppQuery.refetch()}>Retry</Button></div> : githubApp?.configured ? <div className="flex items-center gap-3 rounded-lg border p-4"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-foreground text-background"><GithubLogoIcon size={18} weight="fill" /></span><div className="min-w-0"><p className="truncate text-xs font-semibold">{githubApp.slug || `GitHub App ${githubApp.app_id}`}</p><p className="mt-1 text-[10px] text-muted-foreground">Credentials stored and webhook verification enabled</p></div><StatusBadge className="ml-auto" tone="success">Configured</StatusBadge></div> : <div className="rounded-lg border border-dashed p-6 text-center"><GithubLogoIcon className="mx-auto text-muted-foreground" size={22} /><p className="mt-3 text-sm font-semibold">GitHub App is not configured</p><p className="mt-1 text-xs text-muted-foreground">Complete setup before adding private repository services.</p></div>}
+        {githubApp?.configured && (installationsQuery.isPending ? <p className="text-xs text-muted-foreground">Loading installations...</p> : installationsQuery.isError ? <p className="text-xs text-destructive">GitHub installations could not be loaded.</p> : installationsQuery.data.installations.length ? <div className="overflow-hidden rounded-lg border">{installationsQuery.data.installations.map((installation) => <div key={installation.installation_id} className="flex items-center gap-3 border-b p-4 last:border-b-0"><GithubLogoIcon size={18} /><div><p className="text-xs font-semibold">{installation.account_login}</p><p className="mt-1 font-mono text-[10px] text-muted-foreground">Installation {installation.installation_id}</p></div><StatusBadge className="ml-auto" tone={installation.suspended ? "warning" : "success"}>{installation.suspended ? "Suspended" : "Connected"}</StatusBadge></div>)}</div> : <div className="rounded-lg border border-dashed p-5 text-center"><p className="text-xs font-semibold">No installations synchronized</p><p className="mt-1 text-[10px] text-muted-foreground">Install this App on a GitHub account or organization, then synchronize.</p></div>)}
+        <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={!githubApp?.configured || syncInstallations.isPending || disconnectGitHubApp.isPending} onClick={() => syncInstallations.mutate()}><GithubLogoIcon />{syncInstallations.isPending ? "Synchronizing..." : "Sync installations"}</Button><Button asChild variant="outline"><Link to="/onboarding">{githubApp?.configured ? "Review GitHub App setup" : "Configure GitHub App"}</Link></Button>{githubApp?.configured && <ConfirmationAction title="Disconnect the GitHub App from HostForge?" description="This removes locally stored App credentials and synchronized installation records. Existing services keep their repository configuration, but private-source builds and webhook deployments will fail until a GitHub App is configured again. This does not uninstall the App on GitHub." confirmLabel="Disconnect GitHub App" destructive onConfirm={() => disconnectGitHubApp.mutate()} trigger={<Button variant="destructive" disabled={disconnectGitHubApp.isPending}><TrashIcon />{disconnectGitHubApp.isPending ? "Disconnecting..." : "Disconnect"}</Button>} />}</div>
+        {githubResult && <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-[11px] text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/20 dark:text-emerald-200">{githubResult}</p>}
         {syncInstallations.isError && <p role="alert" className="text-xs text-destructive">{mutationMessage(syncInstallations.error)}</p>}
+        {disconnectGitHubApp.isError && <p role="alert" className="text-xs text-destructive">{mutationMessage(disconnectGitHubApp.error)}</p>}
       </Section>
 
       <Section title="Networking and Caddy" description="Detected addresses, route paths, and safe operator actions.">
@@ -109,13 +132,14 @@ export function GlobalSettings() {
 export function ApplicationSettings({ applicationID }: { applicationID: string }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const toast = useToast()
   const query = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
   const [draft, setDraft] = useState<{ name: string; description: string } | null>(null)
   const update = useMutation({
     mutationFn: (input: { name?: string; description?: string; archived?: boolean }) => api.updateApplication(applicationID, input),
     onSuccess: async () => { setDraft(null); await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }); await queryClient.invalidateQueries({ queryKey: queryKeys.applications }) },
   })
-  const remove = useMutation({ mutationFn: () => api.deleteApplication(applicationID), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.applications }); navigate("/applications", { replace: true }) } })
+  const remove = useMutation({ mutationFn: () => api.deleteApplication(applicationID), onSuccess: async (result) => { await queryClient.invalidateQueries({ queryKey: queryKeys.applications }); if (result.routing_warning) toast(`Application deleted, but Caddy routing cleanup needs attention: ${result.routing_warning.replaceAll("_", " ")}. Run route synchronization from Settings.`, { tone: "warning", duration: 15000 }); else toast("Application deleted."); navigate("/applications", { replace: true }) } })
   if (query.isPending) return <Loading />
   if (query.isError) return <ErrorState retry={() => query.refetch()} />
   const application = query.data.application
@@ -126,7 +150,8 @@ export function ApplicationSettings({ applicationID }: { applicationID: string }
       <Section title="General" description="Application identity shared by every environment and service." footer={<Button disabled={update.isPending || !form.name.trim()} onClick={() => update.mutate({ name: form.name.trim(), description: form.description.trim() })}>{update.isPending ? "Saving..." : "Save changes"}</Button>}>
         <Field label="Application name"><Input value={form.name} onChange={(event) => setDraft({ ...form, name: event.target.value })} className="h-10 bg-background text-xs" /></Field>
         <Field label="Description"><Textarea value={form.description} onChange={(event) => setDraft({ ...form, description: event.target.value })} className="min-h-28 resize-none bg-background text-xs" /></Field>
-        <div className="overflow-hidden rounded-lg border"><Row label="Environments" value={query.data.environments.map((environment) => environment.name).join(", ")} /><Row label="Services" value={query.data.services.length} /><Row label="Created" value={new Date(application.created_at).toLocaleString()} /></div>
+        <div className="overflow-hidden rounded-lg border"><Row label="Services" value={query.data.services.length} /><Row label="Created" value={new Date(application.created_at).toLocaleString()} /></div>
+        <div><p className="text-xs font-semibold">Environment labels</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Rename labels shown to operators without changing stable environment IDs or deployment targeting.</p><div className="mt-3 space-y-3">{query.data.environments.map((environment) => <EnvironmentNameEditor key={environment.id + environment.updated_at} applicationID={applicationID} environment={environment} />)}</div></div>
         {update.isError && <p role="alert" className="text-xs text-destructive">{mutationMessage(update.error)}</p>}
       </Section>
       <Section title="Lifecycle" description="Archive or permanently remove this application.">
@@ -138,9 +163,27 @@ export function ApplicationSettings({ applicationID }: { applicationID: string }
   </Page>
 }
 
+function EnvironmentNameEditor({ applicationID, environment }: { applicationID: string; environment: EnvironmentDTO }) {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  const [name, setName] = useState(environment.name)
+  const update = useMutation({
+    mutationFn: () => api.updateEnvironment(applicationID, environment.id, { name: name.trim() }),
+    onSuccess: async (result) => {
+      setName(result.environment.name)
+      toast(`${result.environment.kind === "production" ? "Production" : "Staging"} environment renamed.`)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) })
+    },
+  })
+  const dirty = Boolean(name.trim()) && name.trim() !== environment.name
+
+  return <div className="rounded-lg border bg-muted/20 p-3"><div className="mb-2 flex items-center justify-between gap-3"><span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{environment.kind}</span><StatusBadge tone="neutral">{environment.slug}</StatusBadge></div><div className="flex flex-col gap-2 sm:flex-row"><Input value={name} onChange={(event) => setName(event.target.value)} className="h-9 min-w-0 flex-1 bg-background text-xs" aria-label={`${environment.kind} environment name`} /><Button size="sm" variant="outline" disabled={!dirty || update.isPending} onClick={() => update.mutate()}>{update.isPending ? "Saving..." : "Save label"}</Button></div>{update.isError && <p role="alert" className="mt-2 text-[11px] text-destructive">{mutationMessage(update.error)}</p>}</div>
+}
+
 export function ServiceSettings({ applicationID, serviceID }: { applicationID: string; serviceID: string }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const toast = useToast()
   const query = useQuery({ queryKey: queryKeys.service(serviceID), queryFn: ({ signal }) => api.service(serviceID, signal) })
   const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
   const [draft, setDraft] = useState<Partial<ServiceDTO>>({})
@@ -148,7 +191,7 @@ export function ServiceSettings({ applicationID, serviceID }: { applicationID: s
     mutationFn: () => api.updateService(serviceID, draft),
     onSuccess: async () => { setDraft({}); await queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) }); await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }) },
   })
-  const remove = useMutation({ mutationFn: () => api.deleteService(serviceID), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }); navigate("/applications/" + applicationID + "/services", { replace: true }) } })
+  const remove = useMutation({ mutationFn: () => api.deleteService(serviceID), onSuccess: async (result) => { await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }); if (result.routing_warning) toast(`Service deleted, but Caddy routing cleanup needs attention: ${result.routing_warning.replaceAll("_", " ")}. Run route synchronization from Settings.`, { tone: "warning", duration: 15000 }); else toast("Service deleted."); navigate("/applications/" + applicationID + "/services", { replace: true }) } })
   if (query.isPending || applicationQuery.isPending) return <Loading />
   if (query.isError || applicationQuery.isError) return <ErrorState retry={() => { query.refetch(); applicationQuery.refetch() }} />
   const service = { ...query.data.service, ...draft }

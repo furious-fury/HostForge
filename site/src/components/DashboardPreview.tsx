@@ -137,7 +137,7 @@ export function DashboardPreview() {
                     </span>
                   </li>
                   <li>
-                    <span className="block border-l-2 border-transparent px-2 py-1.5 text-[11px] text-muted">Projects</span>
+                    <span className="block border-l-2 border-transparent px-2 py-1.5 text-[11px] text-muted">Applications</span>
                   </li>
                   <li>
                     <span className="block border-l-2 border-transparent px-2 py-1.5 text-[11px] text-muted">
@@ -201,7 +201,7 @@ export function DashboardPreview() {
                   ⌕
                 </span>
                 <div className="mono truncate border border-border bg-surface-alt py-1.5 pl-6 pr-10 text-[10px] text-muted">
-                  Search projects and deployments
+                  Search applications and services
                 </div>
                 <span className="mono pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 border border-border px-1 py-0.5 text-[8px] uppercase text-muted">
                   {modKey}K
@@ -239,17 +239,17 @@ export function DashboardPreview() {
                   All deployments
                 </span>
                 <span className="inline-flex border border-border-strong bg-transparent px-2 py-1 text-[8px] font-semibold uppercase tracking-wider text-text">
-                  Open Projects
+                  Open Applications
                 </span>
                 <span className="inline-flex border border-primary bg-primary px-2 py-1 text-[8px] font-semibold uppercase tracking-wider text-primary-ink">
-                  + New Project
+                  + New Application
                 </span>
               </div>
             </header>
 
             <div className="mt-2.5 grid grid-cols-2 gap-1.5 xl:grid-cols-4">
               {[
-                { label: "Active Projects", value: "38", tone: "text-text" as const },
+                { label: "Applications", value: "38", tone: "text-text" as const },
                 { label: "Deploys (24h)", value: "164", tone: "text-info" as const },
                 { label: "Failed (24h)", value: "0", tone: "text-success" as const },
                 { label: "Containers Running", value: "36", tone: "text-success" as const },
@@ -292,14 +292,14 @@ export function DashboardPreview() {
                     <span className="mono text-[8px] font-semibold uppercase tracking-wider text-muted">
                       All deployments →
                     </span>
-                    <span className="mono text-[8px] font-semibold uppercase tracking-wider text-muted">Projects →</span>
+                    <span className="mono text-[8px] font-semibold uppercase tracking-wider text-muted">Applications →</span>
                   </div>
                 </header>
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[28rem] table-fixed text-left text-[9px]">
                     <thead>
                       <tr className="mono border-b border-border text-[8px] font-semibold uppercase tracking-[0.16em] text-muted">
-                        <th className="w-[26%] px-2 py-1">Project</th>
+                        <th className="w-[26%] px-2 py-1">Service</th>
                         <th className="w-[10%] px-2 py-1">Stack</th>
                         <th className="w-[14%] px-2 py-1">Commit</th>
                         <th className="w-[16%] px-2 py-1">Status</th>
@@ -411,10 +411,10 @@ export function DashboardPreview() {
                     </div>
                     <div className="flex flex-col gap-1">
                       <span className="inline-flex justify-center border border-primary bg-primary px-2 py-1 text-center text-[8px] font-semibold uppercase tracking-wider text-primary-ink">
-                        + New Project
+                        + New Application
                       </span>
                       <span className="inline-flex justify-center border border-border-strong bg-transparent px-2 py-1 text-center text-[8px] font-semibold uppercase tracking-wider text-text">
-                        Open Projects
+                        Open Applications
                       </span>
                     </div>
                   </div>

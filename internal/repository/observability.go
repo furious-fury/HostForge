@@ -245,7 +245,7 @@ WHERE 1=1`
 }
 
 func scanDeployStepRows(rows *sql.Rows) ([]DeployStepRow, error) {
-	var out []DeployStepRow
+	out := make([]DeployStepRow, 0)
 	for rows.Next() {
 		var r DeployStepRow
 		var dur sql.NullInt64
@@ -261,7 +261,7 @@ func scanDeployStepRows(rows *sql.Rows) ([]DeployStepRow, error) {
 }
 
 func scanDeployStepRowsWithContext(rows *sql.Rows) ([]DeployStepRow, error) {
-	var out []DeployStepRow
+	out := make([]DeployStepRow, 0)
 	for rows.Next() {
 		var r DeployStepRow
 		var dur sql.NullInt64

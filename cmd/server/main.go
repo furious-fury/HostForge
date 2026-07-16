@@ -151,6 +151,7 @@ func runServer(log *slog.Logger, args []string) int {
 
 	store := repository.New(db)
 	services.StartCaddyCertPollLoop(log, cfg, store, obs.WithStore(context.Background(), store))
+	startServiceMetricSampler(context.Background(), log, store)
 	webhookLimiter := newFixedWindowLimiter(cfg.WebhookRateLimitPerMinute, time.Minute)
 
 	hostReader := hostmetrics.DefaultReader(hostmetrics.ParseReaderOptionsFromEnv())
@@ -221,6 +222,7 @@ type server struct {
 	hostSnapCache      hostSnapshotCache
 	envSealer          *envcrypt.Sealer
 	appCache           *appClientHolder
+	githubRepoLister   githubRepositoryLister
 	deploymentCancelMu sync.Mutex
 	deploymentCancels  map[string]context.CancelFunc
 }

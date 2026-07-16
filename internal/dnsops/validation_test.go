@@ -1,10 +1,23 @@
 package dnsops
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 )
+
+func TestCheckRegistrarARecords_unknownWithoutExpectedIP(t *testing.T) {
+	checks := CheckRegistrarARecords(context.Background(), []string{"API.EXAMPLE.COM", "api.example.com", "www.example.com"}, "", 0)
+	if len(checks) != 2 {
+		t.Fatalf("got %d checks, want 2", len(checks))
+	}
+	for _, check := range checks {
+		if check.Status != "unknown" || check.ResolvedIPv4 == nil {
+			t.Fatalf("unexpected check: %+v", check)
+		}
+	}
+}
 
 func TestValidateDomainName_empty(t *testing.T) {
 	if err := ValidateDomainName(""); !errors.Is(err, ErrDomainNameEmpty) {

@@ -12,8 +12,8 @@ const (
 	MaxEnvKeyLen = 128
 	// MaxEnvValueLen is the max length of a UTF-8 env value in bytes.
 	MaxEnvValueLen = 8 * 1024
-	// MaxEnvVarsPerProject caps rows per project.
-	MaxEnvVarsPerProject = 100
+	// MaxEnvVarsPerEnvironment caps variables within an application environment.
+	MaxEnvVarsPerEnvironment = 100
 )
 
 // ValueLast4 returns up to the last four characters of plaintext for UI hints.

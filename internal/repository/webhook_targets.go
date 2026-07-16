@@ -23,7 +23,7 @@ func (s *Store) ListAutoDeployTargets(ctx context.Context) ([]AutoDeployTarget, 
 		return nil, err
 	}
 	defer rows.Close()
-	var out []AutoDeployTarget
+	out := make([]AutoDeployTarget, 0)
 	for rows.Next() {
 		var item AutoDeployTarget
 		if err := rows.Scan(&item.ServiceID, &item.EnvironmentID, &item.RepoURL, &item.Branch); err != nil {

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -159,6 +160,10 @@ func (s *server) handleDeploymentLogsLive(w http.ResponseWriter, r *http.Request
 		source = defaultLogSource(deployment)
 	}
 	resumeCursor := parseQueryInt64(r, "cursor", 0)
+	applicationID := ""
+	if service, lookupErr := s.store.GetService(r.Context(), deployment.ServiceID); lookupErr == nil {
+		applicationID = service.ApplicationID
+	}
 
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
 	if format == "" {
@@ -215,9 +220,9 @@ func (s *server) handleDeploymentLogsLive(w http.ResponseWriter, r *http.Request
 
 	switch source {
 	case "build":
-		s.streamBuildLogJSON(ctx, reqLog, sink, deployment, resumeCursor)
+		s.streamBuildLogJSON(ctx, reqLog, sink, deployment, applicationID, resumeCursor)
 	case "container":
-		s.streamContainerLogJSON(ctx, reqLog, sink, deploymentID)
+		s.streamContainerLogJSON(ctx, reqLog, sink, deployment, applicationID)
 	default:
 		_ = sink.writeJSON(map[string]any{
 			"t":    deploylogs.TypeError,
@@ -296,7 +301,7 @@ func (s *server) streamContainerLogRaw(ctx context.Context, sink *wsLogSink, dep
 	}
 }
 
-func (s *server) streamBuildLogJSON(ctx context.Context, log *slog.Logger, sink *wsLogSink, deployment models.Deployment, resumeCursor int64) {
+func (s *server) streamBuildLogJSON(ctx context.Context, log *slog.Logger, sink *wsLogSink, deployment models.Deployment, applicationID string, resumeCursor int64) {
 	path := strings.TrimSpace(deployment.LogsPath)
 	if path == "" {
 		_ = sink.writeJSON(map[string]any{"t": deploylogs.TypeError, "code": "log_path_empty", "msg": "deployment log path is empty"})
@@ -326,13 +331,16 @@ func (s *server) streamBuildLogJSON(ctx context.Context, log *slog.Logger, sink 
 	}
 
 	_ = sink.writeJSON(map[string]any{
-		"t":             deploylogs.TypeHello,
-		"v":             deploylogs.ProtocolVersion,
-		"source":        "build",
-		"resume":        true,
-		"eof":           eof,
-		"cursor":        cursor,
-		"deployment_id": deployment.ID,
+		"t":              deploylogs.TypeHello,
+		"v":              deploylogs.ProtocolVersion,
+		"source":         "build",
+		"resume":         true,
+		"eof":            eof,
+		"cursor":         cursor,
+		"deployment_id":  deployment.ID,
+		"application_id": applicationID,
+		"service_id":     deployment.ServiceID,
+		"environment_id": deployment.EnvironmentID,
 	})
 
 	if cursor < eof {
@@ -346,21 +354,67 @@ func (s *server) streamBuildLogJSON(ctx context.Context, log *slog.Logger, sink 
 		cursor = eof
 	}
 
+	var currentOffset atomic.Int64
+	currentOffset.Store(cursor)
 	onRotated := func() error {
+		currentOffset.Store(0)
 		_ = sink.writeJSON(map[string]any{"t": deploylogs.TypeResync, "reason": "rotated"})
 		return nil
 	}
 
-	err := logsapi.FollowFileFromOffset(ctx, path, cursor, 500*time.Millisecond, onRotated, func(data []byte, endOffset int64) error {
-		if len(data) == 0 {
+	followCtx, stopFollow := context.WithCancel(ctx)
+	defer stopFollow()
+	followDone := make(chan error, 1)
+	go func() {
+		followDone <- logsapi.FollowFileFromOffset(followCtx, path, cursor, 500*time.Millisecond, onRotated, func(data []byte, endOffset int64) error {
+			if len(data) == 0 {
+				return nil
+			}
+			if err := emitBuildLogJSONChunks(sink, data, endOffset); err != nil {
+				return err
+			}
+			currentOffset.Store(endOffset)
 			return nil
+		})
+	}()
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case err := <-followDone:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				log.Warn("deployment build log follow ended", "deployment_id", deployment.ID, "err", err)
+				_ = sink.writeJSON(map[string]any{"t": deploylogs.TypeEnd, "reason": "stream_error", "detail": err.Error()})
+			}
+			return
+		case <-ticker.C:
+			latest, err := s.store.GetServiceDeployment(ctx, deployment.ID)
+			if err != nil || !deploymentStatusTerminal(latest.Status) {
+				continue
+			}
+			stopFollow()
+			<-followDone
+			finalEOF := currentOffset.Load()
+			if stat, statErr := os.Stat(path); statErr == nil {
+				finalEOF = stat.Size()
+				if start := currentOffset.Load(); start < finalEOF {
+					if catchUpErr := s.emitBuildLogCatchUp(ctx, sink, path, start, finalEOF); catchUpErr != nil {
+						_ = sink.writeJSON(map[string]any{"t": deploylogs.TypeEnd, "reason": "catch_up_error", "status": latest.Status, "eof": start})
+						return
+					}
+				}
+			}
+			_ = sink.writeJSON(map[string]any{"t": deploylogs.TypeEnd, "reason": "deployment_terminal", "status": latest.Status, "eof": finalEOF})
+			return
 		}
-		return emitBuildLogJSONChunks(sink, data, endOffset)
-	})
-	if err != nil && !errors.Is(err, context.Canceled) {
-		log.Warn("deployment build log follow ended", "deployment_id", deployment.ID, "err", err)
-		_ = sink.writeJSON(map[string]any{"t": deploylogs.TypeEnd, "reason": "stream_error", "detail": err.Error()})
 	}
+}
+
+func deploymentStatusTerminal(status string) bool {
+	return status == models.DeploymentSuccess || status == models.DeploymentFailed || status == models.DeploymentCancelled
 }
 
 func emitBuildLogJSONChunks(sink *wsLogSink, data []byte, endOffset int64) error {
@@ -468,8 +522,8 @@ func (w *containerJSONWriter) Close() error {
 	return w.flush()
 }
 
-func (s *server) streamContainerLogJSON(ctx context.Context, log *slog.Logger, sink *wsLogSink, deploymentID string) {
-	containerRec, err := s.store.GetContainerByDeploymentID(ctx, deploymentID)
+func (s *server) streamContainerLogJSON(ctx context.Context, log *slog.Logger, sink *wsLogSink, deployment models.Deployment, applicationID string) {
+	containerRec, err := s.store.GetContainerByDeploymentID(ctx, deployment.ID)
 	if err != nil {
 		_ = sink.writeJSON(map[string]any{"t": deploylogs.TypeError, "code": "container_not_found", "msg": "container record not found for deployment"})
 		return
@@ -482,12 +536,15 @@ func (s *server) streamContainerLogJSON(ctx context.Context, log *slog.Logger, s
 	defer cli.Close()
 
 	_ = sink.writeJSON(map[string]any{
-		"t":             deploylogs.TypeHello,
-		"v":             deploylogs.ProtocolVersion,
-		"source":        "container",
-		"resume":        false,
-		"deployment_id": deploymentID,
-		"container_id":  containerRec.DockerContainerID,
+		"t":              deploylogs.TypeHello,
+		"v":              deploylogs.ProtocolVersion,
+		"source":         "container",
+		"resume":         false,
+		"deployment_id":  deployment.ID,
+		"application_id": applicationID,
+		"service_id":     deployment.ServiceID,
+		"environment_id": deployment.EnvironmentID,
+		"container_id":   containerRec.DockerContainerID,
 	})
 
 	out := &containerJSONWriter{sink: sink}
@@ -501,7 +558,7 @@ func (s *server) streamContainerLogJSON(ctx context.Context, log *slog.Logger, s
 		streamErr = closeErr
 	}
 	if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
-		log.Warn("deployment container log stream ended", "deployment_id", deploymentID, "err", streamErr)
+		log.Warn("deployment container log stream ended", "deployment_id", deployment.ID, "err", streamErr)
 		_ = sink.writeJSON(map[string]any{"t": deploylogs.TypeEnd, "reason": "stream_error", "detail": streamErr.Error()})
 	}
 }

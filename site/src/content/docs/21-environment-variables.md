@@ -59,7 +59,7 @@ The **`hostforge-server`** process reads configuration from the environment (and
 | `HOSTFORGE_DNS_DETECT_IPV6_URL` | Plain-text IPv6 discovery URL. |
 | `HOSTFORGE_DNS_DETECT_TIMEOUT_MS` | Discovery timeout (default `2500`). |
 
-## Project env encryption (optional)
+## Application and service variable encryption
 
 | Variable | Purpose |
 |----------|---------|

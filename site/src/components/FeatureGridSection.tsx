@@ -9,8 +9,8 @@ type Feature = {
 const FEATURES: Feature[] = [
   {
     eyebrow: "01",
-    title: "Git → Nixpacks → Docker",
-    body: "Clone any repo, auto-detect the stack with Nixpacks, and ship a Docker image tagged with a deterministic UTC build id.",
+    title: "GitHub → Railpack → Docker",
+    body: "Select a GitHub App repository and branch, detect its stack with Railpack, and build an isolated image with BuildKit.",
   },
   {
     eyebrow: "02",
@@ -20,12 +20,12 @@ const FEATURES: Feature[] = [
   {
     eyebrow: "03",
     title: "Live WebSocket logs",
-    body: "Stream build + runtime logs straight from the daemon into the control plane and CLI with no polling.",
+    body: "Stream resumable build and runtime logs from the server into the authenticated control plane.",
   },
   {
     eyebrow: "04",
     title: "Observability built in",
-    body: "HTTP access logs, deploy step timings, and failure reasons surfaced per project — no external stack required.",
+    body: "HTTP access logs, deployment-step timings, service metrics, and failure reasons scoped by application and environment.",
   },
   {
     eyebrow: "05",
@@ -34,8 +34,8 @@ const FEATURES: Feature[] = [
   },
   {
     eyebrow: "06",
-    title: "Encrypted project env",
-    body: "Per-project environment variables stored encrypted at rest and injected into containers at deploy time.",
+    title: "Encrypted environment config",
+    body: "Application variables and service overrides are encrypted at rest and injected only into the targeted environment deployment.",
   },
   {
     eyebrow: "07",

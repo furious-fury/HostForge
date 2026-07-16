@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hostforge/hostforge/internal/config"
@@ -17,11 +18,19 @@ import (
 
 // SuggestedRecord is one row to enter in a DNS manager (semantics vary by provider UI).
 type SuggestedRecord struct {
-	Type     string `json:"type"`               // A or AAAA
-	Name     string `json:"name"`               // @, www, or subdomain label
-	Value    string `json:"value"`              // IPv4 or IPv6
+	Type     string `json:"type"`                // A or AAAA
+	Name     string `json:"name"`                // @, www, or subdomain label
+	Value    string `json:"value"`               // IPv4 or IPv6
 	ZoneHint string `json:"zone_hint,omitempty"` // DNS zone apex (best-effort)
 	Note     string `json:"note,omitempty"`
+}
+
+// RegistrarCheck summarizes public A-record resolution for one configured hostname.
+type RegistrarCheck struct {
+	Hostname     string   `json:"hostname"`
+	Status       string   `json:"status"` // ok | pending | unknown | lookup_error
+	ExpectedIPv4 string   `json:"expected_ipv4,omitempty"`
+	ResolvedIPv4 []string `json:"resolved_ipv4"`
 }
 
 // Guidance is returned with domain APIs so operators can update DNS without guessing.
@@ -31,8 +40,51 @@ type Guidance struct {
 	IPv4Source string            `json:"ipv4_source"` // override | detected | unknown
 	IPv6Source string            `json:"ipv6_source"` // override | detected | unknown | omitted
 	Records    []SuggestedRecord `json:"records"`
-	Steps      []string            `json:"steps,omitempty"` // short numbered instructions per hostname
+	Checks     []RegistrarCheck  `json:"checks,omitempty"`
+	Steps      []string          `json:"steps,omitempty"` // short numbered instructions per hostname
 	Message    string            `json:"message,omitempty"`
+}
+
+// CheckRegistrarARecords checks hostnames concurrently while preserving input order.
+// It is intentionally operator-triggered because public DNS lookups can be slow.
+func CheckRegistrarARecords(ctx context.Context, hostnames []string, expectedIPv4 string, lookupTimeout time.Duration) []RegistrarCheck {
+	names := make([]string, 0, len(hostnames))
+	seen := make(map[string]struct{}, len(hostnames))
+	for _, raw := range hostnames {
+		hostname := strings.TrimSpace(strings.ToLower(raw))
+		if hostname == "" {
+			continue
+		}
+		if _, exists := seen[hostname]; exists {
+			continue
+		}
+		seen[hostname] = struct{}{}
+		names = append(names, hostname)
+	}
+
+	checks := make([]RegistrarCheck, len(names))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 6)
+	for index, hostname := range names {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				checks[index] = RegistrarCheck{Hostname: hostname, Status: "lookup_error", ExpectedIPv4: expectedIPv4, ResolvedIPv4: []string{}}
+				return
+			}
+			status, resolved := CheckRegistrarARecord(ctx, hostname, expectedIPv4, lookupTimeout)
+			if resolved == nil {
+				resolved = []string{}
+			}
+			checks[index] = RegistrarCheck{Hostname: hostname, Status: status, ExpectedIPv4: expectedIPv4, ResolvedIPv4: resolved}
+		}()
+	}
+	wg.Wait()
+	return checks
 }
 
 var fqdnPattern = regexp.MustCompile(`(?i)^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])\.)+[a-z]{2,}$`)

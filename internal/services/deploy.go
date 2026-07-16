@@ -424,12 +424,6 @@ func SyncCaddyRoutes(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 	return nil
 }
 
-// RollbackProject rolls traffic back to the previous successful deployment for a project.
-//
-// Since normal deploy cutover removes the previously running container, rollback creates a
-// fresh container from the previous deployment image, marks the current deployment FAILED so
-// route resolution picks the previous deployment, syncs Caddy, then removes the superseded
-// active container.
 func ValidateRuntimeConfig(cfg *config.Config) error {
 	if cfg.HostPort < -1 {
 		return fmt.Errorf("host port must be -1, 0, or >0")

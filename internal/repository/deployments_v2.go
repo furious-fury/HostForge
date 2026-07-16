@@ -119,7 +119,7 @@ func (s *Store) ListServiceDeployments(ctx context.Context, serviceID, environme
 		return nil, err
 	}
 	defer rows.Close()
-	var out []models.Deployment
+	out := make([]models.Deployment, 0)
 	for rows.Next() {
 		item, err := scanServiceDeployment(rows)
 		if err != nil {

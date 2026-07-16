@@ -9,6 +9,13 @@ import (
 
 const serviceMetricRetentionPerBinding = 720
 
+type ActiveServiceMetricTarget struct {
+	ServiceID         string
+	EnvironmentID     string
+	DeploymentID      string
+	DockerContainerID string
+}
+
 type ServiceMetricSample struct {
 	ID             int64   `json:"id"`
 	ServiceID      string  `json:"service_id"`
@@ -18,6 +25,37 @@ type ServiceMetricSample struct {
 	NetworkRXBytes int64   `json:"network_rx_bytes"`
 	NetworkTXBytes int64   `json:"network_tx_bytes"`
 	SampledAt      string  `json:"sampled_at"`
+}
+
+func (s *Store) ListActiveServiceMetricTargets(ctx context.Context) ([]ActiveServiceMetricTarget, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT se.service_id,se.environment_id,se.active_deployment_id,c.docker_container_id
+		FROM service_environments se
+		JOIN containers c ON c.id=(
+			SELECT latest.id FROM containers latest
+			WHERE latest.deployment_id=se.active_deployment_id
+			ORDER BY latest.created_at DESC,latest.id DESC LIMIT 1
+		)
+		WHERE se.desired_state='running'
+		  AND se.active_deployment_id<>''
+		  AND c.status='RUNNING'
+		ORDER BY se.service_id,se.environment_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list active service metric targets: %w", err)
+	}
+	defer rows.Close()
+	targets := make([]ActiveServiceMetricTarget, 0)
+	for rows.Next() {
+		var target ActiveServiceMetricTarget
+		if err := rows.Scan(&target.ServiceID, &target.EnvironmentID, &target.DeploymentID, &target.DockerContainerID); err != nil {
+			return nil, fmt.Errorf("scan active service metric target: %w", err)
+		}
+		targets = append(targets, target)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active service metric targets: %w", err)
+	}
+	return targets, nil
 }
 
 func (s *Store) InsertServiceMetricSample(ctx context.Context, sample ServiceMetricSample) (ServiceMetricSample, error) {

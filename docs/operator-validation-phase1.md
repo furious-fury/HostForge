@@ -2,12 +2,12 @@
 
 This runbook implements **[`task_list.md`](../task_list.md) → Detailed backlog → 1. Operator validation and exit criteria**: **1.1** (Docker), **1.2** (HTTPS + restarts), **1.3** (zero-downtime cutover), and includes a **Phase 8 production-proof template** for launch-gate validation.
 
-Use a **staging VPS** (or equivalent) for **1.2** and **1.3**. **1.1** can be run on any host with Docker Engine + Nixpacks + Git + network access to the sample repo.
+Use a **staging VPS** (or equivalent) for **1.2** and **1.3**. **1.1** can be run on any host with Docker Engine, Railpack, BuildKit, Git, and network access to the sample repo. The complete application/service acceptance gate is maintained in [`v2-staging-acceptance.md`](./v2-staging-acceptance.md).
 
 ### Automation (code in-repo)
 
 - **`hostforge validate docker`** — pings Docker Engine with the same client settings as `deploy` (`DOCKER_HOST`, etc.). Exit **0** if the daemon is reachable.
-- **`hostforge validate preflight`** — `validate docker` plus **`git`** and **`nixpacks`** on `PATH`.
+- **`hostforge validate preflight`** — `validate docker` plus **`git`**, **`railpack`**, and **`buildctl`** on `PATH`.
 - **`scripts/operator-validation-phase1.sh`** — end-to-end **§1.1**: preflight, golden-path `deploy -host-port 0`, HTTP **200**, `unless-stopped`, survives `docker restart`, then `docker stop` + `docker rm` and confirms the port is closed. From repo root: `./scripts/operator-validation-phase1.sh` (optional: `HOSTFORGE_BIN=./hostforge`, `REPO_URL=…`, `KEEP_HF_DATA=1`).
 
 | Item | Description | Status |
@@ -20,7 +20,7 @@ Use a **staging VPS** (or equivalent) for **1.2** and **1.3**. **1.1** can be ru
 
 ## Prerequisites (all items)
 
-- **Go** 1.22+, **Nixpacks** on `PATH`, **Docker Engine** reachable (`docker info` OK).
+- **Go** 1.22+, **Railpack** and **BuildKit** on `PATH`, **Docker Engine** reachable (`docker info` OK).
 - Built CLI: `go build -o hostforge ./cmd/cli` from repo root.
 - Optional isolated data dir: `export HF_DATA=/tmp/hostforge-operator-phase1` (use `HOSTFORGE_DATA_DIR` or `-data-dir`).
 
@@ -28,7 +28,8 @@ Use a **staging VPS** (or equivalent) for **1.2** and **1.3**. **1.1** can be ru
 
 ```bash
 docker info >/dev/null && echo "docker: ok"
-command -v nixpacks >/dev/null && nixpacks --version
+command -v railpack >/dev/null && railpack --version
+command -v buildctl >/dev/null && buildctl --version
 command -v caddy >/dev/null && caddy version   # needed for 1.2 / 1.3 on the VPS
 ```
 
@@ -70,7 +71,7 @@ command -v caddy >/dev/null && caddy version   # needed for 1.2 / 1.3 on the VPS
    curl -sS -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:<host_port>/"
    ```
 
-5. **Stop and remove** (HostForge does not ship a `hostforge container rm` today; use Docker CLI for this exit, or delete the project via management API which stops/removes containers — see README / server routes):
+5. **Stop and remove** (HostForge does not expose direct container deletion; use Docker CLI for this low-level test exit, or delete the owning service through the management UI/API):
 
    ```bash
    docker stop <container_id>

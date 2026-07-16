@@ -2,6 +2,8 @@
 
 All management endpoints require the existing session cookie. Errors use `{"status":"error","error":"code","message":"optional","fields":{}}`.
 
+Collection fields are always JSON arrays. Empty applications, services, deployments, metrics, events, GitHub resources, domains, variables, and observability results return `[]`, never `null`. The frontend API adapter also normalizes nullable collection fields for safe upgrades from older server builds.
+
 ## Authentication and bootstrap
 
 - `GET|POST|DELETE /auth/session`
@@ -25,6 +27,8 @@ Every application is created with production and staging. Creating an additional
 
 Application collection rows include `environment_health`, `service_count`, `healthy_service_count`, `domain_count`, and `latest_deployment`. Service detail includes environment binding state, the active release, persisted container state, domains, and the public Caddy URL when configured.
 
+Creating a service, or changing its source through `PATCH`, verifies that `github_installation_id` identifies a known, active installation and that `repo_url` is present in the installation's live GitHub repository list. Changing an environment binding branch verifies that the branch still exists in that repository. Non-source service edits, unchanged bindings, and an empty staging branch do not require GitHub availability. Validation failures use stable `fields` entries with `github_installation_required`, `github_installation_not_found`, `github_installation_suspended`, `repository_not_accessible`, or `branch_not_accessible`; upstream GitHub failures return `502` without persisting the requested change.
+
 ## Deployments and runtime
 
 - `GET /api/deployments`
@@ -43,6 +47,8 @@ Deployment filters are `application_id`, `service_id`, `environment_id`, `status
 
 Rollback accepts only a successful deployment with a recorded commit. It queues a new health-checked release and records the source in `rollback_of`.
 
+The authenticated live-log WebSocket defaults to JSON frames. Its `hello` frame includes `deployment_id`, `application_id`, `service_id`, `environment_id`, source, resumability, and byte cursor metadata. Build clients reconnect with `cursor`; a truncated or rotated file emits `resync`. When a deployment becomes `SUCCESS`, `FAILED`, or `CANCELLED`, the server catches up any final bytes and emits an `end` frame containing the terminal status and final EOF offset. Container streams explicitly report `resume: false`.
+
 ## Domains and variables
 
 - Domain CRUD: `/api/applications/:applicationID/environments/:environmentID/domains[/:domainID]`
@@ -50,13 +56,17 @@ Rollback accepts only a successful deployment with a recorded commit. It queues 
 
 Domain creation and updates require a target `service_id` bound to the selected application environment. Create, update, and delete restore database state if Caddy validation or synchronization fails. Variable creation may include `service_id` for an override. Secret plaintext is never returned; responses expose only metadata and `value_last4`.
 
+Domain collection responses include DNS record guidance and optional certificate-poll metadata. Pass `check_dns=1` on a domain collection request to perform operator-triggered public A-record checks. Each check reports `ok`, `pending`, `unknown`, or `lookup_error`, the expected server IPv4, and the IPv4 addresses observed. Domain mutation responses include `caddy_sync`; a failed Caddy validation or reload returns `502 caddy_sync_failed` and the database change is rolled back.
+
 ## Events, observability, and metrics
 
 - `GET /api/events`
 - `GET /api/observability/summary`
 - `GET /api/observability/requests`
 - `GET /api/observability/deploy-steps`
-- `GET /api/services/:serviceID/environments/:environmentID/metrics`
+- `GET /api/services/:serviceID/environments/:environmentID/metrics?points=360`
+
+Service metrics are sampled by the server every 10 seconds for each running active container and retained in SQLite, capped at 720 samples per service/environment binding. Reading the endpoint does not trigger collection. Responses include the newest `sample`, oldest-first `samples`, `sample_interval_seconds`, and stale metadata when the service is stopped or collection is delayed.
 
 Event filters are `application_id`, `service_id`, `type`, `date_from`, `date_to`, `cursor`, and `limit`.
 

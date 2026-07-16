@@ -1,3 +1,121 @@
+.hf-sidebar {
+  position: fixed;
+  inset-block: 0;
+  left: 0;
+  z-index: 50;
+  display: flex;
+  width: 15rem;
+  flex-direction: column;
+  border-right: 1px solid color-mix(in oklch, var(--border) 82%, var(--foreground));
+  background: color-mix(in oklch, var(--card) 68%, var(--muted));
+  box-shadow: 8px 0 26px rgb(31 35 30 / 0.07);
+  transition: transform 200ms ease;
+}
+
+.dark .hf-sidebar {
+  border-right-color: var(--border);
+  background: color-mix(in oklch, var(--card) 88%, var(--muted));
+  box-shadow: 10px 0 28px rgb(0 0 0 / 0.18);
+}
+
+.hf-nav-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.65rem;
+  border-radius: 0.45rem;
+  padding: 0.55rem 0.6rem;
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  font-weight: 550;
+  transition: color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.hf-nav-item:hover {
+  background: color-mix(in oklch, var(--muted) 82%, transparent);
+  color: var(--foreground);
+}
+
+.hf-nav-item-active,
+.hf-nav-item-active:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+
+.hf-topbar {
+  border-bottom-color: color-mix(in oklch, var(--border) 82%, var(--foreground));
+  background: color-mix(in oklch, var(--card) 74%, var(--muted));
+  box-shadow: 0 4px 20px rgb(31 35 30 / 0.06);
+}
+
+.dark .hf-topbar {
+  border-bottom-color: var(--border);
+  background: color-mix(in oklch, var(--card) 90%, var(--muted));
+  box-shadow: 0 4px 18px rgb(0 0 0 / 0.14);
+}
+
+.hf-command {
+  display: flex;
+  height: 2.25rem;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--card);
+  padding-inline: 0.7rem;
+  color: var(--muted-foreground);
+  box-shadow: 0 2px 10px rgb(31 35 30 / 0.05);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.hf-command:focus-within {
+  border-color: color-mix(in oklch, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 12%, transparent), 0 3px 12px rgb(31 35 30 / 0.07);
+}
+
+.hf-command-keys {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.hf-command-keys kbd,
+.hf-command-key {
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--muted);
+  padding: 0.1rem 0.3rem;
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-size: 0.6rem;
+  line-height: 1rem;
+}
+
+.hf-command-item[data-selected="true"] {
+  background: var(--accent) !important;
+  color: var(--accent-foreground);
+}
+
+.hf-command-item[data-selected="true"] .hf-command-item-icon {
+  border-color: color-mix(in oklch, var(--accent-foreground) 32%, var(--accent));
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.hf-command-item[data-selected="true"] .hf-command-item-detail,
+.hf-command-item[data-selected="true"] [cmdk-shortcuts],
+.hf-command-item[data-selected="true"] .hf-command-key {
+  color: var(--accent-foreground);
+}
+
+.hf-command-item[data-selected="true"] .hf-command-key {
+  border-color: color-mix(in oklch, var(--accent-foreground) 28%, transparent);
+  background: color-mix(in oklch, var(--accent-foreground) 12%, transparent);
+}
+
 .hf-app-summary {
   min-height: 7.75rem;
   border-right: 1px solid var(--border);

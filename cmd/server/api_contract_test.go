@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,12 +11,29 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hostforge/hostforge/internal/config"
+	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
 	"github.com/hostforge/hostforge/internal/database"
+	githubapp "github.com/hostforge/hostforge/internal/github/app"
 	"github.com/hostforge/hostforge/internal/models"
 	"github.com/hostforge/hostforge/internal/repository"
 )
+
+type fakeGitHubRepositoryLister struct {
+	repositories []githubapp.Repository
+	branches     []string
+	err          error
+}
+
+func (f fakeGitHubRepositoryLister) ListInstallationRepositories(context.Context, int64) ([]githubapp.Repository, error) {
+	return f.repositories, f.err
+}
+
+func (f fakeGitHubRepositoryLister) ListRepositoryBranches(context.Context, int64, string, string) ([]string, error) {
+	return f.branches, f.err
+}
 
 func newAPITestServer(t *testing.T) *server {
 	t.Helper()
@@ -24,7 +42,11 @@ func newAPITestServer(t *testing.T) *server {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return &server{log: slog.New(slog.NewTextHandler(io.Discard, nil)), cfg: &config.Config{}, store: repository.New(db)}
+	sealer, err := envcrypt.NewFromBase64Key(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &server{log: slog.New(slog.NewTextHandler(io.Discard, nil)), cfg: &config.Config{}, store: repository.New(db), envSealer: sealer}
 }
 
 func decodeResponse(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
@@ -65,8 +87,12 @@ func TestApplicationsV2CreateAndFetch(t *testing.T) {
 	payload := decodeResponse(t, get)
 	application := payload["application"].(map[string]any)
 	environments := payload["environments"].([]any)
+	services, servicesOK := payload["services"].([]any)
 	if application["name"] != "Payments" || len(environments) != 2 {
 		t.Fatalf("unexpected application response: %#v", payload)
+	}
+	if !servicesOK || len(services) != 0 {
+		t.Fatalf("empty services must be encoded as an array: %#v", payload["services"])
 	}
 }
 
@@ -95,6 +121,112 @@ func TestEnvironmentCreateContract(t *testing.T) {
 	}
 }
 
+func TestApplicationEnvironmentSubresourcesAreRouted(t *testing.T) {
+	s := newAPITestServer(t)
+	application, err := s.store.CreateApplication(context.Background(), "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := s.store.ListApplicationEnvironments(context.Background(), application.ID)
+	if err != nil || len(environments) == 0 {
+		t.Fatalf("list environments: %v, count=%d", err, len(environments))
+	}
+	service, err := s.store.CreateService(context.Background(), repository.CreateServiceInput{ApplicationID: application.ID, Name: "api", RepoURL: "https://github.com/acme/payments.git", InternalPort: 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "/api/applications/" + application.ID + "/environments/" + environments[0].ID
+
+	createDomain := httptest.NewRecorder()
+	s.handleApplications(createDomain, httptest.NewRequest(http.MethodPost, base+"/domains", strings.NewReader(`{"domain_name":"payments.example.test","service_id":"`+service.ID+`"}`)))
+	if createDomain.Code != http.StatusCreated {
+		t.Fatalf("create domain status=%d body=%s", createDomain.Code, createDomain.Body.String())
+	}
+	listDomains := httptest.NewRecorder()
+	s.handleApplications(listDomains, httptest.NewRequest(http.MethodGet, base+"/domains", nil))
+	if listDomains.Code != http.StatusOK {
+		t.Fatalf("list domains status=%d body=%s", listDomains.Code, listDomains.Body.String())
+	}
+	if domains := decodeResponse(t, listDomains)["domains"].([]any); len(domains) != 1 {
+		t.Fatalf("unexpected domains: %#v", domains)
+	}
+
+	createVariable := httptest.NewRecorder()
+	s.handleApplications(createVariable, httptest.NewRequest(http.MethodPost, base+"/variables", strings.NewReader(`{"key":"DATABASE_URL","value":"postgres://secret","service_id":"`+service.ID+`"}`)))
+	if createVariable.Code != http.StatusOK {
+		t.Fatalf("create variable status=%d body=%s", createVariable.Code, createVariable.Body.String())
+	}
+	variablePayload := decodeResponse(t, createVariable)
+	variable := variablePayload["variable"].(map[string]any)
+	if variable["value_last4"] != "cret" {
+		t.Fatalf("unexpected variable metadata: %#v", variable)
+	}
+	if strings.Contains(createVariable.Body.String(), "postgres://secret") || strings.Contains(createVariable.Body.String(), "value_ct") {
+		t.Fatalf("secret leaked in response: %s", createVariable.Body.String())
+	}
+	listVariables := httptest.NewRecorder()
+	s.handleApplications(listVariables, httptest.NewRequest(http.MethodGet, base+"/variables?service_id="+service.ID, nil))
+	if listVariables.Code != http.StatusOK {
+		t.Fatalf("list variables status=%d body=%s", listVariables.Code, listVariables.Body.String())
+	}
+	if variables := decodeResponse(t, listVariables)["variables"].([]any); len(variables) != 1 {
+		t.Fatalf("unexpected variables: %#v", variables)
+	}
+}
+
+func TestEnvironmentUpdateRecordsConfigurationEvent(t *testing.T) {
+	s := newAPITestServer(t)
+	application, err := s.store.CreateApplication(context.Background(), "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := s.store.ListApplicationEnvironments(context.Background(), application.ID)
+	if err != nil || len(environments) == 0 {
+		t.Fatalf("list environments: %v, count=%d", err, len(environments))
+	}
+	environment := environments[0]
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPatch, "/api/applications/"+application.ID+"/environments/"+environment.ID, strings.NewReader(`{"name":"Primary"}`))
+	s.handleApplications(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	updated := decodeResponse(t, recorder)["environment"].(map[string]any)
+	if updated["name"] != "Primary" || updated["id"] != environment.ID {
+		t.Fatalf("unexpected environment: %#v", updated)
+	}
+	events, err := s.store.ListPlatformEvents(context.Background(), application.ID, "", "configuration", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].EnvironmentID != environment.ID || events[0].Message != "Environment updated" || events[0].Detail != "Primary" {
+		t.Fatalf("unexpected environment events: %#v", events)
+	}
+}
+
+func TestEnvironmentUpdateRejectsEmptyName(t *testing.T) {
+	s := newAPITestServer(t)
+	application, err := s.store.CreateApplication(context.Background(), "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := s.store.ListApplicationEnvironments(context.Background(), application.ID)
+	if err != nil || len(environments) == 0 {
+		t.Fatalf("list environments: %v, count=%d", err, len(environments))
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPatch, "/api/applications/"+application.ID+"/environments/"+environments[0].ID, strings.NewReader(`{"name":"  "}`))
+	s.handleApplications(recorder, request)
+	assertAPIError(t, recorder, http.StatusBadRequest, "invalid_environment_name")
+	payload := decodeResponse(t, recorder)
+	fields, ok := payload["fields"].(map[string]any)
+	if !ok || fields["name"] != "required" {
+		t.Fatalf("unexpected field errors: %#v", payload)
+	}
+}
+
 func TestApplicationsV2RejectInvalidJSONAndMissingResource(t *testing.T) {
 	s := newAPITestServer(t)
 	invalid := httptest.NewRecorder()
@@ -104,6 +236,61 @@ func TestApplicationsV2RejectInvalidJSONAndMissingResource(t *testing.T) {
 	missing := httptest.NewRecorder()
 	s.handleApplications(missing, httptest.NewRequest(http.MethodGet, "/api/applications/missing", nil))
 	assertAPIError(t, missing, http.StatusNotFound, "application_not_found")
+}
+
+func TestApplicationDeleteRecordsDurableEvent(t *testing.T) {
+	s := newAPITestServer(t)
+	application, err := s.store.CreateApplication(context.Background(), "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	s.handleApplications(recorder, httptest.NewRequest(http.MethodDelete, "/api/applications/"+application.ID, nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if payload := decodeResponse(t, recorder); payload["status"] != "deleted" {
+		t.Fatalf("unexpected delete payload: %#v", payload)
+	}
+	if _, err := s.store.GetApplication(context.Background(), application.ID); err == nil {
+		t.Fatal("expected application to be deleted")
+	}
+	events, err := s.store.ListPlatformEvents(context.Background(), "", "", "application", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Message != "Application deleted" || events[0].Status != "deleted" || events[0].Detail != application.Name {
+		t.Fatalf("unexpected application deletion events: %#v", events)
+	}
+}
+
+func TestServiceDeleteRecordsDurableApplicationEvent(t *testing.T) {
+	s := newAPITestServer(t)
+	application, err := s.store.CreateApplication(context.Background(), "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := s.store.CreateService(context.Background(), repository.CreateServiceInput{ApplicationID: application.ID, Name: "api", RepoURL: "https://github.com/acme/payments.git", InternalPort: 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	s.handleServices(recorder, httptest.NewRequest(http.MethodDelete, "/api/services/"+service.ID, nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if _, err := s.store.GetService(context.Background(), service.ID); err == nil {
+		t.Fatal("expected service to be deleted")
+	}
+	events, err := s.store.ListPlatformEvents(context.Background(), application.ID, "", "service", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Message != "Service deleted" || events[0].Status != "deleted" || events[0].Detail != service.Name {
+		t.Fatalf("unexpected service deletion events: %#v", events)
+	}
 }
 
 func TestServicesV2RejectUnsafeRootDirectory(t *testing.T) {
@@ -117,6 +304,124 @@ func TestServicesV2RejectUnsafeRootDirectory(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/api/applications/"+application.ID+"/services", strings.NewReader(body))
 	s.handleApplications(recorder, request)
 	assertAPIError(t, recorder, http.StatusBadRequest, "invalid_root_directory")
+}
+
+func TestServicesV2RequireRepositoryFromActiveGitHubInstallation(t *testing.T) {
+	s := newAPITestServer(t)
+	application, err := s.store.CreateApplication(context.Background(), "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.UpsertGitHubInstallation(context.Background(), repository.UpsertGitHubInstallationInput{InstallationID: 42, AccountLogin: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+	s.githubRepoLister = fakeGitHubRepositoryLister{repositories: []githubapp.Repository{{CloneURL: "https://github.com/acme/payments.git"}}}
+	body := `{"name":"api","repo_url":"https://github.com/acme/payments.git","github_installation_id":42,"runtime":"auto","internal_port":3000,"health_check_path":"/health"}`
+	recorder := httptest.NewRecorder()
+	s.handleApplications(recorder, httptest.NewRequest(http.MethodPost, "/api/applications/"+application.ID+"/services", strings.NewReader(body)))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	service := decodeResponse(t, recorder)["service"].(map[string]any)
+	if service["repo_url"] != "https://github.com/acme/payments" || service["github_installation_id"] != float64(42) {
+		t.Fatalf("unexpected service source: %#v", service)
+	}
+}
+
+func TestServicesV2RejectRepositoryOutsideInstallation(t *testing.T) {
+	s := newAPITestServer(t)
+	application, err := s.store.CreateApplication(context.Background(), "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.UpsertGitHubInstallation(context.Background(), repository.UpsertGitHubInstallationInput{InstallationID: 42, AccountLogin: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+	s.githubRepoLister = fakeGitHubRepositoryLister{repositories: []githubapp.Repository{{CloneURL: "https://github.com/acme/allowed.git"}}}
+	body := `{"name":"api","repo_url":"https://github.com/acme/payments.git","github_installation_id":42,"runtime":"auto","internal_port":3000}`
+	recorder := httptest.NewRecorder()
+	s.handleApplications(recorder, httptest.NewRequest(http.MethodPost, "/api/applications/"+application.ID+"/services", strings.NewReader(body)))
+	assertAPIError(t, recorder, http.StatusUnprocessableEntity, "repository_not_accessible")
+	fields := decodeResponse(t, recorder)["fields"].(map[string]any)
+	if fields["repo_url"] != "not_accessible_by_installation" {
+		t.Fatalf("unexpected field error: %#v", fields)
+	}
+}
+
+func TestServicesV2RejectSuspendedGitHubInstallation(t *testing.T) {
+	s := newAPITestServer(t)
+	application, err := s.store.CreateApplication(context.Background(), "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.UpsertGitHubInstallation(context.Background(), repository.UpsertGitHubInstallationInput{InstallationID: 42, AccountLogin: "acme", Suspended: true}); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"name":"api","repo_url":"https://github.com/acme/payments.git","github_installation_id":42,"runtime":"auto","internal_port":3000}`
+	recorder := httptest.NewRecorder()
+	s.handleApplications(recorder, httptest.NewRequest(http.MethodPost, "/api/applications/"+application.ID+"/services", strings.NewReader(body)))
+	assertAPIError(t, recorder, http.StatusConflict, "github_installation_suspended")
+}
+
+func TestServicesV2AllowNonSourceUpdateWithoutGitHubLookup(t *testing.T) {
+	s := newAPITestServer(t)
+	application, err := s.store.CreateApplication(context.Background(), "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := s.store.CreateService(context.Background(), repository.CreateServiceInput{ApplicationID: application.ID, Name: "api", RepoURL: "https://github.com/acme/payments.git", GitHubInstallationID: 42, InternalPort: 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	s.handleServices(recorder, httptest.NewRequest(http.MethodPatch, "/api/services/"+service.ID, strings.NewReader(`{"name":"payments-api"}`)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	updated := decodeResponse(t, recorder)["service"].(map[string]any)
+	if updated["name"] != "payments-api" {
+		t.Fatalf("unexpected service: %#v", updated)
+	}
+}
+
+func TestServicesV2ValidateChangedEnvironmentBranch(t *testing.T) {
+	s := newAPITestServer(t)
+	application, err := s.store.CreateApplication(context.Background(), "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := s.store.ListApplicationEnvironments(context.Background(), application.ID)
+	if err != nil || len(environments) == 0 {
+		t.Fatalf("list environments: %v, count=%d", err, len(environments))
+	}
+	if err := s.store.UpsertGitHubInstallation(context.Background(), repository.UpsertGitHubInstallationInput{InstallationID: 42, AccountLogin: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := s.store.CreateService(context.Background(), repository.CreateServiceInput{ApplicationID: application.ID, Name: "api", RepoURL: "https://github.com/acme/payments", GitHubInstallationID: 42, InternalPort: 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/services/" + service.ID + "/environments/" + environments[0].ID
+	s.githubRepoLister = fakeGitHubRepositoryLister{branches: []string{"main"}}
+
+	rejected := httptest.NewRecorder()
+	s.handleServices(rejected, httptest.NewRequest(http.MethodPatch, path, strings.NewReader(`{"branch":"release","auto_deploy":true}`)))
+	assertAPIError(t, rejected, http.StatusUnprocessableEntity, "branch_not_accessible")
+	fields := decodeResponse(t, rejected)["fields"].(map[string]any)
+	if fields["branch"] != "not_found_in_repository" {
+		t.Fatalf("unexpected field error: %#v", fields)
+	}
+
+	s.githubRepoLister = fakeGitHubRepositoryLister{branches: []string{"main", "release"}}
+	accepted := httptest.NewRecorder()
+	s.handleServices(accepted, httptest.NewRequest(http.MethodPatch, path, strings.NewReader(`{"branch":"release","auto_deploy":true}`)))
+	if accepted.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", accepted.Code, accepted.Body.String())
+	}
+	binding := decodeResponse(t, accepted)["binding"].(map[string]any)
+	if binding["branch"] != "release" || binding["auto_deploy"] != true {
+		t.Fatalf("unexpected binding: %#v", binding)
+	}
 }
 
 func TestOnboardingUsesPatchContract(t *testing.T) {
@@ -211,6 +516,67 @@ func TestDeploymentsRejectInvalidCursor(t *testing.T) {
 	assertAPIError(t, recorder, http.StatusBadRequest, "invalid_cursor")
 }
 
+func TestDeploymentsRejectInvalidFilters(t *testing.T) {
+	s := newAPITestServer(t)
+	tests := []struct {
+		path string
+		code string
+	}{
+		{"/api/deployments?status=unknown", "invalid_status"},
+		{"/api/deployments?trigger=unknown", "invalid_trigger"},
+		{"/api/deployments?date_from=yesterday", "invalid_date_from"},
+		{"/api/deployments?date_to=tomorrow", "invalid_date_to"},
+		{"/api/deployments?date_from=2026-07-15T23%3A00%3A00Z&date_to=2026-07-15T01%3A00%3A00Z", "invalid_date_range"},
+	}
+	for _, test := range tests {
+		recorder := httptest.NewRecorder()
+		s.handleDeploymentsV2Collection(recorder, httptest.NewRequest(http.MethodGet, test.path, nil))
+		assertAPIError(t, recorder, http.StatusBadRequest, test.code)
+	}
+}
+
+func TestDeleteGitHubAppResetsOnboardingAndInstallations(t *testing.T) {
+	s := newAPITestServer(t)
+	if _, err := s.store.UpsertGitHubApp(context.Background(), repository.UpsertGitHubAppInput{AppID: 42, Slug: "hostforge-test", PrivateKeyCT: []byte("sealed")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.UpsertGitHubInstallation(context.Background(), repository.UpsertGitHubInstallationInput{InstallationID: 99, AccountLogin: "acme", AccountType: "Organization", TargetType: "Organization", RepoSelection: "selected"}); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	s.handleGitHubApp(recorder, httptest.NewRequest(http.MethodDelete, "/api/github/app", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	state, err := s.store.GetOnboardingState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.GitHubAppComplete {
+		t.Fatal("expected onboarding GitHub App state to reset")
+	}
+	installations, err := s.store.ListGitHubInstallations(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(installations) != 0 {
+		t.Fatalf("expected installations to be removed, got %d", len(installations))
+	}
+}
+
+func TestGitHubManifestExchangeUsesDocumentedRoute(t *testing.T) {
+	s := newAPITestServer(t)
+
+	documented := httptest.NewRecorder()
+	s.handleGitHubAppRoutes(documented, httptest.NewRequest(http.MethodPost, "/api/github/app/manifest/exchange", strings.NewReader(`{"code":"test"}`)))
+	assertAPIError(t, documented, http.StatusUnsupportedMediaType, "content_type_must_be_application_json")
+
+	legacy := httptest.NewRecorder()
+	s.handleGitHubAppRoutes(legacy, httptest.NewRequest(http.MethodPost, "/api/github/app/exchange", strings.NewReader(`{"code":"test"}`)))
+	assertAPIError(t, legacy, http.StatusNotFound, "route_not_found")
+}
+
 func TestObservabilityFeedsRejectInvalidPagination(t *testing.T) {
 	s := newAPITestServer(t)
 	for _, path := range []string{
@@ -229,6 +595,53 @@ func TestObservabilityFeedsRejectInvalidPagination(t *testing.T) {
 		if payload["status"] != "error" || payload["error"] == "" {
 			t.Fatalf("%s: malformed error: %#v", path, payload)
 		}
+	}
+}
+
+func TestServiceMetricsReadReturnsPersistedSamplesWithoutCollecting(t *testing.T) {
+	s := newAPITestServer(t)
+	ctx := context.Background()
+	application, err := s.store.CreateApplication(ctx, "Metrics", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := s.store.ListApplicationEnvironments(ctx, application.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := s.store.CreateService(ctx, repository.CreateServiceInput{ApplicationID: application.ID, Name: "api", RepoURL: "https://github.com/acme/api.git", InternalPort: 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.UpdateServiceEnvironment(ctx, service.ID, environments[0].ID, "main", false); err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := s.store.CreateServiceDeployment(ctx, repository.CreateServiceDeploymentInput{ServiceID: service.ID, EnvironmentID: environments[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.AttachContainer(ctx, repository.AttachContainerInput{DeploymentID: deployment.ID, DockerContainerID: "docker-metrics", InternalPort: 3000, HostPort: 18080}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.ActivateServiceDeployment(ctx, service.ID, environments[0].ID, deployment.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.InsertServiceMetricSample(ctx, repository.ServiceMetricSample{ServiceID: service.ID, EnvironmentID: environments[0].ID, CPUPercent: 7.5, SampledAt: time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	s.handleServiceMetricsV2(recorder, httptest.NewRequest(http.MethodGet, "/api/services/"+service.ID+"/environments/"+environments[0].ID+"/metrics?points=90", nil), service.ID, environments[0].ID)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	payload := decodeResponse(t, recorder)
+	if payload["supported"] != true || payload["sample_interval_seconds"] != float64(10) || len(payload["samples"].([]any)) != 1 {
+		t.Fatalf("unexpected metrics response: %#v", payload)
+	}
+	samples, err := s.store.ListServiceMetricSamples(ctx, service.ID, environments[0].ID, 10)
+	if err != nil || len(samples) != 1 {
+		t.Fatalf("metrics read mutated history: samples=%+v err=%v", samples, err)
 	}
 }
 

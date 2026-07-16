@@ -1,6 +1,6 @@
 import { useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { api, queryKeys } from "@/api"
+import { APIError, api, queryKeys, type CaddySyncOutcomeDTO, type DNSGuidanceDTO } from "@/api"
 import { Link } from "react-router-dom"
 import {
   ActivityIcon,
@@ -19,6 +19,7 @@ import {
   PlayIcon,
   PlusIcon,
   TrashIcon,
+  UploadSimpleIcon,
   WifiHighIcon,
 } from "@phosphor-icons/react"
 
@@ -33,6 +34,7 @@ import { Input } from "@/components/ui/input"
 import "@/operations.css"
 import { useToast } from "@/toast-provider"
 import { useDeploymentLogStream } from "@/use-deployment-log-stream"
+import { envExample, MAX_ENV_FILE_BYTES, parseEnvFile, type EnvFileEntry } from "@/env-file"
 
 function PageHeader({ title, description, back, children }: { title: string; description: string; back: { label: string; href: string }; children?: React.ReactNode }) {
   return <><Link to={back.href} className="mb-5 inline-flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground"><ArrowLeftIcon size={14} />{back.label}</Link><div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end"><div><h1 className="text-3xl font-semibold tracking-[-0.035em]">{title}</h1><p className="mt-2 text-sm text-muted-foreground">{description}</p></div>{children && <div className="flex flex-wrap gap-2 sm:ml-auto">{children}</div>}</div></>
@@ -87,10 +89,12 @@ export function ServiceLogs({ applicationID, service }: { applicationID: string;
 
 export function ServiceMetrics({ applicationID, service }: { applicationID: string; service: string }) {
   const [environmentName, setEnvironmentName] = useState("Production")
+  const [range, setRange] = useState("1 hour")
   const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
   const environments = applicationQuery.data?.environments || []
   const environment = environments.find((item) => item.name === environmentName) || environments[0]
-  const metricsQuery = useQuery({ queryKey: queryKeys.serviceMetrics(service, environment?.id || "", 120), queryFn: ({ signal }) => api.serviceMetrics(service, environment.id, 120, signal), enabled: Boolean(environment), refetchInterval: 10000, retry: false })
+  const points = range === "15 minutes" ? 90 : range === "2 hours" ? 720 : 360
+  const metricsQuery = useQuery({ queryKey: queryKeys.serviceMetrics(service, environment?.id || "", points), queryFn: ({ signal }) => api.serviceMetrics(service, environment.id, points, signal), enabled: Boolean(environment), refetchInterval: 10000, retry: false })
   const base = "/applications/" + applicationID + "/services/" + service
   if (applicationQuery.isPending) return <OperationLoading />
   if (applicationQuery.isError) return <OperationError title="Service metrics could not be loaded" retry={() => applicationQuery.refetch()} />
@@ -103,10 +107,13 @@ export function ServiceMetrics({ applicationID, service }: { applicationID: stri
   const rx = metricRates(samples, "network_rx_bytes")
   const tx = metricRates(samples, "network_tx_bytes")
   const sampleTime = current?.sampled_at ? new Date(current.sampled_at).toLocaleTimeString() : "No sample"
-  return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9"><PageHeader title="Metrics" description="Persisted Docker resource samples for the active container." back={{ label: "Service overview", href: base }}><AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-9 min-w-36 bg-card text-xs" /><Button variant="outline" onClick={() => metricsQuery.refetch()}><ActivityIcon />Refresh</Button></PageHeader><ServiceTabs active="Metrics" service={service} applicationID={applicationID} />
-    {metricsQuery.data.stale && <div className="mb-5 rounded-xl border bg-muted/40 p-4 text-xs text-muted-foreground">The service is stopped. Showing the last persisted samples.</div>}
-    <section className="mb-5 grid grid-cols-2 overflow-hidden rounded-xl border bg-card lg:grid-cols-4">{[{ label: "CPU", value: (current?.cpu_percent || 0).toFixed(1) + "%", icon: CpuIcon }, { label: "Memory", value: formatBytes(current?.memory_bytes || 0), icon: MemoryIcon }, { label: "Network ingress", value: formatRate(rx[rx.length - 1] || 0), icon: WifiHighIcon }, { label: "Network egress", value: formatRate(tx[tx.length - 1] || 0), icon: HardDrivesIcon }].map((item) => { const Icon = item.icon; return <article key={item.label} className="hf-operation-summary"><div className="flex justify-between"><p className="text-xs text-muted-foreground">{item.label}</p><Icon size={16} /></div><p className="mt-4 text-2xl font-semibold">{item.value}</p><p className="mt-1 text-[11px] text-muted-foreground">{sampleTime}</p></article> })}</section>
-    {samples.length ? <div className="grid gap-5 lg:grid-cols-2"><MetricChart title="CPU usage" subtitle="Percentage across available cores" value={(current?.cpu_percent || 0).toFixed(1) + "%" } data={samples.map((item) => item.cpu_percent)} /><MetricChart title="Memory usage" subtitle="Container working-set megabytes" value={formatBytes(current?.memory_bytes || 0)} data={samples.map((item) => item.memory_bytes / 1024 / 1024)} /><MetricChart title="Network ingress" subtitle="Megabytes per second between samples" value={formatRate(rx[rx.length - 1] || 0)} data={rx} /><MetricChart title="Network egress" subtitle="Megabytes per second between samples" value={formatRate(tx[tx.length - 1] || 0)} data={tx} /></div> : <StateCard title="Waiting for history" description="Refresh after another collection interval to build charts." />}
+  const times = samples.map((item) => item.sampled_at)
+  return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9"><PageHeader title="Metrics" description="Persisted Docker resource samples for the active container." back={{ label: "Service overview", href: base }}><AppSelect aria-label="Metric time range" options={["15 minutes", "1 hour", "2 hours"]} value={range} onValueChange={setRange} className="h-9 min-w-32 bg-card text-xs" /><AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-9 min-w-36 bg-card text-xs" /><Button variant="outline" onClick={() => metricsQuery.refetch()} disabled={metricsQuery.isFetching}><ActivityIcon />{metricsQuery.isFetching ? "Refreshing" : "Refresh"}</Button></PageHeader><ServiceTabs active="Metrics" service={service} applicationID={applicationID} />
+    {metricsQuery.data.stale && <div role="status" className="mb-5 rounded-xl border bg-muted/40 p-4 text-xs text-muted-foreground">{metricsQuery.data.stale_reason === "service_stopped" ? "The service is stopped. Showing the last persisted samples." : "Metric collection is delayed. Showing the most recent persisted samples."}</div>}
+    {!current ? <StateCard title="Metric collector is warming up" description={`The server samples active containers every ${metricsQuery.data.sample_interval_seconds || 10} seconds.`} /> : <>
+      <section className="mb-5 grid grid-cols-2 overflow-hidden rounded-xl border bg-card lg:grid-cols-4">{[{ label: "CPU", value: current.cpu_percent.toFixed(1) + "%", icon: CpuIcon }, { label: "Memory", value: formatBytes(current.memory_bytes), icon: MemoryIcon }, { label: "Network ingress", value: formatRate(rx[rx.length - 1] || 0), icon: WifiHighIcon }, { label: "Network egress", value: formatRate(tx[tx.length - 1] || 0), icon: HardDrivesIcon }].map((item) => { const Icon = item.icon; return <article key={item.label} className="hf-operation-summary"><div className="flex justify-between"><p className="text-xs text-muted-foreground">{item.label}</p><Icon size={16} /></div><p className="mt-4 text-2xl font-semibold">{item.value}</p><p className="mt-1 text-[11px] text-muted-foreground">Sampled {sampleTime}</p></article> })}</section>
+      <div className="grid gap-5 lg:grid-cols-2"><MetricChart title="CPU usage" subtitle="Percentage across available cores" value={current.cpu_percent.toFixed(1) + "%"} data={samples.map((item) => item.cpu_percent)} times={times} /><MetricChart title="Memory usage" subtitle="Container working-set megabytes" value={formatBytes(current.memory_bytes)} data={samples.map((item) => item.memory_bytes / 1024 / 1024)} times={times} /><MetricChart title="Network ingress" subtitle="Megabytes per second between samples" value={formatRate(rx[rx.length - 1] || 0)} data={rx} times={times.slice(1)} /><MetricChart title="Network egress" subtitle="Megabytes per second between samples" value={formatRate(tx[tx.length - 1] || 0)} data={tx} times={times.slice(1)} /></div>
+    </>}
   </main>
 }
 
@@ -121,10 +128,15 @@ function formatBytes(value: number) { return value >= 1024 ** 3 ? (value / 1024 
 function formatRate(value: number) { return value.toFixed(2) + " MB/s" }
 function StateCard({ title, description, retry }: { title: string; description: string; retry?: () => unknown }) { return <div className="rounded-xl border bg-card p-10 text-center"><ActivityIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">{title}</p><p className="mt-1 text-xs text-muted-foreground">{description}</p>{retry && <Button className="mt-4" variant="outline" onClick={retry}>Retry</Button>}</div> }
 
-function MetricChart({ title, subtitle, value, data }: { title: string; subtitle: string; value: string; data: number[] }) {
-  const max = Math.max(...data)
-  return <Panel title={title} subtitle={subtitle} action={<span className="text-xs font-semibold tabular-nums">{value}</span>}><div className="p-5"><div className="flex h-44 items-end gap-1 border-b border-dashed pb-1">{data.map((point, index) => <div key={index} className="group relative flex-1 rounded-t-sm bg-accent/80 transition-opacity hover:opacity-65" style={{ height: `${Math.max(5, (point / max) * 100)}%` }}><span className="pointer-events-none absolute bottom-full left-1/2 mb-1 hidden -translate-x-1/2 rounded bg-foreground px-1.5 py-1 text-[9px] text-background group-hover:block">{point}</span></div>)}</div><div className="mt-2 flex justify-between text-[9px] text-muted-foreground"><span>60m ago</span><span>30m ago</span><span>Now</span></div></div></Panel>
+function MetricChart({ title, subtitle, value, data, times }: { title: string; subtitle: string; value: string; data: number[]; times: string[] }) {
+  const max = Math.max(...data, 1)
+  const first = times[0]
+  const middle = times[Math.floor((times.length - 1) / 2)]
+  const last = times[times.length - 1]
+  return <Panel title={title} subtitle={subtitle} action={<span className="text-xs font-semibold tabular-nums">{value}</span>}><div className="p-5">{data.length ? <><div className="flex h-44 items-end gap-1 border-b border-dashed pb-1">{data.map((point, index) => <div key={index} className="group relative flex-1 rounded-t-sm bg-accent/80 transition-opacity hover:opacity-65" style={{ height: `${Math.max(5, (point / max) * 100)}%` }}><span className="pointer-events-none absolute bottom-full left-1/2 mb-1 hidden -translate-x-1/2 rounded bg-foreground px-1.5 py-1 text-[9px] text-background group-hover:block">{point.toFixed(2)}</span></div>)}</div><div className="mt-2 flex justify-between text-[9px] text-muted-foreground"><span>{formatMetricTime(first)}</span><span>{formatMetricTime(middle)}</span><span>{formatMetricTime(last)}</span></div></> : <p className="py-16 text-center text-xs text-muted-foreground">Waiting for a second sample to calculate network rate.</p>}</div></Panel>
 }
+
+function formatMetricTime(value?: string) { return value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "-" }
 
 export function EnvironmentScreen({ scope, applicationID, service = "" }: { scope: "application" | "service"; applicationID: string; service?: string }) {
   const queryClient = useQueryClient()
@@ -133,7 +145,7 @@ export function EnvironmentScreen({ scope, applicationID, service = "" }: { scop
   const [adding, setAdding] = useState(false)
   const [key, setKey] = useState("")
   const [value, setValue] = useState("")
-  const [importEntries, setImportEntries] = useState<Array<{ key: string; value: string }>>([])
+  const [importEntries, setImportEntries] = useState<EnvFileEntry[]>([])
   const [importMessage, setImportMessage] = useState("")
   const fileInput = useRef<HTMLInputElement>(null)
   const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
@@ -151,13 +163,17 @@ export function EnvironmentScreen({ scope, applicationID, service = "" }: { scop
   })
   const importMutation = useMutation({
     mutationFn: async () => {
-      const failures: string[] = []
+      const failures: EnvFileEntry[] = []
       for (const entry of importEntries) {
-        try { await api.upsertEnvironmentVariable(applicationID, environment.id, { ...entry, ...(serviceID ? { service_id: serviceID } : {}) }) } catch { failures.push(entry.key) }
+        try { await api.upsertEnvironmentVariable(applicationID, environment.id, { ...entry, ...(serviceID ? { service_id: serviceID } : {}) }) } catch { failures.push(entry) }
       }
-      if (failures.length) throw new Error(`Saved ${importEntries.length - failures.length} variables; failed: ${failures.join(", ")}`)
+      if (failures.length) {
+        setImportEntries(failures)
+        throw new Error(`Saved ${importEntries.length - failures.length} variables; ${failures.length} failed and remain ready to retry: ${failures.map((entry) => entry.key).join(", ")}`)
+      }
     },
     onSuccess: async () => { toast(`${importEntries.length} variables imported.`); setImportMessage(`${importEntries.length} variables imported.`); setImportEntries([]); await queryClient.invalidateQueries({ queryKey: queryKeys.variables(applicationID, environment.id, serviceID) }) },
+    onSettled: async () => queryClient.invalidateQueries({ queryKey: queryKeys.variables(applicationID, environment.id, serviceID) }),
   })
   if (applicationQuery.isPending) return <OperationLoading />
   if (applicationQuery.isError) return <OperationError title="Environment configuration could not be loaded" retry={() => applicationQuery.refetch()} />
@@ -165,8 +181,17 @@ export function EnvironmentScreen({ scope, applicationID, service = "" }: { scop
   const base = scope === "application" ? "/applications/" + applicationID : "/applications/" + applicationID + "/services/" + service
   const variables = variablesQuery.data?.variables || []
   const replacing = variables.some((item) => item.key === key.trim().toUpperCase())
+  function changeEnvironment(next: string) {
+    setEnvironmentName(next)
+    setAdding(false)
+    setKey("")
+    setValue("")
+    setImportEntries([])
+    setImportMessage("")
+    importMutation.reset()
+  }
   function exportNames() {
-    const blob = new Blob([variables.map((item) => item.key + "=").join("\n")], { type: "text/plain;charset=utf-8" })
+    const blob = new Blob([envExample(variables.map((item) => item.key))], { type: "text/plain;charset=utf-8" })
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement("a")
     anchor.href = url
@@ -176,30 +201,25 @@ export function EnvironmentScreen({ scope, applicationID, service = "" }: { scop
   }
   async function readEnvFile(file?: File) {
     if (!file) return
-    const parsed: Array<{ key: string; value: string }> = []
-    const seen = new Set<string>()
-    const errors: string[] = []
-    ;(await file.text()).split(/\r?\n/).forEach((raw, index) => {
-      const line = raw.trim()
-      if (!line || line.startsWith("#")) return
-      const normalized = line.startsWith("export ") ? line.slice(7).trim() : line
-      const split = normalized.indexOf("=")
-      const parsedKey = split > 0 ? normalized.slice(0, split).trim().toUpperCase() : ""
-      const parsedValue = split > 0 ? normalized.slice(split + 1) : ""
-      if (!/^[A-Z_][A-Z0-9_]*$/.test(parsedKey) || !parsedValue) errors.push(`line ${index + 1}`)
-      else if (seen.has(parsedKey)) errors.push(`duplicate ${parsedKey}`)
-      else { seen.add(parsedKey); parsed.push({ key: parsedKey, value: parsedValue }) }
-    })
-    if (errors.length || !parsed.length) { setImportEntries([]); setImportMessage(errors.length ? `Import rejected: ${errors.join(", ")}.` : "Import rejected: no variables found."); return }
-    setImportEntries(parsed)
-    setImportMessage(`${parsed.length} validated variables are ready to import.`)
+    importMutation.reset()
+    if (file.size > MAX_ENV_FILE_BYTES) { setImportEntries([]); setImportMessage("Import rejected: file exceeds 1 MiB."); return }
+    const result = parseEnvFile(await file.text())
+    if (result.errors.length || !result.entries.length) {
+      const details = result.errors.slice(0, 5).map((error) => `${error.line ? `line ${error.line}: ` : ""}${error.message}`)
+      const remainder = result.errors.length > details.length ? `, and ${result.errors.length - details.length} more` : ""
+      setImportEntries([])
+      setImportMessage(result.errors.length ? `Import rejected: ${details.join("; ")}${remainder}.` : "Import rejected: no variables found.")
+      return
+    }
+    setImportEntries(result.entries)
+    setImportMessage(`${result.entries.length} validated variables are ready to import.`)
   }
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
     <PageHeader title="Environment" description={scope === "application" ? "Manage encrypted variables inherited by services." : "Manage encrypted overrides for this service."} back={{ label: "Back to overview", href: base }}>
-      <AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-9 min-w-36 bg-card text-xs" />
+      <AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={changeEnvironment} className="h-9 min-w-36 bg-card text-xs" />
       <Button variant="outline" disabled={!variables.length} onClick={exportNames}><DownloadSimpleIcon />Export names</Button>
       <input ref={fileInput} className="hidden" type="file" accept=".env,text/plain" onChange={(event) => { void readEnvFile(event.target.files?.[0]); event.currentTarget.value = "" }} />
-      <Button variant="outline" disabled={!environment || importMutation.isPending} onClick={() => fileInput.current?.click()}><DownloadSimpleIcon className="rotate-180" />Import .env</Button>
+      <Button variant="outline" disabled={!environment || importMutation.isPending} onClick={() => fileInput.current?.click()}><UploadSimpleIcon />Import .env</Button>
       <Button onClick={() => setAdding((current) => !current)}><PlusIcon />Add variable</Button>
     </PageHeader>
     {scope === "application" ? <ApplicationTabs active="Environment" applicationID={applicationID} /> : <ServiceTabs active="Environment" service={service} applicationID={applicationID} />}
@@ -221,20 +241,24 @@ export function DomainsScreen({ scope, applicationID, service = "" }: { scope: "
   const [editingID, setEditingID] = useState("")
   const [editingName, setEditingName] = useState("")
   const [editingServiceName, setEditingServiceName] = useState("")
+  const [domainNotice, setDomainNotice] = useState("")
   const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
   const environments = applicationQuery.data?.environments || []
   const services = applicationQuery.data?.services || []
   const environment = environments.find((item) => item.name === environmentName) || environments[0]
   const scopedServiceID = scope === "service" ? service : ""
   const targetService = scopedServiceID ? services.find((item) => item.id === scopedServiceID) : services.find((item) => item.name === targetName) || services[0]
-  const domainsQuery = useQuery({ queryKey: queryKeys.domains(applicationID, environment?.id || "", scopedServiceID), queryFn: ({ signal }) => api.domains(applicationID, environment.id, scopedServiceID, signal), enabled: Boolean(environment) })
+  const domainQueryKey = queryKeys.domains(applicationID, environment?.id || "", scopedServiceID)
+  const domainsQuery = useQuery({ queryKey: domainQueryKey, queryFn: ({ signal }) => api.domains(applicationID, environment.id, scopedServiceID, signal), enabled: Boolean(environment) })
   const createMutation = useMutation({
     mutationFn: () => api.createDomain(applicationID, environment.id, { domain_name: domainName, service_id: targetService!.id }),
-    onSuccess: async () => { toast(`${domainName} added.`); setDomainName(""); setAdding(false); await queryClient.invalidateQueries({ queryKey: queryKeys.domains(applicationID, environment.id, scopedServiceID) }) },
+    onMutate: () => setDomainNotice(""),
+    onSuccess: async (response) => { const message = domainSyncMessage(`${domainName} added`, response.caddy_sync); toast(message); setDomainNotice(message); setDomainName(""); setAdding(false); await queryClient.invalidateQueries({ queryKey: domainQueryKey }) },
   })
   const deleteMutation = useMutation({
     mutationFn: (domainID: string) => api.deleteDomain(applicationID, environment.id, domainID),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: queryKeys.domains(applicationID, environment.id, scopedServiceID) }),
+    onMutate: () => setDomainNotice(""),
+    onSuccess: async (response) => { const message = domainSyncMessage("Domain removed", response.caddy_sync); toast(message); setDomainNotice(message); await queryClient.invalidateQueries({ queryKey: domainQueryKey }) },
   })
   const updateMutation = useMutation({
     mutationFn: () => {
@@ -242,32 +266,52 @@ export function DomainsScreen({ scope, applicationID, service = "" }: { scope: "
       if (!serviceID) throw new Error("Select a target service.")
       return api.updateDomain(applicationID, environment.id, editingID, { domain_name: editingName, service_id: serviceID })
     },
-    onSuccess: async () => { toast(`${editingName} updated.`); setEditingID(""); setEditingName(""); setEditingServiceName(""); await queryClient.invalidateQueries({ queryKey: queryKeys.domains(applicationID, environment.id, scopedServiceID) }) },
+    onMutate: () => setDomainNotice(""),
+    onSuccess: async (response) => { const message = domainSyncMessage(`${editingName} updated`, response.caddy_sync); toast(message); setDomainNotice(message); setEditingID(""); setEditingName(""); setEditingServiceName(""); await queryClient.invalidateQueries({ queryKey: domainQueryKey }) },
+  })
+  const dnsCheckMutation = useMutation({
+    mutationFn: () => api.domains(applicationID, environment.id, scopedServiceID, undefined, true),
+    onSuccess: (data) => { queryClient.setQueryData(domainQueryKey, data); setDomainNotice("Public DNS checks completed.") },
   })
   if (applicationQuery.isPending) return <OperationLoading />
   if (applicationQuery.isError) return <OperationError title="Domains could not be loaded" retry={() => applicationQuery.refetch()} />
   if (!environment) return <main className="mx-auto w-full max-w-[1600px] px-4 py-12"><StateCard title="No environments available" description="Create an environment before configuring domains." /></main>
   const base = scope === "application" ? "/applications/" + applicationID : "/applications/" + applicationID + "/services/" + service
   const domains = domainsQuery.data?.domains || []
+  const guidance = domainsQuery.data?.dns_guidance
   const serviceName = (id: string) => services.find((item) => item.id === id)?.name || id
+  const mutationError = createMutation.error || updateMutation.error || deleteMutation.error || dnsCheckMutation.error
+  function changeDomainEnvironment(next: string) {
+    setEnvironmentName(next)
+    setAdding(false)
+    setEditingID("")
+    setDomainNotice("")
+    createMutation.reset()
+    updateMutation.reset()
+    deleteMutation.reset()
+    dnsCheckMutation.reset()
+  }
 
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
     <PageHeader title="Domains" description="Manage public Caddy routes for the selected environment." back={{ label: "Back to overview", href: base }}>
-      <AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-9 min-w-36 bg-card text-xs" />
-      <Button variant="outline" onClick={() => domainsQuery.refetch()}><ActivityIcon />Refresh</Button>
+      <AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={changeDomainEnvironment} className="h-9 min-w-36 bg-card text-xs" />
+      <Button variant="outline" disabled={domainsQuery.isFetching} onClick={() => domainsQuery.refetch()}><ActivityIcon />Refresh</Button>
+      <Button variant="outline" disabled={!domains.length || dnsCheckMutation.isPending} onClick={() => dnsCheckMutation.mutate()}><GlobeIcon />{dnsCheckMutation.isPending ? "Checking DNS..." : "Check DNS"}</Button>
       <Button disabled={!services.length} onClick={() => setAdding((current) => !current)}><PlusIcon />Add domain</Button>
     </PageHeader>
     {scope === "application" ? <ApplicationTabs active="Domains" applicationID={applicationID} /> : <ServiceTabs active="Domains" service={service} applicationID={applicationID} />}
+    {domainNotice && <div role="status" className="mb-5 rounded-xl border bg-card px-4 py-3 text-xs text-muted-foreground">{domainNotice}</div>}
+    {mutationError && <div role="alert" className="mb-5 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive">{domainMutationError(mutationError)}</div>}
+    {domains.length > 0 && guidance && <DNSGuidance guidance={guidance} />}
     {adding && environment && <Panel title="Add domain" subtitle="Caddy configuration is validated before the route is accepted">
       <form className="grid gap-4 p-5 sm:grid-cols-[1.5fr_1fr_auto] sm:items-end" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}>
         <Field label="Hostname"><Input value={domainName} onChange={(event) => setDomainName(event.target.value.toLowerCase())} placeholder="api.example.com" /></Field>
         <Field label="Target service"><AppSelect options={services.map((item) => item.name)} value={targetService?.name || targetName} onValueChange={setTargetName} disabled={Boolean(scopedServiceID)} className="h-10 w-full bg-background text-xs" /></Field>
         <Button type="submit" disabled={!domainName.trim() || !targetService || createMutation.isPending}>{createMutation.isPending ? "Activating..." : "Add route"}</Button>
       </form>
-      {createMutation.isError && <p className="border-t px-5 py-3 text-xs text-destructive">{createMutation.error.message}</p>}
     </Panel>}
     <section className={`overflow-hidden rounded-xl border bg-card ${adding ? "mt-5" : ""}`}><header className="flex items-center gap-3 border-b bg-muted/70 px-5 py-4"><GlobeIcon size={17} /><div><h2 className="text-sm font-semibold">Configured domains</h2><p className="mt-0.5 text-xs text-muted-foreground">Environment-specific routing and certificate state</p></div><span className="ml-auto text-xs text-muted-foreground">{domains.length} domains</span></header>
-      {updateMutation.isError && <p role="alert" className="border-b bg-destructive/5 px-5 py-3 text-xs text-destructive">{updateMutation.error.message}</p>}{domainsQuery.isPending ? <div className="animate-pulse p-6"><div className="h-40 rounded bg-muted" /></div> : domainsQuery.isError ? <div className="p-8 text-center"><p className="text-sm font-semibold">Domains could not be loaded</p><Button className="mt-4" variant="outline" onClick={() => domainsQuery.refetch()}>Retry</Button></div> : domains.length ? <div className="overflow-x-auto"><Table className="w-full min-w-[860px]"><TableHeader><TableRow><TableHead>Domain</TableHead><TableHead>Service</TableHead><TableHead>Environment</TableHead><TableHead>Certificate</TableHead><TableHead>Last update</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader><TableBody>{domains.map((domain) => <TableRow key={domain.id}><TableCell>{editingID === domain.id ? <div className="flex gap-2"><Input value={editingName} onChange={(event) => setEditingName(event.target.value.toLowerCase())} className="h-8 min-w-56 text-xs" /></div> : <a href={"https://" + domain.domain_name} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs font-semibold hover:underline">{domain.domain_name}<ArrowSquareOutIcon size={12} /></a>}</TableCell><TableCell className="text-xs">{editingID === domain.id ? <AppSelect options={services.map((item) => item.name)} value={editingServiceName || serviceName(domain.service_id)} onValueChange={setEditingServiceName} disabled={Boolean(scopedServiceID)} className="h-8 min-w-36" /> : serviceName(domain.service_id)}</TableCell><TableCell className="text-xs text-muted-foreground">{environment?.name}</TableCell><TableCell><DomainBadge value={domain.ssl_status === "ACTIVE" ? "Active" : domain.ssl_status === "ERROR" ? "Error" : "Pending" } /></TableCell><TableCell className="text-xs text-muted-foreground">{new Date(domain.updated_at).toLocaleString()}</TableCell><TableCell className="text-right">{editingID === domain.id ? <><Button size="sm" disabled={!editingName.trim() || !editingServiceName || updateMutation.isPending} onClick={() => updateMutation.mutate()}>Save</Button><Button size="sm" variant="ghost" onClick={() => { setEditingID(""); setEditingServiceName("") }}>Cancel</Button></> : <><Button variant="ghost" size="icon" aria-label={"Edit " + domain.domain_name} onClick={() => { setEditingID(domain.id); setEditingName(domain.domain_name); setEditingServiceName(serviceName(domain.service_id)) }}><PencilSimpleIcon /></Button><ConfirmationAction title={"Remove " + domain.domain_name + "?"} description="Caddy will stop routing this hostname after validation succeeds." confirmLabel="Remove domain" destructive onConfirm={() => deleteMutation.mutateAsync(domain.id)} trigger={<Button variant="ghost" size="icon" aria-label={"Remove " + domain.domain_name}><TrashIcon /></Button>} /></>}</TableCell></TableRow>)}</TableBody></Table></div> : <div className="px-6 py-14 text-center"><GlobeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">No domains configured</p><p className="mt-1 text-xs text-muted-foreground">Add a hostname and select the service it should route to.</p></div>}
+      {domainsQuery.isPending ? <div className="animate-pulse p-6"><div className="h-40 rounded bg-muted" /></div> : domainsQuery.isError ? <div className="p-8 text-center"><p className="text-sm font-semibold">Domains could not be loaded</p><Button className="mt-4" variant="outline" onClick={() => domainsQuery.refetch()}>Retry</Button></div> : domains.length ? <div className="overflow-x-auto"><Table className="w-full min-w-[1040px]"><TableHeader><TableRow><TableHead>Domain</TableHead><TableHead>Service</TableHead><TableHead>Environment</TableHead><TableHead>Certificate</TableHead><TableHead>Last update</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader><TableBody>{domains.map((domain) => <TableRow key={domain.id}><TableCell>{editingID === domain.id ? <div className="flex gap-2"><Input value={editingName} onChange={(event) => setEditingName(event.target.value.toLowerCase())} className="h-8 min-w-56 text-xs" /></div> : <a href={"https://" + domain.domain_name} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs font-semibold hover:underline">{domain.domain_name}<ArrowSquareOutIcon size={12} /></a>}</TableCell><TableCell className="text-xs">{editingID === domain.id ? <AppSelect options={services.map((item) => item.name)} value={editingServiceName || serviceName(domain.service_id)} onValueChange={setEditingServiceName} disabled={Boolean(scopedServiceID)} className="h-8 min-w-36" /> : serviceName(domain.service_id)}</TableCell><TableCell className="text-xs text-muted-foreground">{environment?.name}</TableCell><TableCell className="max-w-72"><DomainBadge value={domain.ssl_status === "ACTIVE" ? "Active" : domain.ssl_status === "ERROR" ? "Error" : "Pending" } />{domain.last_cert_message && <p className="mt-1.5 truncate text-[10px] text-muted-foreground" title={domain.last_cert_message}>{domain.last_cert_message}</p>}{domain.cert_checked_at && <p className="mt-1 text-[9px] text-muted-foreground">Checked {new Date(domain.cert_checked_at).toLocaleString()}</p>}</TableCell><TableCell className="text-xs text-muted-foreground">{new Date(domain.updated_at).toLocaleString()}</TableCell><TableCell className="text-right">{editingID === domain.id ? <><Button size="sm" disabled={!editingName.trim() || !editingServiceName || updateMutation.isPending} onClick={() => updateMutation.mutate()}>Save</Button><Button size="sm" variant="ghost" onClick={() => { setEditingID(""); setEditingServiceName("") }}>Cancel</Button></> : <><Button variant="ghost" size="icon" aria-label={"Edit " + domain.domain_name} onClick={() => { setEditingID(domain.id); setEditingName(domain.domain_name); setEditingServiceName(serviceName(domain.service_id)) }}><PencilSimpleIcon /></Button><ConfirmationAction title={"Remove " + domain.domain_name + "?"} description="Caddy will stop routing this hostname after validation succeeds." confirmLabel="Remove domain" destructive onConfirm={() => deleteMutation.mutateAsync(domain.id)} trigger={<Button variant="ghost" size="icon" aria-label={"Remove " + domain.domain_name}><TrashIcon /></Button>} /></>}</TableCell></TableRow>)}</TableBody></Table></div> : <div className="px-6 py-14 text-center"><GlobeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">No domains configured</p><p className="mt-1 text-xs text-muted-foreground">Add a hostname and select the service it should route to.</p></div>}
     </section>
   </main>
 }
@@ -275,6 +319,33 @@ export function DomainsScreen({ scope, applicationID, service = "" }: { scope: "
 function DomainBadge({ value }: { value: string }) {
   const active = value === "Verified" || value === "Active"
   return <StatusBadge tone={active ? "success" : "warning"} dot>{value}</StatusBadge>
+}
+
+function DNSGuidance({ guidance }: { guidance: DNSGuidanceDTO }) {
+  const checks = guidance.checks || []
+  return <Panel className="mb-5" title="DNS and routing guidance" subtitle={guidance.ipv4 ? `Expected public IPv4: ${guidance.ipv4} (${guidance.ipv4_source})` : "HostForge could not determine an expected public IPv4"}>
+    {guidance.message && <p className="border-b bg-amber-50/70 px-5 py-3 text-[11px] text-amber-800 dark:bg-amber-950/20 dark:text-amber-200">{guidance.message}</p>}
+    {checks.length > 0 && <div className="divide-y border-b">{checks.map((check) => <div key={check.hostname} className="flex flex-col gap-2 px-5 py-3 sm:flex-row sm:items-center"><div className="min-w-0"><p className="truncate font-mono text-xs font-semibold">{check.hostname}</p><p className="mt-1 text-[10px] text-muted-foreground">{check.resolved_ipv4.length ? `Resolved: ${check.resolved_ipv4.join(", ")}` : check.status === "unknown" ? "Expected server IP is unavailable." : "No public IPv4 response was returned."}</p></div><StatusBadge className="sm:ml-auto" tone={check.status === "ok" ? "success" : check.status === "pending" ? "warning" : check.status === "lookup_error" ? "error" : "neutral"} dot>{check.status === "ok" ? "DNS matched" : check.status === "pending" ? "Propagation pending" : check.status === "lookup_error" ? "Lookup failed" : "Unknown"}</StatusBadge></div>)}</div>}
+    <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">{guidance.records.map((record, index) => <div key={`${record.type}-${record.zone_hint}-${record.name}-${index}`} className="rounded-lg border bg-muted/25 p-3"><div className="flex items-center gap-2"><Badge variant="secondary">{record.type}</Badge><span className="truncate font-mono text-[10px] text-muted-foreground">{record.zone_hint || "DNS zone"}</span></div><dl className="mt-3 grid grid-cols-[4rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-[10px]"><dt className="text-muted-foreground">Name</dt><dd className="truncate font-mono font-semibold">{record.name}</dd><dt className="text-muted-foreground">Value</dt><dd className="truncate font-mono font-semibold" title={record.value}>{record.value}</dd></dl></div>)}</div>
+  </Panel>
+}
+
+function domainSyncMessage(action: string, sync: CaddySyncOutcomeDTO) {
+  if (sync.attempted && sync.ok) return `${action}; Caddy routes validated and reloaded.`
+  if (!sync.attempted) return `${action}; automatic Caddy synchronization is disabled or not configured.`
+  return `${action}; Caddy synchronization did not complete.`
+}
+
+function domainMutationError(error: unknown) {
+  if (error instanceof APIError) {
+    if (error.code === "caddy_sync_failed") {
+      const sync = error.details?.caddy_sync as Partial<CaddySyncOutcomeDTO> | undefined
+      const reason = sync?.error ? ` (${sync.error.replaceAll("_", " ")})` : ""
+      return `The domain change was rolled back because Caddy validation or synchronization failed${reason}. Existing routing remains unchanged.`
+    }
+    return error.message.replaceAll("_", " ")
+  }
+  return error instanceof Error ? error.message : "The domain operation failed."
 }
 
 function OperationLoading() {

@@ -4,6 +4,7 @@ export class APIError extends Error {
     public code: string,
     message?: string,
     public fields?: Record<string, string>,
+    public details?: Record<string, unknown>,
   ) {
     super(message || code)
     this.name = "APIError"
@@ -15,6 +16,7 @@ type APIErrorPayload = {
   error?: string
   message?: string
   fields?: Record<string, string>
+  [key: string]: unknown
 }
 
 export const unauthorizedEvent = "hostforge:unauthorized"
@@ -35,7 +37,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
       window.dispatchEvent(new Event(unauthorizedEvent))
     }
     const error = (payload || {}) as APIErrorPayload
-    throw new APIError(response.status, error.error || "request_failed", error.message, error.fields)
+    throw new APIError(response.status, error.error || "request_failed", error.message, error.fields, error)
   }
   return payload as T
 }
@@ -125,6 +127,19 @@ export type DeploymentDTO = {
   rollback_of?: string
   created_at: string
   updated_at: string
+}
+
+export type DeploymentFilter = {
+  applicationID?: string
+  serviceID?: string
+  environmentID?: string
+  status?: string
+  trigger?: string
+  branch?: string
+  dateFrom?: string
+  dateTo?: string
+  cursor?: string
+  limit?: number
 }
 
 export type DeploymentStepDTO = {
@@ -232,6 +247,35 @@ export type DomainDTO = {
   updated_at: string
 }
 
+export type CaddySyncOutcomeDTO = {
+  attempted: boolean
+  ok: boolean
+  error?: string
+}
+
+export type DNSGuidanceDTO = {
+  ipv4?: string
+  ipv6?: string
+  ipv4_source: "override" | "detected" | "unknown"
+  ipv6_source: "override" | "detected" | "unknown" | "omitted"
+  records: Array<{ type: "A" | "AAAA"; name: string; value: string; zone_hint?: string; note?: string }>
+  checks?: Array<{ hostname: string; status: "ok" | "pending" | "unknown" | "lookup_error"; expected_ipv4?: string; resolved_ipv4: string[] }>
+  steps?: string[]
+  message?: string
+}
+
+export type DomainMutationDTO = {
+  status: string
+  domain?: DomainDTO
+  domain_id?: string
+  caddy_sync: CaddySyncOutcomeDTO
+}
+
+export type DeleteOutcomeDTO = {
+  status: "deleted"
+  routing_warning?: string
+}
+
 export type EnvironmentVariableDTO = {
   id: string
   application_id: string
@@ -319,12 +363,22 @@ export const api = {
   settings: (signal?: AbortSignal) => apiRequest<SettingsDTO>("/api/settings", { signal }),
   settingsAction: (action: "caddy-validate" | "caddy-sync" | "refresh-status" | "detect-public-ipv4") => apiRequest<Record<string, unknown>>("/api/settings/actions/" + action, { method: "POST" }),
 
-  applications: (signal?: AbortSignal) => apiRequest<{ applications: ApplicationDTO[] }>("/api/applications", { signal }),
-  application: (id: string, signal?: AbortSignal) =>
-    apiRequest<{ application: ApplicationDTO; environments: EnvironmentDTO[]; services: ServiceDTO[]; service_bindings: Record<string, ServiceEnvironmentDTO[]> }>(
+  applications: async (signal?: AbortSignal) => {
+    const payload = await apiRequest<{ applications: ApplicationDTO[] | null }>("/api/applications", { signal })
+    return { ...payload, applications: Array.isArray(payload.applications) ? payload.applications : [] }
+  },
+  application: async (id: string, signal?: AbortSignal) => {
+    const payload = await apiRequest<{ application: ApplicationDTO; environments: EnvironmentDTO[] | null; services: ServiceDTO[] | null; service_bindings: Record<string, ServiceEnvironmentDTO[]> | null }>(
       `/api/applications/${encodeURIComponent(id)}`,
       { signal },
-    ),
+    )
+    return {
+      ...payload,
+      environments: Array.isArray(payload.environments) ? payload.environments : [],
+      services: Array.isArray(payload.services) ? payload.services : [],
+      service_bindings: payload.service_bindings && typeof payload.service_bindings === "object" ? payload.service_bindings : {},
+    }
+  },
   createApplication: (input: { name: string; description: string }) =>
     apiRequest<{ application: ApplicationDTO }>("/api/applications", {
       method: "POST",
@@ -332,19 +386,23 @@ export const api = {
     }),
   createEnvironment: (applicationID: string, input: { name: string; slug: string; kind: "production" | "staging" }) =>
     apiRequest<{ environment: EnvironmentDTO }>(`/api/applications/${encodeURIComponent(applicationID)}/environments`, { method: "POST", body: JSON.stringify(input) }),
+  updateEnvironment: (applicationID: string, environmentID: string, input: { name: string }) =>
+    apiRequest<{ status: "ok"; environment: EnvironmentDTO }>(`/api/applications/${encodeURIComponent(applicationID)}/environments/${encodeURIComponent(environmentID)}`, { method: "PATCH", body: JSON.stringify(input) }),
   updateApplication: (id: string, input: Partial<Pick<ApplicationDTO, "name" | "description" | "archived">>) =>
     apiRequest<{ application: ApplicationDTO }>(`/api/applications/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(input),
     }),
   deleteApplication: (id: string) =>
-    apiRequest<{ status: "deleted" }>(`/api/applications/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    apiRequest<DeleteOutcomeDTO>(`/api/applications/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
-  service: (id: string, signal?: AbortSignal) =>
-    apiRequest<{ service: ServiceDTO; bindings: ServiceEnvironmentDTO[]; environment_states: ServiceEnvironmentStateDTO[] }>(
+  service: async (id: string, signal?: AbortSignal) => {
+    const payload = await apiRequest<{ service: ServiceDTO; bindings: ServiceEnvironmentDTO[] | null; environment_states: ServiceEnvironmentStateDTO[] | null }>(
       `/api/services/${encodeURIComponent(id)}`,
       { signal },
-    ),
+    )
+    return { ...payload, bindings: payload.bindings ?? [], environment_states: payload.environment_states ?? [] }
+  },
   createService: (applicationID: string, input: Omit<ServiceDTO, "id" | "application_id" | "created_at" | "updated_at">) =>
     apiRequest<{ service: ServiceDTO }>(`/api/applications/${encodeURIComponent(applicationID)}/services`, {
       method: "POST",
@@ -352,7 +410,7 @@ export const api = {
     }),
   updateService: (id: string, input: Partial<Omit<ServiceDTO, "id" | "application_id" | "created_at" | "updated_at">>) =>
     apiRequest<{ service: ServiceDTO }>("/api/services/" + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify(input) }),
-  deleteService: (id: string) => apiRequest<{ status: "deleted" }>("/api/services/" + encodeURIComponent(id), { method: "DELETE" }),
+  deleteService: (id: string) => apiRequest<DeleteOutcomeDTO>("/api/services/" + encodeURIComponent(id), { method: "DELETE" }),
   updateServiceBinding: (
     serviceID: string,
     environmentID: string,
@@ -362,15 +420,24 @@ export const api = {
       `/api/services/${encodeURIComponent(serviceID)}/environments/${encodeURIComponent(environmentID)}`,
       { method: "PATCH", body: JSON.stringify(input) },
     ),
-  serviceMetrics: (serviceID: string, environmentID: string, points = 120, signal?: AbortSignal) =>
-    apiRequest<{ supported: boolean; stale?: boolean; error_code?: string; deployment_id?: string; sample?: ServiceMetricDTO; samples: ServiceMetricDTO[] }>("/api/services/" + encodeURIComponent(serviceID) + "/environments/" + encodeURIComponent(environmentID) + "/metrics?points=" + points, { signal }),
+  serviceMetrics: async (serviceID: string, environmentID: string, points = 120, signal?: AbortSignal) => {
+    const payload = await apiRequest<{ supported: boolean; stale?: boolean; stale_reason?: "service_stopped" | "collector_delayed"; error_code?: string; deployment_id?: string; sample?: ServiceMetricDTO; samples: ServiceMetricDTO[] | null; sample_interval_seconds?: number }>("/api/services/" + encodeURIComponent(serviceID) + "/environments/" + encodeURIComponent(environmentID) + "/metrics?points=" + points, { signal })
+    return { ...payload, samples: payload.samples ?? [] }
+  },
   observabilitySummary: (signal?: AbortSignal) => apiRequest<{ summary: ObservabilitySummaryDTO; system: unknown }>("/api/observability/summary", { signal }),
-  observabilityRequests: (filters: RequestObservabilityFilter = {}, signal?: AbortSignal) =>
-    apiRequest<{ requests: HTTPRequestDTO[]; next_cursor: string }>("/api/observability/requests" + observabilityQuery(filters), { signal }),
-  observabilityDeploySteps: (filters: DeployStepObservabilityFilter = {}, signal?: AbortSignal) =>
-    apiRequest<{ deploy_steps: DeploymentStepDTO[]; next_cursor: string }>("/api/observability/deploy-steps" + observabilityQuery(filters), { signal }),
+  observabilityRequests: async (filters: RequestObservabilityFilter = {}, signal?: AbortSignal) => {
+    const payload = await apiRequest<{ requests: HTTPRequestDTO[] | null; next_cursor: string }>("/api/observability/requests" + observabilityQuery(filters), { signal })
+    return { ...payload, requests: payload.requests ?? [] }
+  },
+  observabilityDeploySteps: async (filters: DeployStepObservabilityFilter = {}, signal?: AbortSignal) => {
+    const payload = await apiRequest<{ deploy_steps: DeploymentStepDTO[] | null; next_cursor: string }>("/api/observability/deploy-steps" + observabilityQuery(filters), { signal })
+    return { ...payload, deploy_steps: payload.deploy_steps ?? [] }
+  },
   hostSnapshot: (signal?: AbortSignal) => apiRequest<{ supported: boolean; error_code?: string; sample?: HostSampleDTO }>("/api/system/host/snapshot", { signal }),
-  hostHistory: (points = 120, signal?: AbortSignal) => apiRequest<{ supported: boolean; error_code?: string; samples: HostSampleDTO[] }>("/api/system/host/history?points=" + points, { signal }),
+  hostHistory: async (points = 120, signal?: AbortSignal) => {
+    const payload = await apiRequest<{ supported: boolean; error_code?: string; samples: HostSampleDTO[] | null }>("/api/system/host/history?points=" + points, { signal })
+    return { ...payload, samples: payload.samples ?? [] }
+  },
   events: (filters: { applicationID?: string; serviceID?: string; type?: string; dateFrom?: string; dateTo?: string; cursor?: string; limit?: number } = {}, signal?: AbortSignal) => {
     const params = new URLSearchParams()
     if (filters.applicationID) params.set("application_id", filters.applicationID)
@@ -381,31 +448,35 @@ export const api = {
     if (filters.cursor) params.set("cursor", filters.cursor)
     if (filters.limit) params.set("limit", String(filters.limit))
     const query = params.size ? "?" + params.toString() : ""
-    return apiRequest<{ events: PlatformEventDTO[]; next_cursor: string }>("/api/events" + query, { signal })
+    return apiRequest<{ events: PlatformEventDTO[] | null; next_cursor: string }>("/api/events" + query, { signal }).then((payload) => ({ ...payload, events: payload.events ?? [] }))
   },
   githubApp: (signal?: AbortSignal) => apiRequest<{ app: { configured: boolean; app_id?: number; slug?: string; html_url?: string; updated_at?: string } }>("/api/github/app", { signal }),
+  deleteGitHubApp: () => apiRequest<{ status: "deleted" }>("/api/github/app", { method: "DELETE" }),
   githubManifest: (input: { name: string; url: string; callback_url: string; webhook_url?: string }) => apiRequest<{ manifest: Record<string, unknown>; post_url: string; callback_url: string; webhook_url: string }>("/api/github/app/manifest", { method: "POST", body: JSON.stringify(input) }),
   githubManifestExchange: (code: string) => apiRequest<{ app: { configured: boolean; app_id: number; slug: string }; install_url: string }>("/api/github/app/manifest/exchange", { method: "POST", body: JSON.stringify({ code }) }),
-  githubInstallations: (signal?: AbortSignal) => apiRequest<{ installations: GitHubInstallationDTO[] }>("/api/github/installations", { signal }),
-  syncGitHubInstallations: () => apiRequest<{ installations: GitHubInstallationDTO[] }>("/api/github/installations/sync", { method: "POST" }),
-  githubRepositories: (installationID: number, signal?: AbortSignal) => apiRequest<{ repositories: GitHubRepositoryDTO[] }>("/api/github/installations/" + installationID + "/repositories", { signal }),
+  githubInstallations: (signal?: AbortSignal) => apiRequest<{ installations: GitHubInstallationDTO[] | null }>("/api/github/installations", { signal }).then((payload) => ({ ...payload, installations: payload.installations ?? [] })),
+  syncGitHubInstallations: () => apiRequest<{ installations: GitHubInstallationDTO[] | null }>("/api/github/installations/sync", { method: "POST" }).then((payload) => ({ ...payload, installations: payload.installations ?? [] })),
+  githubRepositories: (installationID: number, signal?: AbortSignal) => apiRequest<{ repositories: GitHubRepositoryDTO[] | null }>("/api/github/installations/" + installationID + "/repositories", { signal }).then((payload) => ({ ...payload, repositories: payload.repositories ?? [] })),
   repositoryBranches: (repoURL: string, installationID: number, signal?: AbortSignal) => {
     const params = new URLSearchParams({ repo_url: repoURL, installation_id: String(installationID) })
-    return apiRequest<{ branches: string[]; default_branch: string }>("/api/repositories/branches?" + params.toString(), { signal })
+    return apiRequest<{ branches: string[] | null; default_branch: string }>("/api/repositories/branches?" + params.toString(), { signal }).then((payload) => ({ ...payload, branches: payload.branches ?? [] }))
   },
-  domains: (applicationID: string, environmentID: string, serviceID = "", signal?: AbortSignal) => {
-    const query = serviceID ? "?service_id=" + encodeURIComponent(serviceID) : ""
-    return apiRequest<{ domains: DomainDTO[]; dns_guidance?: unknown }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains" + query, { signal })
+  domains: (applicationID: string, environmentID: string, serviceID = "", signal?: AbortSignal, checkDNS = false) => {
+    const params = new URLSearchParams()
+    if (serviceID) params.set("service_id", serviceID)
+    if (checkDNS) params.set("check_dns", "1")
+    const query = params.size ? "?" + params.toString() : ""
+    return apiRequest<{ domains: DomainDTO[] | null; dns_guidance: DNSGuidanceDTO }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains" + query, { signal }).then((payload) => ({ ...payload, domains: payload.domains ?? [] }))
   },
   createDomain: (applicationID: string, environmentID: string, input: { domain_name: string; service_id: string }) =>
-    apiRequest<{ domain: DomainDTO }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains", { method: "POST", body: JSON.stringify(input) }),
+    apiRequest<DomainMutationDTO>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains", { method: "POST", body: JSON.stringify(input) }),
   updateDomain: (applicationID: string, environmentID: string, domainID: string, input: { domain_name: string; service_id: string }) =>
-    apiRequest<{ domain: DomainDTO }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains/" + encodeURIComponent(domainID), { method: "PATCH", body: JSON.stringify(input) }),
+    apiRequest<DomainMutationDTO>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains/" + encodeURIComponent(domainID), { method: "PATCH", body: JSON.stringify(input) }),
   deleteDomain: (applicationID: string, environmentID: string, domainID: string) =>
-    apiRequest<{ status: "deleted" }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains/" + encodeURIComponent(domainID), { method: "DELETE" }),
+    apiRequest<DomainMutationDTO>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/domains/" + encodeURIComponent(domainID), { method: "DELETE" }),
   environmentVariables: (applicationID: string, environmentID: string, serviceID = "", signal?: AbortSignal) => {
     const query = serviceID ? "?service_id=" + encodeURIComponent(serviceID) : ""
-    return apiRequest<{ variables: EnvironmentVariableDTO[] }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/variables" + query, { signal })
+    return apiRequest<{ variables: EnvironmentVariableDTO[] | null }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/variables" + query, { signal }).then((payload) => ({ ...payload, variables: payload.variables ?? [] }))
   },
   upsertEnvironmentVariable: (applicationID: string, environmentID: string, input: { key: string; value: string; service_id?: string }) =>
     apiRequest<{ variable: EnvironmentVariableDTO }>("/api/applications/" + encodeURIComponent(applicationID) + "/environments/" + encodeURIComponent(environmentID) + "/variables", { method: "POST", body: JSON.stringify(input) }),
@@ -417,7 +488,7 @@ export const api = {
     apiRequest<{ status: "stopped"; deployment_id: string; container_id: string }>("/api/services/" + encodeURIComponent(serviceID) + "/environments/" + encodeURIComponent(environmentID) + "/stop", { method: "POST" }),
   restartService: (serviceID: string, environmentID: string) =>
     apiRequest<{ status: "running"; deployment_id: string; container_id: string }>("/api/services/" + encodeURIComponent(serviceID) + "/environments/" + encodeURIComponent(environmentID) + "/restart", { method: "POST" }),
-  deployments: (filters: { applicationID?: string; serviceID?: string; environmentID?: string; status?: string; trigger?: string; branch?: string; dateFrom?: string; dateTo?: string; cursor?: string; limit?: number } = {}, signal?: AbortSignal) => {
+  deployments: (filters: DeploymentFilter = {}, signal?: AbortSignal) => {
     const params = new URLSearchParams()
     if (filters.applicationID) params.set("application_id", filters.applicationID)
     if (filters.serviceID) params.set("service_id", filters.serviceID)
@@ -430,10 +501,10 @@ export const api = {
     if (filters.cursor) params.set("cursor", filters.cursor)
     if (filters.limit) params.set("limit", String(filters.limit))
     const query = params.size ? "?" + params.toString() : ""
-    return apiRequest<{ deployments: DeploymentDTO[]; next_cursor: string }>("/api/deployments" + query, { signal })
+    return apiRequest<{ deployments: DeploymentDTO[] | null; next_cursor: string }>("/api/deployments" + query, { signal }).then((payload) => ({ ...payload, deployments: payload.deployments ?? [] }))
   },
   deployment: (id: string, signal?: AbortSignal) => apiRequest<{ deployment: DeploymentDTO }>("/api/deployments/" + encodeURIComponent(id), { signal }),
-  deploymentSteps: (id: string, signal?: AbortSignal) => apiRequest<{ deployment_id: string; steps: DeploymentStepDTO[] }>("/api/deployments/" + encodeURIComponent(id) + "/steps", { signal }),
+  deploymentSteps: (id: string, signal?: AbortSignal) => apiRequest<{ deployment_id: string; steps: DeploymentStepDTO[] | null }>("/api/deployments/" + encodeURIComponent(id) + "/steps", { signal }).then((payload) => ({ ...payload, steps: payload.steps ?? [] })),
   deploymentLogs: (id: string, signal?: AbortSignal) => apiRequest<{ eof: number; text: string }>("/api/deployments/" + encodeURIComponent(id) + "/logs?eof_meta=1&tail_lines=1000", { signal }),
   deploy: (serviceID: string, environmentID: string) => apiRequest<{ deployment: DeploymentDTO }>("/api/services/" + encodeURIComponent(serviceID) + "/environments/" + encodeURIComponent(environmentID) + "/deployments", { method: "POST" }),
   redeploy: (id: string) => apiRequest<{ deployment: DeploymentDTO }>("/api/deployments/" + encodeURIComponent(id) + "/redeploy", { method: "POST" }),
@@ -458,10 +529,13 @@ export const queryKeys = {
   githubApp: ["github-app"] as const,
   githubInstallations: ["github-installations"] as const,
   githubRepositories: (installationID: number) => ["github-repositories", installationID] as const,
+  githubRepositoriesRoot: ["github-repositories"] as const,
   repositoryBranches: (repoURL: string, installationID: number) => ["repository-branches", repoURL, installationID] as const,
+  repositoryBranchesRoot: ["repository-branches"] as const,
   service: (id: string) => ["services", id] as const,
   domains: (applicationID: string, environmentID: string, serviceID = "") => ["domains", applicationID, environmentID, serviceID] as const,
   variables: (applicationID: string, environmentID: string, serviceID = "") => ["variables", applicationID, environmentID, serviceID] as const,
   deployments: (serviceID = "", environmentID = "", applicationID = "") => ["deployments", { serviceID, environmentID, applicationID }] as const,
+  deploymentList: (filters: DeploymentFilter = {}) => ["deployments", "list", filters] as const,
   deployment: (id: string) => ["deployments", id] as const,
 }

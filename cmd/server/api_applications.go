@@ -55,9 +55,26 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if (len(parts) == 4 || len(parts) == 5) && parts[1] == "environments" {
+		resourceID := ""
+		if len(parts) == 5 {
+			resourceID = parts[4]
+		}
+		switch parts[3] {
+		case "domains":
+			s.handleServiceDomains(w, r, app.ID, parts[2], resourceID)
+			return
+		case "variables":
+			s.handleEnvironmentVariables(w, r, app.ID, parts[2], resourceID)
+			return
+		}
+	}
 	if len(parts) == 2 && parts[1] == "services" && r.Method == http.MethodPost {
-		in, ok := decodeServiceRequest(w, r, app.ID, nil)
+		in, _, ok := decodeServiceRequest(w, r, app.ID, nil)
 		if !ok {
+			return
+		}
+		if !s.validateServiceSource(w, r, in) {
 			return
 		}
 		item, err := s.store.CreateService(r.Context(), in)
@@ -80,6 +97,10 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_json_payload"})
+			return
+		}
+		if strings.TrimSpace(req.Name) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"status": "error", "error": "invalid_environment_name", "fields": map[string]string{"name": "required"}})
 			return
 		}
 		item, err := s.store.UpdateEnvironment(r.Context(), environment.ID, req.Name)
@@ -141,9 +162,13 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			response := map[string]any{"status": "deleted"}
+			eventStatus, eventDetail := "deleted", app.Name
 			if result.CaddySyncError != "" {
 				response["routing_warning"] = result.CaddySyncError
+				eventStatus = "warning"
+				eventDetail += "; routing cleanup: " + result.CaddySyncError
 			}
+			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "application", Status: eventStatus, Actor: "operator", Message: "Application deleted", Detail: eventDetail})
 			writeJSON(w, http.StatusOK, response)
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
