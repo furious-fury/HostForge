@@ -9,8 +9,9 @@
 }
 
 .hf-terminal {
-  min-height: 27rem;
+  height: clamp(24rem, 52vh, 34rem);
   overflow: auto;
+  overscroll-behavior: contain;
   background: #171916;
   padding: 1rem;
   color: #d7dbd2;

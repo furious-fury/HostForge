@@ -104,7 +104,7 @@ describe("add service", () => {
     renderScreen()
     await user.click(await screen.findByRole("button", { name: /configure service/i }))
     expect(await screen.findByText(/Ready to deploy/)).toBeInTheDocument()
-    await user.type(screen.getByLabelText("Service name"), "API")
+    expect(screen.getByLabelText("Service name")).toHaveValue(application.name)
     await user.click(screen.getByRole("button", { name: "Create and deploy" }))
 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
@@ -112,6 +112,7 @@ describe("add service", () => {
       environment_id: environment.id,
       branch: "main",
       auto_deploy: true,
+      name: application.name,
     }))
     expect(deploy).toHaveBeenCalledWith(service.id, environment.id)
   })
@@ -128,6 +129,7 @@ describe("add service", () => {
     renderScreen()
     await user.click(await screen.findByRole("button", { name: /configure service/i }))
     await screen.findByText(/Ready to deploy/)
+    await user.clear(screen.getByLabelText("Service name"))
     await user.type(screen.getByLabelText("Service name"), "API")
     await user.click(screen.getByRole("button", { name: "Create and deploy" }))
 

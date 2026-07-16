@@ -31,12 +31,13 @@ type Environment struct {
 }
 
 type EnvironmentHealth struct {
-	EnvironmentID string `json:"environment_id"`
-	Name          string `json:"name"`
-	Kind          string `json:"kind"`
-	ServiceCount  int    `json:"service_count"`
-	RunningCount  int    `json:"running_count"`
-	Status        string `json:"status"`
+	EnvironmentID   string `json:"environment_id"`
+	Name            string `json:"name"`
+	Kind            string `json:"kind"`
+	ServiceCount    int    `json:"service_count"`
+	ConfiguredCount int    `json:"configured_count"`
+	RunningCount    int    `json:"running_count"`
+	Status          string `json:"status"`
 }
 
 type ApplicationSummary struct {
@@ -98,6 +99,7 @@ func (s *Store) ListApplicationSummaries(ctx context.Context) ([]ApplicationSumm
 		rows, err := s.db.QueryContext(ctx, `
 			SELECT e.id,e.name,e.kind,
 			       COUNT(se.service_id),
+			       COALESCE(SUM(CASE WHEN se.branch<>'' OR se.active_deployment_id<>'' THEN 1 ELSE 0 END),0),
 			       COALESCE(SUM(CASE WHEN se.active_deployment_id<>'' AND se.desired_state='running' THEN 1 ELSE 0 END),0)
 			FROM environments e
 			LEFT JOIN service_environments se ON se.environment_id=e.id
@@ -109,14 +111,14 @@ func (s *Store) ListApplicationSummaries(ctx context.Context) ([]ApplicationSumm
 		}
 		for rows.Next() {
 			var health EnvironmentHealth
-			if err := rows.Scan(&health.EnvironmentID, &health.Name, &health.Kind, &health.ServiceCount, &health.RunningCount); err != nil {
+			if err := rows.Scan(&health.EnvironmentID, &health.Name, &health.Kind, &health.ServiceCount, &health.ConfiguredCount, &health.RunningCount); err != nil {
 				rows.Close()
 				return nil, err
 			}
 			switch {
-			case health.ServiceCount == 0:
+			case health.ConfiguredCount == 0:
 				health.Status = "empty"
-			case health.RunningCount == health.ServiceCount:
+			case health.RunningCount == health.ConfiguredCount:
 				health.Status = "healthy"
 			default:
 				health.Status = "degraded"
@@ -133,9 +135,8 @@ func (s *Store) ListApplicationSummaries(ctx context.Context) ([]ApplicationSumm
 			return nil, err
 		}
 		for _, health := range summary.EnvironmentHealth {
-			if health.Kind == "production" {
+			if health.RunningCount > summary.HealthyServiceCount {
 				summary.HealthyServiceCount = health.RunningCount
-				break
 			}
 		}
 		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM domains WHERE application_id=?`, application.ID).Scan(&summary.DomainCount); err != nil {

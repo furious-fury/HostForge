@@ -66,16 +66,10 @@ function Brand() {
   )
 }
 
-function Sidebar({ open, onClose, applicationID }: { open: boolean; onClose: () => void; applicationID?: string }) {
+function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const queryClient = useQueryClient()
-  const applicationBase = applicationID ? "/applications/" + applicationID : ""
-  const applicationQuery = useQuery({
-    queryKey: queryKeys.application(applicationID || ""),
-    queryFn: ({ signal }) => api.application(applicationID!, signal),
-    enabled: Boolean(applicationID),
-  })
   const statusQuery = useQuery({ queryKey: queryKeys.systemStatus, queryFn: ({ signal }) => api.systemStatus(signal), refetchInterval: 30_000 })
   const logout = useMutation({ mutationFn: api.logout, onSuccess: async () => { queryClient.clear(); navigate("/login", { replace: true }) } })
   const connected = statusQuery.isSuccess
@@ -98,14 +92,6 @@ function Sidebar({ open, onClose, applicationID }: { open: boolean; onClose: () 
               return <Link key={item.label} to={item.href} onClick={onClose} className={`hf-nav-item ${active ? "hf-nav-item-active" : ""}`}><ItemIcon size={17} weight={active ? "fill" : "regular"} />{item.label}</Link>
             })}
           </div>
-          {applicationID && <div className="mt-7">
-            <p className="mb-2 truncate px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{applicationQuery.data?.application.name || "Current application"}</p>
-            <div className="space-y-1">
-              <Link to={applicationBase} onClick={onClose} className={pathname === applicationBase || pathname === applicationBase + "/" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><SquaresFourIcon size={17} />Overview</Link>
-              <Link to={applicationBase + "/services"} onClick={onClose} className={pathname.startsWith(applicationBase + "/services") ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><CubeIcon size={17} />Services</Link>
-              <Link to={applicationBase + "/deployments"} onClick={onClose} className={pathname === applicationBase + "/deployments" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><CloudArrowUpIcon size={17} />Deployments</Link>
-            </div>
-          </div>}
           <p className="mb-2 mt-7 px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Platform</p>
           <div className="space-y-1">
             <Link to="/settings" className={pathname === "/settings" ? "hf-nav-item hf-nav-item-active" : "hf-nav-item"}><GearSixIcon size={17} />Settings</Link>
@@ -126,7 +112,7 @@ function Sidebar({ open, onClose, applicationID }: { open: boolean; onClose: () 
   )
 }
 
-function Topbar({ onOpenNavigation, applicationID, section }: { onOpenNavigation: () => void; applicationID?: string; section?: string }) {
+function Breadcrumbs({ applicationID, section }: { applicationID?: string; section?: string }) {
   const { pathname } = useLocation()
   const applicationQuery = useQuery({
     queryKey: queryKeys.application(applicationID || ""),
@@ -145,19 +131,24 @@ function Topbar({ onOpenNavigation, applicationID, section }: { onOpenNavigation
   const serviceSection = serviceID === "new" ? "New service" : pathname === serviceBase ? "" : serviceBase ? pathname.slice(serviceBase.length + 1).split("/")[0] : ""
   const applicationSection = applicationID && !pathname.startsWith(applicationBase + "/services") && pathname !== applicationBase && pathname !== applicationBase + "/" ? pathname.slice(applicationBase.length + 1).split("/")[0] : ""
   const globalDeploymentID = pathname.match(/^\/deployments\/([^/]+)\/?$/)?.[1]
+  return <nav aria-label="Breadcrumb" className="border-b bg-background/80 px-4 sm:px-6 lg:px-8">
+    <div className="flex h-11 min-w-0 items-center gap-2 overflow-x-auto whitespace-nowrap text-xs [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {globalDeploymentID ? <><Link to="/deployments" className="text-muted-foreground hover:text-foreground">Deployments</Link><CaretRightIcon size={11} className="shrink-0 text-muted-foreground" /><span className="font-mono font-medium">{globalDeploymentID}</span></> : section ? <span className="font-medium">{section}</span> : <>
+        <Link to="/applications" className={applicationID ? "text-muted-foreground hover:text-foreground" : "font-medium"}>Applications</Link>
+        {applicationID && <><CaretRightIcon size={11} className="shrink-0 text-muted-foreground" /><Link to={applicationBase} className={pathname === applicationBase ? "font-medium" : "text-muted-foreground hover:text-foreground"}>{applicationName}</Link></>}
+        {applicationSection && <><CaretRightIcon size={11} className="shrink-0 text-muted-foreground" /><span className="font-medium capitalize">{applicationSection}</span></>}
+        {pathname.startsWith(applicationBase + "/services") && <><CaretRightIcon size={11} className="shrink-0 text-muted-foreground" /><Link to={applicationBase + "/services"} className={serviceID ? "text-muted-foreground hover:text-foreground" : "font-medium"}>Services</Link></>}
+        {serviceID && serviceID !== "new" && <><CaretRightIcon size={11} className="shrink-0 text-muted-foreground" /><Link to={serviceBase} className={serviceSection ? "text-muted-foreground hover:text-foreground" : "font-medium"}>{serviceQuery.data?.service.name || "Service"}</Link></>}
+        {(serviceSection || serviceID === "new") && <><CaretRightIcon size={11} className="shrink-0 text-muted-foreground" /><span className="font-medium capitalize">{serviceSection || "New service"}</span></>}
+      </>}
+    </div>
+  </nav>
+}
+
+function Topbar({ onOpenNavigation }: { onOpenNavigation: () => void }) {
   return (
     <header className="hf-topbar sticky top-0 z-30 flex h-16 items-center border-b px-4 backdrop-blur-md sm:px-6 lg:px-8">
       <button className="mr-3 rounded-md p-2 hover:bg-muted lg:hidden" onClick={onOpenNavigation} aria-label="Open navigation"><ListIcon size={20} /></button>
-      <div className="flex min-w-0 items-center gap-2 text-sm">
-        {globalDeploymentID ? <><Link to="/deployments" className="text-muted-foreground hover:text-foreground">Deployments</Link><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><span className="max-w-56 truncate font-mono font-medium">{globalDeploymentID}</span></> : section ? <span className="font-medium">{section}</span> : <>
-          <Link to="/applications" className={applicationID ? "text-muted-foreground hover:text-foreground" : "font-medium"}>Applications</Link>
-          {applicationID && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><Link to={applicationBase} className={pathname === applicationBase ? "truncate font-medium" : "truncate text-muted-foreground hover:text-foreground"}>{applicationName}</Link></>}
-          {applicationSection && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><span className="truncate font-medium capitalize">{applicationSection}</span></>}
-          {pathname.startsWith(applicationBase + "/services") && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><Link to={applicationBase + "/services"} className={serviceID ? "text-muted-foreground hover:text-foreground" : "font-medium"}>Services</Link></>}
-          {serviceID && serviceID !== "new" && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><Link to={serviceBase} className={serviceSection ? "max-w-40 truncate text-muted-foreground hover:text-foreground" : "max-w-40 truncate font-medium"}>{serviceQuery.data?.service.name || "Service"}</Link></>}
-          {(serviceSection || serviceID === "new") && <><CaretRightIcon size={12} className="shrink-0 text-muted-foreground" /><span className="truncate font-medium capitalize">{serviceSection || "New service"}</span></>}
-        </>}
-      </div>
       <div className="absolute left-1/2 top-1/2 hidden w-[clamp(20rem,38vw,36rem)] -translate-x-1/2 -translate-y-1/2 lg:block">
         <CommandSearch />
       </div>
@@ -179,7 +170,7 @@ function PageHeader({ eyebrow, title, description, children }: { eyebrow?: React
 }
 
 function StatusPill({ status }: { status: string }) {
-  const tone = status === "Healthy" || status === "Running" || status === "Live" ? "success" : status === "Degraded" || status === "Failed" ? "warning" : "neutral"
+  const tone = status === "Healthy" || status === "Running" || status === "Live" || status.startsWith("Active in ") ? "success" : status === "Degraded" || status === "Failed" ? "warning" : "neutral"
   return <StatusBadge tone={tone} dot>{status}</StatusBadge>
 }
 
@@ -200,12 +191,13 @@ function ApplicationsList() {
   if (applicationsQuery.isError) return <main className="mx-auto w-full max-w-[1600px] px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-8 text-center"><h1 className="text-sm font-semibold">Applications could not be loaded</h1><p className="mt-2 text-xs text-muted-foreground">HostForge returned an error while loading application data.</p><Button className="mt-4" variant="outline" onClick={() => applicationsQuery.refetch()}>Retry</Button></section></main>
   const applications = applicationsQuery.data.applications.map((application) => {
     const production = application.environment_health?.find((environment) => environment.kind === "production")
+    const activeEnvironment = application.environment_health?.find((environment) => environment.status === "healthy")
     const services = application.service_count || 0
     const healthy = application.healthy_service_count || 0
-    const status = services === 0 ? "No services" : production?.status === "healthy" ? "Healthy" : "Degraded"
+    const status = services === 0 ? "No services" : production?.status === "healthy" ? "Healthy" : activeEnvironment ? `Active in ${activeEnvironment.name}` : application.environment_health?.some((environment) => environment.status === "degraded") ? "Degraded" : "Not deployed"
     return { id: application.id, name: application.name, description: application.description, initials: application.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(), services, healthy, domains: application.domain_count || 0, status, deployment: application.latest_deployment ? new Date(application.latest_deployment.created_at).toLocaleString() : "Never", updated: new Date(application.updated_at).toLocaleDateString() }
   })
-  const visibleApplications = applications.filter((application) => (filter === "All" || application.status === filter) && [application.name, application.description].join(" ").toLowerCase().includes(query.toLowerCase()))
+  const visibleApplications = applications.filter((application) => (filter === "All" || (filter === "Active" ? application.status.startsWith("Active in ") : application.status === filter)) && [application.name, application.description].join(" ").toLowerCase().includes(query.toLowerCase()))
 
   return (
     <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
@@ -216,14 +208,14 @@ function ApplicationsList() {
       <section className="overflow-hidden rounded-xl border bg-card">
         <header className="flex flex-col gap-3 border-b bg-muted/70 p-4 sm:flex-row sm:items-center">
           <div className="flex flex-wrap gap-1 rounded-lg border bg-card p-1">
-            {["All", "Healthy", "Degraded", "No services"].map((item) => <button key={item} onClick={() => setFilter(item)} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${filter === item ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{item}</button>)}
+            {["All", "Healthy", "Active", "Degraded", "Not deployed", "No services"].map((item) => <button key={item} onClick={() => setFilter(item)} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${filter === item ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{item}</button>)}
           </div>
           <label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full rounded-md border bg-card pl-9 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20" placeholder="Search applications" /></label>
         </header>
 
         <div className="overflow-x-auto">
           <Table className="w-full min-w-[880px] text-left">
-            <TableHeader className="border-b text-[10px] uppercase tracking-[0.12em] text-muted-foreground"><TableRow><TableHead className="px-5 py-3 font-semibold">Application</TableHead><TableHead className="px-4 py-3 font-semibold">Services</TableHead><TableHead className="px-4 py-3 font-semibold">Production</TableHead><TableHead className="px-4 py-3 font-semibold">Latest deployment</TableHead><TableHead className="px-4 py-3 font-semibold">Domains</TableHead><TableHead className="px-4 py-3 font-semibold">Updated</TableHead><TableHead className="px-5 py-3 text-right font-semibold">Actions</TableHead></TableRow></TableHeader>
+            <TableHeader className="border-b text-[10px] uppercase tracking-[0.12em] text-muted-foreground"><TableRow><TableHead className="px-5 py-3 font-semibold">Application</TableHead><TableHead className="px-4 py-3 font-semibold">Services</TableHead><TableHead className="px-4 py-3 font-semibold">Status</TableHead><TableHead className="px-4 py-3 font-semibold">Latest deployment</TableHead><TableHead className="px-4 py-3 font-semibold">Domains</TableHead><TableHead className="px-4 py-3 font-semibold">Updated</TableHead><TableHead className="px-5 py-3 text-right font-semibold">Actions</TableHead></TableRow></TableHeader>
             <TableBody className="divide-y">
               {visibleApplications.map((application) => (
                 <TableRow key={application.id} className="group hover:bg-muted/35">
@@ -297,5 +289,6 @@ export default function ApplicationsApp() {
   const applicationDomains = path === applicationBase + "/domains"
   const serviceArea = Boolean(applicationBase) && path.startsWith(applicationBase + "/services")
   const applicationOverview = /^\/applications\/[^/]+\/?$/.test(path) && path !== "/applications/new"
-  return <div className="min-h-svh bg-background text-foreground"><Sidebar open={navigationOpen} onClose={() => setNavigationOpen(false)} applicationID={applicationID} /><div className="lg:pl-60"><Topbar applicationID={applicationID} section={dashboard ? "Overview" : globalSettings ? "Settings" : documentation ? "Documentation" : systemStatus ? "System status" : observability ? "Observability" : globalDeployments ? "Deployments" : undefined} onOpenNavigation={() => setNavigationOpen(true)} /><Suspense fallback={<ScreenLoading />}>{dashboard ? <DashboardScreen /> : documentation ? <DocumentationScreen /> : systemStatus ? <SystemStatusScreen /> : globalSettings ? <GlobalSettings /> : applicationSettings ? <ApplicationSettings applicationID={applicationID!} /> : observability ? <ObservabilityScreen /> : deploymentDetailMatch ? <DeploymentDetail deploymentID={deploymentDetailMatch[1]} /> : globalDeployments ? <DeploymentsList /> : applicationDeployments ? <DeploymentsList scope="application" applicationID={applicationID!} /> : applicationActivity ? <ApplicationActivity applicationID={applicationID!} /> : applicationEnvironment ? <EnvironmentScreen scope="application" applicationID={applicationID!} /> : applicationDomains ? <DomainsScreen scope="application" applicationID={applicationID!} /> : serviceArea ? <ServicesRouter path={path} /> : creatingApplication ? <CreateApplication /> : applicationOverview && applicationID ? <ApplicationOverview applicationID={applicationID} /> : applicationsList ? <ApplicationsList /> : <NotFoundScreen />}</Suspense></div></div>
+  const section = dashboard ? "Overview" : globalSettings ? "Settings" : documentation ? "Documentation" : systemStatus ? "System status" : observability ? "Observability" : globalDeployments ? "Deployments" : undefined
+  return <div className="min-h-svh bg-background text-foreground"><Sidebar open={navigationOpen} onClose={() => setNavigationOpen(false)} /><div className="lg:pl-60"><Topbar onOpenNavigation={() => setNavigationOpen(true)} /><Breadcrumbs applicationID={applicationID} section={section} /><Suspense fallback={<ScreenLoading />}>{dashboard ? <DashboardScreen /> : documentation ? <DocumentationScreen /> : systemStatus ? <SystemStatusScreen /> : globalSettings ? <GlobalSettings /> : applicationSettings ? <ApplicationSettings applicationID={applicationID!} /> : observability ? <ObservabilityScreen /> : deploymentDetailMatch ? <DeploymentDetail deploymentID={deploymentDetailMatch[1]} /> : globalDeployments ? <DeploymentsList /> : applicationDeployments ? <DeploymentsList scope="application" applicationID={applicationID!} /> : applicationActivity ? <ApplicationActivity applicationID={applicationID!} /> : applicationEnvironment ? <EnvironmentScreen scope="application" applicationID={applicationID!} /> : applicationDomains ? <DomainsScreen scope="application" applicationID={applicationID!} /> : serviceArea ? <ServicesRouter path={path} /> : creatingApplication ? <CreateApplication /> : applicationOverview && applicationID ? <ApplicationOverview applicationID={applicationID} /> : applicationsList ? <ApplicationsList /> : <NotFoundScreen />}</Suspense></div></div>
 }

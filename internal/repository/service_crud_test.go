@@ -202,3 +202,51 @@ func TestApplicationSummaryIncludesHealthDomainAndLatestDeployment(t *testing.T)
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
 }
+
+func TestApplicationSummaryTreatsUnconfiguredProductionAsEmptyWhenStagingRuns(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	application, err := store.CreateApplication(ctx, "Preview", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := store.ListApplicationEnvironments(ctx, application.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := store.CreateService(ctx, CreateServiceInput{ApplicationID: application.ID, Name: "web", RepoURL: "https://github.com/acme/preview.git", InternalPort: 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var staging Environment
+	for _, environment := range environments {
+		if environment.Kind == "staging" {
+			staging = environment
+		}
+	}
+	if _, err := store.UpdateServiceEnvironment(ctx, service.ID, staging.ID, "main", true); err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := store.CreateServiceDeployment(ctx, CreateServiceDeploymentInput{ServiceID: service.ID, EnvironmentID: staging.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ActivateServiceDeployment(ctx, service.ID, staging.ID, deployment.ID); err != nil {
+		t.Fatal(err)
+	}
+	summaries, err := store.ListApplicationSummaries(ctx)
+	if err != nil || len(summaries) != 1 {
+		t.Fatalf("summaries=%+v err=%v", summaries, err)
+	}
+	var productionHealth, stagingHealth EnvironmentHealth
+	for _, health := range summaries[0].EnvironmentHealth {
+		if health.Kind == "production" {
+			productionHealth = health
+		} else if health.Kind == "staging" {
+			stagingHealth = health
+		}
+	}
+	if productionHealth.Status != "empty" || stagingHealth.Status != "healthy" || summaries[0].HealthyServiceCount != 1 {
+		t.Fatalf("unexpected environment health: production=%+v staging=%+v summary=%+v", productionHealth, stagingHealth, summaries[0])
+	}
+}

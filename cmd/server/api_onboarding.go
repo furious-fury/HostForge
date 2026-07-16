@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -62,10 +63,38 @@ func (s *server) handleOnboardingComplete(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "github_app_incomplete"})
 		return
 	}
+	expectedIPv4 := strings.TrimSpace(s.cfg.DNSServerIPv4)
+	if parsed := net.ParseIP(expectedIPv4); parsed == nil || parsed.To4() == nil {
+		expectedIPv4 = strings.TrimSpace(s.cfg.BootstrapPublicIP)
+	}
+	if parsed := net.ParseIP(expectedIPv4); parsed == nil || parsed.To4() == nil {
+		expectedIPv4, _, _ = dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
+	}
+	if expectedIPv4 == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "expected_public_ipv4_unavailable"})
+		return
+	}
 	timeout := time.Duration(s.cfg.DNSDetectTimeoutMS) * time.Millisecond
-	status, _ := dnsops.CheckRegistrarARecord(r.Context(), domain, s.cfg.BootstrapPublicIP, timeout)
-	if status != "ok" {
-		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "platform_dns_not_ready"})
+	wildcardProbe := "hostforge-wildcard-check." + domain
+	checks := dnsops.CheckRegistrarARecords(r.Context(), []string{domain, wildcardProbe}, expectedIPv4, timeout)
+	apexStatus, wildcardStatus := "lookup_error", "lookup_error"
+	resolved := map[string][]string{"apex": {}, "wildcard": {}}
+	if len(checks) > 0 {
+		apexStatus = checks[0].Status
+		resolved["apex"] = checks[0].ResolvedIPv4
+	}
+	if len(checks) > 1 {
+		wildcardStatus = checks[1].Status
+		resolved["wildcard"] = checks[1].ResolvedIPv4
+	}
+	if apexStatus != "ok" || wildcardStatus != "ok" {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"status": "error", "error": "platform_dns_not_ready",
+			"expected_ipv4": expectedIPv4,
+			"hostnames":     map[string]string{"apex": domain, "wildcard": wildcardProbe},
+			"checks":        map[string]string{"apex": apexStatus, "wildcard": wildcardStatus},
+			"resolved_ipv4": resolved,
+		})
 		return
 	}
 	if strings.TrimSpace(s.cfg.CaddyRootConfig) == "" {

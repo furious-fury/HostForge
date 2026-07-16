@@ -49,7 +49,7 @@ export type ApplicationDTO = {
   archived: boolean
   created_at: string
   updated_at: string
-  environment_health?: Array<{ environment_id: string; name: string; kind: string; service_count: number; running_count: number; status: "empty" | "healthy" | "degraded" }>
+  environment_health?: Array<{ environment_id: string; name: string; kind: string; service_count: number; configured_count?: number; running_count: number; status: "empty" | "healthy" | "degraded" }>
   service_count?: number
   healthy_service_count?: number
   domain_count?: number
