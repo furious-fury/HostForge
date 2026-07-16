@@ -36,7 +36,7 @@ func cleanupServiceRuntime(ctx context.Context, log *slog.Logger, store *reposit
 			return ErrCode("delete_container_lookup_failed", err)
 		}
 		containerID := strings.TrimSpace(container.DockerContainerID)
-		if containerID == "" {
+		if containerID == "" || strings.EqualFold(strings.TrimSpace(container.Status), "REMOVED") {
 			continue
 		}
 		if _, seen := seenContainers[containerID]; seen {

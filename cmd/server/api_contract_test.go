@@ -265,6 +265,54 @@ func TestApplicationDeleteRecordsDurableEvent(t *testing.T) {
 	}
 }
 
+func TestApplicationDeleteIgnoresRemovedHistoricalContainers(t *testing.T) {
+	s := newAPITestServer(t)
+	ctx := context.Background()
+	application, err := s.store.CreateApplication(ctx, "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := s.store.ListApplicationEnvironments(ctx, application.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := s.store.CreateService(ctx, repository.CreateServiceInput{
+		ApplicationID: application.ID,
+		Name:          "api",
+		RepoURL:       "https://github.com/acme/payments.git",
+		InternalPort:  3000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := s.store.CreateServiceDeployment(ctx, repository.CreateServiceDeploymentInput{
+		ServiceID:     service.ID,
+		EnvironmentID: environments[0].ID,
+		ImageRef:      "hostforge/payments:old",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.AttachContainer(ctx, repository.AttachContainerInput{
+		DeploymentID:      deployment.ID,
+		DockerContainerID: "already-removed",
+		InternalPort:      3000,
+		HostPort:          18080,
+		Status:            "REMOVED",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	s.handleApplications(recorder, httptest.NewRequest(http.MethodDelete, "/api/applications/"+application.ID, nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if _, err := s.store.GetApplication(ctx, application.ID); err == nil {
+		t.Fatal("expected application to be deleted")
+	}
+}
+
 func TestServiceDeleteRecordsDurableApplicationEvent(t *testing.T) {
 	s := newAPITestServer(t)
 	application, err := s.store.CreateApplication(context.Background(), "Payments", "")

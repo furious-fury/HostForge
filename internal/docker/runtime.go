@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -106,11 +107,18 @@ func RunContainer(ctx context.Context, cli *client.Client, opts RunOptions) (str
 // StopAndRemove stops a running container (best effort) and removes it.
 func StopAndRemove(ctx context.Context, cli *client.Client, containerID string) error {
 	timeout := 10
-	if _, err := cli.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil &&
-		!strings.Contains(strings.ToLower(err.Error()), "is not running") {
-		return fmt.Errorf("stop container %s: %w", shortID(containerID), err)
+	if _, err := cli.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "is not running") {
+			return fmt.Errorf("stop container %s: %w", shortID(containerID), err)
+		}
 	}
 	if _, err := cli.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: true}); err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("remove container %s: %w", shortID(containerID), err)
 	}
 	return nil
