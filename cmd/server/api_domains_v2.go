@@ -40,7 +40,9 @@ func (s *server) handleServiceDomains(w http.ResponseWriter, r *http.Request, ap
 			}
 			names := make([]string, 0, len(items))
 			for _, item := range items {
-				names = append(names, item.DomainName)
+				if item.Kind == "custom" {
+					names = append(names, item.DomainName)
+				}
 			}
 			expectedIPv4, source, warning := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
 			guidance := dnsops.BuildGuidanceWithIPv4(r.Context(), s.cfg, names, expectedIPv4, source, warning)

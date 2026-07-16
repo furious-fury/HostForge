@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { api, type ApplicationDTO, type EnvironmentDTO, type ServiceDTO } from "@/api"
 import { DomainsScreen, EnvironmentScreen, ServiceMetrics } from "@/operations-screens"
+import { formatRuntimeLogLine } from "@/runtime-log-format"
 import { ToastProvider } from "@/toast-provider"
 
 const application: ApplicationDTO = {
@@ -145,6 +146,49 @@ describe("operations screens", () => {
       service_id: service.id,
     })
     expect(await screen.findAllByText(/payments\.example\.test added/)).toHaveLength(2)
+  })
+
+  it("does not show registrar guidance for managed platform domains", async () => {
+    mockApplication()
+    vi.spyOn(api, "domains").mockResolvedValue({
+      domains: [{
+        id: "managed-domain",
+        application_id: application.id,
+        environment_id: environment.id,
+        service_id: service.id,
+        domain_name: "clear-river.hostforge.example.com",
+        kind: "platform",
+        ssl_status: "ACTIVE",
+        created_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+      }],
+      dns_guidance: {
+        ipv4: "203.0.113.10",
+        ipv4_source: "override",
+        ipv6_source: "omitted",
+        records: [{ type: "A", name: "clear-river", value: "203.0.113.10", zone_hint: "example.com" }],
+      },
+    })
+
+    renderScreen(<DomainsScreen scope="application" applicationID={application.id} />)
+
+    expect(await screen.findByText("clear-river.hostforge.example.com")).toBeInTheDocument()
+    expect(screen.queryByText("DNS and routing guidance")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Check custom DNS" })).toBeDisabled()
+  })
+
+  it("formats Caddy access JSON as readable runtime activity", () => {
+    const line = JSON.stringify({
+      logger: "http.log.access.log0",
+      msg: "handled request",
+      duration: 0.00124,
+      size: 30040,
+      status: 200,
+      request: { method: "GET", uri: "/img/children.jpg", client_ip: "143.105.174.165" },
+    })
+
+    expect(formatRuntimeLogLine(line)).toBe("[access] 200 GET /img/children.jpg · 1 ms · 29.3 KB · 143.105.174.165")
+    expect(formatRuntimeLogLine("server started")).toBe("server started")
   })
 
   it("requests persisted service metric ranges from the server", async () => {

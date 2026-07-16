@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { APIError, api, queryKeys, type CaddySyncOutcomeDTO, type DNSGuidanceDTO } from "@/api"
 import {
@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input"
 import "@/operations.css"
 import { useToast } from "@/toast-provider"
 import { useDeploymentLogStream } from "@/use-deployment-log-stream"
+import { formatRuntimeLogLine } from "@/runtime-log-format"
 import { envExample, MAX_ENV_FILE_BYTES, parseEnvFile, type EnvFileEntry } from "@/env-file"
 
 function PageHeader({ title, description, back, children }: { title: string; description: string; back: { label: string; href: string }; children?: React.ReactNode }) {
@@ -63,9 +64,10 @@ export function ServiceLogs({ applicationID, service }: { applicationID: string;
   const logViewport = useRef<HTMLDivElement>(null)
   const text = stream.text
   const connection = stream.connection
-
-  const lines = text.split(/\r?\n/).filter((line) => line && line.toLowerCase().includes(query.toLowerCase()))
-  useEffect(() => {
+  const stackKind = serviceQuery.data?.service.stack_kind || ""
+  const staticRuntime = stackKind === "staticfile" || stackKind === "node_vite" || stackKind === "node_cra" || stackKind === "node_astro"
+  const lines = text.split(/\r?\n/).filter(Boolean).map(formatRuntimeLogLine).filter((line) => line.toLowerCase().includes(query.toLowerCase()))
+  useLayoutEffect(() => {
     if (!streaming || query || !logViewport.current) return
     logViewport.current.scrollTop = logViewport.current.scrollHeight
   }, [text, streaming, query])
@@ -83,7 +85,7 @@ export function ServiceLogs({ applicationID, service }: { applicationID: string;
   if (applicationQuery.isError || serviceQuery.isError) return <OperationError title="Runtime logs could not be loaded" retry={() => { applicationQuery.refetch(); serviceQuery.refetch() }} />
 
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9"><PageHeader title="Runtime logs" description="Live stdout and stderr from the active container." back={{ label: "Service overview", href: base }}><AppSelect aria-label="Runtime log environment" options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={(value) => { setEnvironmentName(value); stream.clear() }} className="h-9 w-36 bg-card text-xs" /><Button variant="outline" disabled={!text} onClick={download}><DownloadSimpleIcon />Download</Button><Button disabled={!deploymentID} onClick={() => setStreaming((current) => !current)}>{streaming ? <PauseIcon /> : <PlayIcon />}{streaming ? "Pause stream" : "Resume stream"}</Button></PageHeader><ServiceTabs active="Logs" service={service} applicationID={applicationID} />
-    {!deploymentID ? <StateCard title="No active container" description="Deploy this environment before opening runtime logs." /> : <section className="overflow-hidden rounded-xl border bg-card"><header className="flex flex-col gap-3 border-b bg-muted/75 p-4 sm:flex-row sm:items-center"><span className="flex items-center gap-2 text-xs font-semibold"><span className={`size-2 rounded-full ${connection === "connected" ? "bg-emerald-500" : connection === "error" ? "bg-red-500" : "animate-pulse bg-amber-500"}`} />{streaming ? connection : "paused"}</span><label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full bg-card pl-9 text-xs" placeholder="Search buffered logs" /></label><Button variant="outline" size="sm" onClick={stream.clear}>Clear buffer</Button></header>{stream.error && <p role="alert" className="border-b bg-destructive/5 px-4 py-2 text-xs text-destructive">{stream.error}</p>}<div ref={logViewport} className="hf-runtime-log" role="log" aria-label="Runtime log output">{lines.length ? lines.map((line, index) => <div key={index} className="hf-runtime-log-line"><span aria-hidden="true" className="select-none text-right font-mono text-[10px] text-neutral-500">{index + 1}</span><code className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-neutral-200">{line}</code></div>) : <p className="p-5 font-mono text-xs text-neutral-500">{connection === "connected" ? "Waiting for container output..." : connection === "error" ? "Runtime stream unavailable." : "Connecting to the runtime stream..."}</p>}</div><footer className="border-t bg-muted/30 px-4 py-2.5 text-[10px] text-muted-foreground">{lines.length} visible lines / buffer capped at 1 MB</footer></section>}
+    {!deploymentID ? <StateCard title="No active container" description="Deploy this environment before opening runtime logs." /> : <section className="overflow-hidden rounded-xl border bg-card"><header className="flex flex-col gap-3 border-b bg-muted/75 p-4 sm:flex-row sm:items-center"><span className="flex items-center gap-2 text-xs font-semibold"><span className={`size-2 rounded-full ${connection === "connected" ? "bg-emerald-500" : connection === "error" ? "bg-red-500" : "animate-pulse bg-amber-500"}`} />{streaming ? connection : "paused"}</span><label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full bg-card pl-9 text-xs" placeholder="Search buffered logs" /></label><Button variant="outline" size="sm" onClick={stream.clear}>Clear buffer</Button></header>{staticRuntime && <p className="border-b bg-sky-500/5 px-4 py-2.5 text-[11px] leading-5 text-muted-foreground">This production build is served as static assets. Runtime output therefore shows HTTP access activity from the container web server, not Vite development-server or browser console logs.</p>}{stream.error && <p role="alert" className="border-b bg-destructive/5 px-4 py-2 text-xs text-destructive">{stream.error}</p>}<div ref={logViewport} className="hf-runtime-log" role="log" aria-label="Runtime log output">{lines.length ? lines.map((line, index) => <div key={index} className="hf-runtime-log-line"><span aria-hidden="true" className="select-none text-right font-mono text-[10px] text-neutral-500">{index + 1}</span><code className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-neutral-200">{line}</code></div>) : <p className="p-5 font-mono text-xs text-neutral-500">{connection === "connected" ? "Waiting for container output..." : connection === "error" ? "Runtime stream unavailable." : "Connecting to the runtime stream..."}</p>}</div><footer className="border-t bg-muted/30 px-4 py-2.5 text-[10px] text-muted-foreground">{lines.length} visible lines / buffer capped at 1 MB</footer></section>}
   </main>
 }
 
@@ -278,6 +280,7 @@ export function DomainsScreen({ scope, applicationID, service = "" }: { scope: "
   if (!environment) return <main className="mx-auto w-full max-w-[1600px] px-4 py-12"><StateCard title="No environments available" description="Create an environment before configuring domains." /></main>
   const base = scope === "application" ? "/applications/" + applicationID : "/applications/" + applicationID + "/services/" + service
   const domains = domainsQuery.data?.domains || []
+  const customDomains = domains.filter((domain) => domain.kind !== "platform")
   const guidance = domainsQuery.data?.dns_guidance
   const serviceName = (id: string) => services.find((item) => item.id === id)?.name || id
   const mutationError = createMutation.error || updateMutation.error || deleteMutation.error || dnsCheckMutation.error
@@ -296,13 +299,13 @@ export function DomainsScreen({ scope, applicationID, service = "" }: { scope: "
     <PageHeader title="Domains" description="Manage public Caddy routes for the selected environment." back={{ label: "Back to overview", href: base }}>
       <AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={changeDomainEnvironment} className="h-9 min-w-36 bg-card text-xs" />
       <Button variant="outline" disabled={domainsQuery.isFetching} onClick={() => domainsQuery.refetch()}><ActivityIcon />Refresh</Button>
-      <Button variant="outline" disabled={!domains.length || dnsCheckMutation.isPending} onClick={() => dnsCheckMutation.mutate()}><GlobeIcon />{dnsCheckMutation.isPending ? "Checking DNS..." : "Check DNS"}</Button>
+      <Button variant="outline" disabled={!customDomains.length || dnsCheckMutation.isPending} onClick={() => dnsCheckMutation.mutate()}><GlobeIcon />{dnsCheckMutation.isPending ? "Checking DNS..." : "Check custom DNS"}</Button>
       <Button disabled={!services.length} onClick={() => setAdding((current) => !current)}><PlusIcon />Add domain</Button>
     </PageHeader>
     {scope === "application" ? <ApplicationTabs active="Domains" applicationID={applicationID} /> : <ServiceTabs active="Domains" service={service} applicationID={applicationID} />}
     {domainNotice && <div role="status" className="mb-5 rounded-xl border bg-card px-4 py-3 text-xs text-muted-foreground">{domainNotice}</div>}
     {mutationError && <div role="alert" className="mb-5 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive">{domainMutationError(mutationError)}</div>}
-    {domains.length > 0 && guidance && <DNSGuidance guidance={guidance} />}
+    {customDomains.length > 0 && guidance && <DNSGuidance guidance={guidance} />}
     {adding && environment && <Panel title="Add domain" subtitle="Caddy configuration is validated before the route is accepted">
       <form className="grid gap-4 p-5 sm:grid-cols-[1.5fr_1fr_auto] sm:items-end" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}>
         <Field label="Hostname"><Input value={domainName} onChange={(event) => setDomainName(event.target.value.toLowerCase())} placeholder="api.example.com" /></Field>

@@ -32,6 +32,8 @@ const service: ServiceDTO = {
   application_id: application.id,
   name: "API",
   repo_url: "https://github.com/acme/payments",
+  stack_kind: "node_vite",
+  stack_label: "Node.js · Vite",
   github_installation_id: 42,
   root_directory: "",
   runtime: "auto",
@@ -212,6 +214,7 @@ describe("service overview", () => {
     expect(await screen.findByRole("link", { name: /staging\.payments\.example\.com/i })).toHaveAttribute("href", "https://staging.payments.example.com")
     expect(screen.getByText("Production")).toBeInTheDocument()
     expect(screen.getByText("Staging")).toBeInTheDocument()
+    expect(screen.getAllByTitle("Node.js · Vite stack").length).toBeGreaterThan(0)
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument()
   })
 })

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { api, queryKeys } from "@/api"
 import { AppSelect } from "@/components/app-select"
@@ -107,6 +107,7 @@ export function DeploymentDetail({ deploymentID }: { deploymentID: string }) {
   const navigate = useNavigate()
   const [wrap, setWrap] = useState(false)
   const [logQuery, setLogQuery] = useState("")
+  const logViewport = useRef<HTMLDivElement>(null)
   const deploymentQuery = useQuery({
     queryKey: queryKeys.deployment(deploymentID),
     queryFn: ({ signal }) => api.deployment(deploymentID, signal),
@@ -138,13 +139,17 @@ export function DeploymentDetail({ deploymentID }: { deploymentID: string }) {
     },
   })
   const releaseMutationPending = redeployMutation.isPending || rollbackMutation.isPending || cancelMutation.isPending
+  const logText = active ? liveLogs.text : logsQuery.data?.text || ""
+  useLayoutEffect(() => {
+    if (!active || logQuery || !logViewport.current) return
+    logViewport.current.scrollTop = logViewport.current.scrollHeight
+  }, [logText, active, logQuery])
 
   if (deploymentQuery.isPending) return <main className="mx-auto w-full max-w-[1600px] animate-pulse px-4 py-8 sm:px-6 lg:px-8"><div className="h-8 w-56 rounded bg-muted" /><div className="mt-6 h-96 rounded-xl border bg-card" /></main>
   if (deploymentQuery.isError) return <main className="mx-auto w-full max-w-[1600px] px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-8 text-center"><h1 className="text-sm font-semibold">Deployment could not be loaded</h1><p className="mt-2 text-xs text-muted-foreground">It may have been removed or the server is unavailable.</p><Button className="mt-4" variant="outline" onClick={() => deploymentQuery.refetch()}>Retry</Button></section></main>
 
   const deployment = deploymentQuery.data.deployment
   const displayStatus = deployment.status === "SUCCESS" ? "Healthy" : deployment.status[0] + deployment.status.slice(1).toLowerCase()
-  const logText = active ? liveLogs.text : logsQuery.data?.text || ""
   const lines = logText.split(/\r?\n/).filter((line) => line.toLowerCase().includes(logQuery.toLowerCase()))
   const steps = stepsQuery.data?.steps || []
 
@@ -178,7 +183,7 @@ export function DeploymentDetail({ deploymentID }: { deploymentID: string }) {
       <section className="mb-5 overflow-hidden rounded-xl border bg-card">
         <header className="flex flex-col gap-3 border-b bg-muted/75 p-4 xl:flex-row xl:items-center"><div className="flex items-center gap-2"><TerminalWindowIcon size={16} /><div><h2 className="text-sm font-semibold">Deployment logs</h2><p className="mt-0.5 text-[11px] text-muted-foreground">{active ? "Live build output — this view follows the deployment as it advances" : "Completed server log snapshot"}</p></div></div><div className="flex flex-wrap gap-2 xl:ml-auto"><label className="relative"><MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={13} /><Input value={logQuery} onChange={(event) => setLogQuery(event.target.value)} className="h-[2.1rem] w-56 min-w-0 bg-card pl-8 text-[0.68rem]" placeholder="Search logs" /></label><button onClick={() => setWrap(!wrap)} className={`hf-log-toggle ${wrap ? "hf-log-toggle-active" : ""}`}>Wrap</button><Button variant="outline" size="icon" aria-label="Copy log output" disabled={!logText} onClick={() => navigator.clipboard.writeText(logText)}><CopyIcon /></Button></div></header>
         {active && liveLogs.error && <p role="alert" className="border-b bg-destructive/5 px-4 py-2 text-xs text-destructive">{liveLogs.error}</p>}
-        <div className={`hf-terminal ${wrap ? "whitespace-pre-wrap" : "whitespace-pre"}`} role="log" aria-label="Deployment log output">{!active && logsQuery.isPending ? <span className="text-muted-foreground">Loading logs...</span> : !active && logsQuery.isError ? <span className="inline-flex items-center gap-3 text-muted-foreground">Logs are not available yet.<Button size="sm" variant="outline" onClick={() => logsQuery.refetch()}>Retry logs</Button></span> : lines.length ? lines.map((line, index) => <div key={index} className="hf-log-line"><span className="hf-log-message">{line}</span></div>) : <span className="text-muted-foreground">{active ? "Waiting for build output..." : "No matching log lines."}</span>}</div>
+        <div ref={logViewport} className={`hf-terminal ${wrap ? "whitespace-pre-wrap" : "whitespace-pre"}`} role="log" aria-label="Deployment log output">{!active && logsQuery.isPending ? <span className="text-muted-foreground">Loading logs...</span> : !active && logsQuery.isError ? <span className="inline-flex items-center gap-3 text-muted-foreground">Logs are not available yet.<Button size="sm" variant="outline" onClick={() => logsQuery.refetch()}>Retry logs</Button></span> : lines.length ? lines.map((line, index) => <div key={index} className="hf-log-line"><span className="hf-log-message">{line}</span></div>) : <span className="text-muted-foreground">{active ? "Waiting for build output..." : "No matching log lines."}</span>}</div>
         <footer className="flex flex-wrap items-center gap-4 border-t bg-muted/30 px-4 py-2.5 text-[10px] text-muted-foreground"><span className="flex items-center gap-1.5" role="status" aria-live="polite"><span className={`size-1.5 rounded-full ${active && liveLogs.connection === "connected" ? "bg-emerald-500" : active ? "animate-pulse bg-amber-500" : "bg-muted-foreground"}`} />{active ? liveLogs.connection : "Log snapshot"}</span><span>{lines.length} lines</span><span className="ml-auto">UTF-8</span></footer>
       </section>
 
