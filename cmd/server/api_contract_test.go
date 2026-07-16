@@ -797,6 +797,45 @@ func TestPlatformDomainSettingsRejectInvalidAndUnconfiguredUpdates(t *testing.T)
 	assertAPIError(t, unconfigured, http.StatusConflict, "platform_domain_not_configured")
 }
 
+func TestActiveServiceReportsPlatformDomainRegistrationRequirement(t *testing.T) {
+	s := newAPITestServer(t)
+	ctx := context.Background()
+	application, err := s.store.CreateApplication(ctx, "Payments", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	environments, err := s.store.ListApplicationEnvironments(ctx, application.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := s.store.CreateService(ctx, repository.CreateServiceInput{ApplicationID: application.ID, Name: "api", RepoURL: "https://github.com/acme/payments.git", InternalPort: 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := s.store.CreateServiceDeployment(ctx, repository.CreateServiceDeploymentInput{ServiceID: service.ID, EnvironmentID: environments[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.ActivateServiceDeployment(ctx, service.ID, environments[0].ID, deployment.ID); err != nil {
+		t.Fatal(err)
+	}
+	bindings, err := s.store.ListServiceEnvironments(ctx, service.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := s.serviceEnvironmentStates(httptest.NewRequest(http.MethodGet, "/api/services/"+service.ID, nil), service, bindings)
+	var activeState map[string]any
+	for _, state := range states {
+		if state["active_deployment_id"] == deployment.ID {
+			activeState = state
+			break
+		}
+	}
+	if activeState == nil || activeState["public_url_status"] != "platform_domain_required" {
+		t.Fatalf("unexpected environment states: %#v", states)
+	}
+}
+
 func TestRequestResourceScopeResolvesV2Routes(t *testing.T) {
 	s := newAPITestServer(t)
 	application, err := s.store.CreateApplication(context.Background(), "Payments", "")

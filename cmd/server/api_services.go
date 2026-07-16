@@ -17,7 +17,11 @@ import (
 
 func (s *server) serviceEnvironmentStates(r *http.Request, service repository.Service, bindings []repository.ServiceEnvironment) []map[string]any {
 	states := make([]map[string]any, 0, len(bindings))
+	onboarding, onboardingErr := s.store.GetOnboardingState(r.Context())
+	routeSyncNeeded := false
+	reconciledStateIndexes := make([]int, 0)
 	for _, binding := range bindings {
+		reconciled := false
 		state := map[string]any{
 			"environment_id": binding.EnvironmentID, "branch": binding.Branch, "auto_deploy": binding.AutoDeploy,
 			"desired_state": binding.DesiredState, "active_deployment_id": binding.ActiveDeploymentID,
@@ -36,11 +40,41 @@ func (s *server) serviceEnvironmentStates(r *http.Request, service repository.Se
 				state["container_error"] = "container_lookup_failed"
 			}
 		}
-		if domains, err := s.store.ListServiceDomains(r.Context(), service.ApplicationID, binding.EnvironmentID, service.ID); err == nil && len(domains) > 0 {
+		domains, domainErr := s.store.ListServiceDomains(r.Context(), service.ApplicationID, binding.EnvironmentID, service.ID)
+		if domainErr == nil && len(domains) == 0 && binding.ActiveDeploymentID != "" {
+			switch {
+			case onboardingErr != nil:
+				state["public_url_status"] = "platform_state_unavailable"
+			case strings.TrimSpace(onboarding.PlatformDomain) == "":
+				state["public_url_status"] = "platform_domain_required"
+			default:
+				generated, created, ensureErr := s.store.EnsurePlatformServiceDomain(r.Context(), service.ApplicationID, binding.EnvironmentID, service.ID)
+				if ensureErr != nil {
+					state["public_url_status"] = "platform_domain_generation_failed"
+				} else if generated.DomainName != "" {
+					domains = []repository.ServiceDomain{generated}
+					routeSyncNeeded = routeSyncNeeded || created
+					reconciled = created
+				}
+			}
+		}
+		if domainErr == nil && len(domains) > 0 {
 			state["public_url"] = "https://" + domains[0].DomainName
 			state["domains"] = domains
+			state["public_url_status"] = "ready"
 		}
 		states = append(states, state)
+		if reconciled {
+			reconciledStateIndexes = append(reconciledStateIndexes, len(states)-1)
+		}
+	}
+	if routeSyncNeeded {
+		if err := platformservices.SyncCaddyRoutes(r.Context(), s.requestLog(r), s.cfg, s.store); err != nil {
+			s.requestLog(r).Warn("sync reconciled platform domains failed", "service_id", service.ID, "error", err)
+			for _, index := range reconciledStateIndexes {
+				states[index]["public_url_status"] = "route_sync_failed"
+			}
+		}
 	}
 	return states
 }

@@ -102,6 +102,7 @@ describe("add service", () => {
     } })
 
     renderScreen()
+    await user.click(await screen.findByRole("button", { name: /configure service/i }))
     expect(await screen.findByText(/Ready to deploy/)).toBeInTheDocument()
     await user.type(screen.getByLabelText("Service name"), "API")
     await user.click(screen.getByRole("button", { name: "Create and deploy" }))
@@ -125,12 +126,26 @@ describe("add service", () => {
     vi.spyOn(api, "deploy").mockRejectedValue(new APIError(503, "docker_unavailable"))
 
     renderScreen()
+    await user.click(await screen.findByRole("button", { name: /configure service/i }))
     await screen.findByText(/Ready to deploy/)
     await user.type(screen.getByLabelText("Service name"), "API")
     await user.click(screen.getByRole("button", { name: "Create and deploy" }))
 
     expect(await screen.findByText(/service and branch were saved, but the first deployment could not be started/i)).toBeInTheDocument()
     expect(create).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows database and cron as planned service types", async () => {
+    mockApplication()
+    vi.spyOn(api, "githubInstallations").mockResolvedValue({ installations: [{ installation_id: 42, account_login: "acme", suspended: false }] })
+
+    renderScreen()
+
+    expect(await screen.findByText("Application service")).toBeInTheDocument()
+    expect(screen.getByText("Database")).toBeInTheDocument()
+    expect(screen.getByText("Cron job")).toBeInTheDocument()
+    expect(screen.getAllByText("Planned")).toHaveLength(2)
+    expect(screen.queryByRole("button", { name: /database/i })).not.toBeInTheDocument()
   })
 })
 

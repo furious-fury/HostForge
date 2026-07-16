@@ -14,7 +14,10 @@ func (s *Store) GetOnboardingState(ctx context.Context) (models.OnboardingState,
 	var out models.OnboardingState
 	var github, ingress, complete int
 	var completedAt, updatedAt string
-	err := s.db.QueryRowContext(ctx, `SELECT github_app_complete, platform_domain, permanent_ingress_complete, bootstrap_complete, completed_at, updated_at FROM onboarding_state WHERE id=1`).Scan(&github, &out.PlatformDomain, &ingress, &complete, &completedAt, &updatedAt)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT CASE WHEN github_app_complete=1 OR EXISTS(SELECT 1 FROM github_app WHERE id=1) THEN 1 ELSE 0 END,
+		       platform_domain,permanent_ingress_complete,bootstrap_complete,completed_at,updated_at
+		FROM onboarding_state WHERE id=1`).Scan(&github, &out.PlatformDomain, &ingress, &complete, &completedAt, &updatedAt)
 	if err != nil {
 		return out, fmt.Errorf("get onboarding state: %w", err)
 	}
@@ -36,7 +39,11 @@ func (s *Store) CompleteOnboarding(ctx context.Context, domain string) error {
 		return fmt.Errorf("platform domain is required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.ExecContext(ctx, `UPDATE onboarding_state SET platform_domain=?, permanent_ingress_complete=1, bootstrap_complete=1, completed_at=?, updated_at=? WHERE id=1 AND github_app_complete=1`, d, now, now)
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE onboarding_state
+		SET github_app_complete=1,platform_domain=?,permanent_ingress_complete=1,bootstrap_complete=1,completed_at=?,updated_at=?
+		WHERE id=1 AND (github_app_complete=1 OR EXISTS(SELECT 1 FROM github_app WHERE id=1))`,
+		d, now, now)
 	if err != nil {
 		return fmt.Errorf("complete onboarding: %w", err)
 	}

@@ -100,6 +100,7 @@ export type ServiceEnvironmentStateDTO = ServiceEnvironmentDTO & {
   active_deployment?: DeploymentDTO
   current_container?: { id: string; docker_container_id: string; internal_port: number; host_port: number; status: string; updated_at: string }
   public_url?: string
+  public_url_status?: "ready" | "platform_domain_required" | "platform_state_unavailable" | "platform_domain_generation_failed" | "route_sync_failed"
   domains?: DomainDTO[]
   container_error?: string
 }

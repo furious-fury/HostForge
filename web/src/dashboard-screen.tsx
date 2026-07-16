@@ -66,7 +66,8 @@ export function DashboardScreen() {
   const disk = sample?.disks.find((item) => item.mount === "/") || sample?.disks[0]
   const netRate = sample?.net.reduce((sum, item) => sum + item.rx_bps + item.tx_bps, 0) || 0
   const setup = onboardingQuery.data?.onboarding
-  const setupSteps = setup ? [true, setup.github_app_complete, setup.permanent_ingress_complete, setup.bootstrap_complete].filter(Boolean).length : 0
+  const bootstrapDisabled = setup ? !setup.bootstrap_enabled : false
+  const setupSteps = setup ? [true, setup.github_app_complete, setup.permanent_ingress_complete, bootstrapDisabled].filter(Boolean).length : 0
 
   const metrics = [
     { label: "Applications", value: applications.length, detail: applications.length ? "Managed products" : "Create your first", icon: AppWindowIcon },
@@ -96,7 +97,7 @@ export function DashboardScreen() {
         ["Authenticated operator", true],
         ["GitHub App", setup.github_app_complete],
         ["Permanent ingress", setup.permanent_ingress_complete],
-        ["Bootstrap disabled", setup.bootstrap_complete],
+        ["Bootstrap disabled", bootstrapDisabled],
       ].map(([label, complete]) => <div key={String(label)} className="flex items-center gap-2 text-xs"><CheckCircleIcon size={15} weight="fill" className={complete ? "text-emerald-600" : "text-muted-foreground/40"} /><span>{String(label)}</span></div>)}</div>{!setup.bootstrap_complete && <Button asChild className="mt-5 w-full" variant="outline"><Link to="/onboarding">Continue setup <CaretRightIcon /></Link></Button>}</div> : <div className="p-8 text-center text-xs text-muted-foreground">Setup state unavailable.</div>}</Panel>
     </div>
   </main>
