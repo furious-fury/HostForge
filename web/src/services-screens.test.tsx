@@ -421,6 +421,33 @@ describe("service overview", () => {
 })
 
 describe("services list", () => {
+  it("separates retained databases from active services", async () => {
+    const user = userEvent.setup()
+    const deletedDatabase: ServiceDTO = { ...service, id: "database-deleted", service_type: "database", name: "Old Redis", repo_url: "", runtime: "database", stack_kind: "redis", stack_label: "Redis", internal_port: 6379 }
+    vi.spyOn(api, "application").mockResolvedValue({
+      application,
+      environments: [environment],
+      services: [service, deletedDatabase],
+      service_bindings: { [service.id]: [] },
+      database_instances: { [deletedDatabase.id]: [{
+        id: "instance-deleted", service_id: deletedDatabase.id, environment_id: environment.id, engine_version: "8",
+        network_alias: "old-redis-production", internal_port: 6379, volume_name: "hostforge-db-old-redis", resource_preset: "development",
+        cpu_limit_millis: 500, memory_limit_bytes: 512 * 1024 * 1024, desired_state: "deleted", status: "deleted",
+        purge_after: "2026-07-24T09:00:00Z", created_at: "2026-07-17T09:00:00Z", updated_at: "2026-07-17T09:00:00Z",
+      }] },
+    })
+
+    renderServicesList()
+
+    expect(await screen.findByRole("link", { name: /API/ })).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: /Old Redis/ })).not.toBeInTheDocument()
+    const categories = screen.getByRole("tablist", { name: "Service categories" })
+    await user.click(within(categories).getByRole("tab", { name: /Deleted/ }))
+    expect(await screen.findByRole("link", { name: /Old Redis/ })).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: /API/ })).not.toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Deleted databases" })).toBeInTheDocument()
+  })
+
   it("shows an active staging binding instead of an empty production binding", async () => {
     const staging = { ...environment, id: "env-staging", name: "Staging", slug: "staging", kind: "staging" as const }
     vi.spyOn(api, "application").mockResolvedValue({
