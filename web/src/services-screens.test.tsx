@@ -121,6 +121,12 @@ describe("add service", () => {
         description: "Low traffic",
         cpu_limit_millis: 500,
         memory_limit_bytes: 512 * 1024 * 1024,
+      }, {
+        id: "custom",
+        name: "Custom",
+        description: "Choose exact limits",
+        cpu_limit_millis: 0,
+        memory_limit_bytes: 0,
       }],
       networking: { scope: "hostforge_environment", public_access_available: false },
     })
@@ -129,9 +135,13 @@ describe("add service", () => {
     await user.click(await screen.findByRole("button", { name: /configure database/i }))
 
     expect(await screen.findByText("Environment isolation")).toBeInTheDocument()
+    expect(screen.getByRole("img", { name: "PostgreSQL database icon" })).toHaveAttribute("src", "/db/postgresql.png")
     expect(screen.getByText(/own container, volume, credentials/i)).toBeInTheDocument()
     expect(screen.getByText("Private by default")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /create database/i })).toBeEnabled()
+    await user.click(screen.getByRole("button", { name: /^custom/i }))
+    expect(screen.getByRole("slider", { name: "CPU allocation" })).toHaveValue("2")
+    expect(screen.getByRole("slider", { name: "Memory allocation" })).toHaveValue("2")
     expect(github).not.toHaveBeenCalled()
   })
 
@@ -290,6 +300,7 @@ describe("service overview", () => {
 
     renderOverview()
     expect(await screen.findByText("Primary database")).toBeInTheDocument()
+	expect(screen.getByRole("img", { name: "PostgreSQL database icon" })).toHaveAttribute("src", "/db/postgresql.png")
 	expect(screen.getByText("primary_a1b2c3d4")).toBeInTheDocument()
 	expect(screen.getByText("hf_primary_a1b2c3d4")).toBeInTheDocument()
 	const databaseNavigation = screen.getByRole("tablist", { name: "Database service navigation" })
