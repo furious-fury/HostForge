@@ -246,6 +246,23 @@ func TestDatabaseAdapterCommandsNeverContainPlaintextPasswords(t *testing.T) {
 	}
 }
 
+func TestPostgreSQLHealthCheckWaitsForAuthenticatedTCP(t *testing.T) {
+	credential := repository.DatabaseCredential{DatabaseName: "hostforge_app", Username: "hf_app"}
+	command, env, err := databaseHealthCommand("postgresql", credential, []byte("application-secret"), []byte("admin-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(command, " ")
+	for _, expected := range []string{"psql", "--host 127.0.0.1", "--username hostforge_admin", "--command SELECT 1"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("PostgreSQL health command is missing %q: %s", expected, joined)
+		}
+	}
+	if len(env) != 1 || env[0] != "PGPASSWORD=admin-secret" {
+		t.Fatalf("PostgreSQL health check did not receive the administrator password through exec environment: %v", env)
+	}
+}
+
 func TestDatabaseRuntimeLogRedactionRemovesExactAndStructuredCredentials(t *testing.T) {
 	logs := strings.Join([]string{
 		`connection=postgresql://hf_app:p%40ss%3Aword@postgres:5432/app`,

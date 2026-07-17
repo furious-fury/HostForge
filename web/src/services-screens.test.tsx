@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -292,7 +292,7 @@ describe("service overview", () => {
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument()
   })
 
-  it("loads database logs and metrics only when diagnostics are opened", async () => {
+  it("renders distinct database tab views and loads diagnostics on demand", async () => {
     const user = userEvent.setup()
     const databaseService: ServiceDTO = { ...service, service_type: "database", name: "Primary database", repo_url: "", stack_kind: "postgresql", stack_label: "PostgreSQL" }
     vi.spyOn(api, "application").mockResolvedValue({ application, environments: [environment], services: [databaseService], service_bindings: {} })
@@ -315,8 +315,6 @@ describe("service overview", () => {
     renderOverview()
     expect(await screen.findByText("Primary database")).toBeInTheDocument()
 	expect(screen.getByRole("img", { name: "PostgreSQL database icon" })).toHaveAttribute("src", "/db/postgresql.png")
-	expect(screen.getByText("primary_a1b2c3d4")).toBeInTheDocument()
-	expect(screen.getByText("hf_primary_a1b2c3d4")).toBeInTheDocument()
 	const databaseNavigation = screen.getByRole("tablist", { name: "Database service navigation" })
 	expect(databaseNavigation).toHaveTextContent("Backups")
 	expect(databaseNavigation).toHaveTextContent("Data & connections")
@@ -324,12 +322,55 @@ describe("service overview", () => {
 	expect(databaseNavigation).toHaveTextContent("Logs")
 	expect(databaseNavigation).toHaveTextContent("Settings")
     expect(logs).not.toHaveBeenCalled()
-    await user.click(screen.getByRole("button", { name: /logs and resource usage/i }))
+    expect(metrics).not.toHaveBeenCalled()
+
+    await user.click(within(databaseNavigation).getByRole("tab", { name: "Data & connections" }))
+    expect(await screen.findByText("primary_a1b2c3d4")).toBeInTheDocument()
+    expect(screen.getByText("hf_primary_a1b2c3d4")).toBeInTheDocument()
+    expect(screen.queryByRole("log", { name: "Database logs" })).not.toBeInTheDocument()
+
+    await user.click(within(databaseNavigation).getByRole("tab", { name: "Logs" }))
 
     expect(await screen.findByText("database system is ready")).toBeInTheDocument()
-    expect(await screen.findByText("128.0 MB")).toBeInTheDocument()
     expect(logs).toHaveBeenCalledWith("db-instance-1", 200, expect.any(AbortSignal))
+	  expect(metrics).not.toHaveBeenCalled()
+
+	  await user.click(within(databaseNavigation).getByRole("tab", { name: "Metrics" }))
+	  expect(await screen.findByText("128.0 MB")).toBeInTheDocument()
     expect(metrics).toHaveBeenCalled()
+  })
+
+  it("shows the retained operation error when an older failed provision has no container logs", async () => {
+    const user = userEvent.setup()
+    const databaseService: ServiceDTO = { ...service, service_type: "database", name: "Failed database", repo_url: "", stack_kind: "postgresql", stack_label: "PostgreSQL" }
+    vi.spyOn(api, "application").mockResolvedValue({ application, environments: [environment], services: [databaseService], service_bindings: {} })
+    vi.spyOn(api, "service").mockResolvedValue({
+      service: databaseService,
+      database: { service_id: databaseService.id, engine: "postgresql", default_version: "18" },
+      database_instances: [{
+        id: "db-instance-failed", service_id: databaseService.id, environment_id: environment.id,
+        engine_version: "18", docker_container_id: "", network_alias: "failed-production",
+        internal_port: 5432, volume_name: "hostforge-db-failed", resource_preset: "development",
+        cpu_limit_millis: 500, memory_limit_bytes: 512 * 1024 * 1024, desired_state: "running",
+        status: "failed", health_message: "database_engine_configuration_failed", created_at: "2026-07-01T00:00:00Z", updated_at: "2026-07-01T00:00:00Z",
+      }],
+      database_operations: [{
+        id: "operation-failed", service_id: databaseService.id, database_instance_id: "db-instance-failed",
+        operation_type: "provision", status: "failed", progress_step: "failed", progress_percent: 90,
+        error_code: "database_engine_configuration_failed", error_message: "PostgreSQL application-user setup exited with code 2",
+        created_at: "2026-07-01T00:00:00Z", updated_at: "2026-07-01T00:00:00Z",
+      }],
+      database_bindings: {}, database_credentials: {}, bindings: [], environment_states: [],
+    })
+    const logs = vi.spyOn(api, "databaseLogs")
+
+    renderOverview()
+    const databaseNavigation = await screen.findByRole("tablist", { name: "Database service navigation" })
+    await user.click(within(databaseNavigation).getByRole("tab", { name: "Logs" }))
+
+    expect(await screen.findByText("PostgreSQL application-user setup exited with code 2")).toBeInTheDocument()
+    expect(screen.getByText(/failed container was removed by the earlier provisioning workflow/i)).toBeInTheDocument()
+    expect(logs).not.toHaveBeenCalled()
   })
 })
 

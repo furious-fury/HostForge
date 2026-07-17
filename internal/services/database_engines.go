@@ -143,7 +143,10 @@ func databaseContainerConfiguration(engine string, credential repository.Databas
 func databaseHealthCommand(engine string, credential repository.DatabaseCredential, password, adminPassword []byte) ([]string, []string, error) {
 	switch engine {
 	case "postgresql":
-		return []string{"pg_isready", "-U", "hostforge_admin", "-d", credential.DatabaseName}, nil, nil
+		// The official image starts a temporary socket-only server while its
+		// entrypoint initializes the data directory. Force an authenticated TCP
+		// query so provisioning cannot advance until the final server is ready.
+		return []string{"psql", "--host", "127.0.0.1", "--username", "hostforge_admin", "--dbname", credential.DatabaseName, "--tuples-only", "--command", "SELECT 1"}, []string{"PGPASSWORD=" + string(adminPassword)}, nil
 	case "mysql":
 		return []string{"mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "--silent"}, []string{"MYSQL_PWD=" + string(adminPassword)}, nil
 	case "mariadb":

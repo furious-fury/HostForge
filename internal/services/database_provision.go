@@ -624,15 +624,15 @@ func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repo
 	healthContext, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	if err := waitForDatabaseReadiness(healthContext, client, containerID, engine.ID, credential, password, adminPassword); err != nil {
-		_ = docker.StopAndRemoveWithTimeout(ctx, client, containerID, engine.StopTimeoutSeconds)
-		_, _ = store.UpdateDatabaseInstanceState(ctx, instance.ID, repository.UpdateDatabaseInstanceStateInput{ClearContainerID: true})
+		// Keep the stopped container and its ID so operators can inspect the
+		// startup output after a failed provision attempt.
+		_ = docker.StopContainerWithTimeout(context.WithoutCancel(ctx), client, containerID, engine.StopTimeoutSeconds)
 		fail("database_readiness_failed", err)
 		return
 	}
 	_, _ = store.UpdateDatabaseOperation(ctx, operation.ID, "running", "engine_configuration", 90, "", "")
 	if err := configureDatabaseAfterStart(ctx, client, containerID, engine.ID, credential, password, adminPassword); err != nil {
-		_ = docker.StopAndRemoveWithTimeout(ctx, client, containerID, engine.StopTimeoutSeconds)
-		_, _ = store.UpdateDatabaseInstanceState(ctx, instance.ID, repository.UpdateDatabaseInstanceStateInput{ClearContainerID: true})
+		_ = docker.StopContainerWithTimeout(context.WithoutCancel(ctx), client, containerID, engine.StopTimeoutSeconds)
 		fail("database_engine_configuration_failed", err)
 		return
 	}
@@ -640,8 +640,7 @@ func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repo
 	credentialContext, cancelCredentialCheck := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelCredentialCheck()
 	if err := waitForDatabase(credentialContext, client, containerID, engine.ID, credential, password, adminPassword); err != nil {
-		_ = docker.StopAndRemoveWithTimeout(ctx, client, containerID, engine.StopTimeoutSeconds)
-		_, _ = store.UpdateDatabaseInstanceState(ctx, instance.ID, repository.UpdateDatabaseInstanceStateInput{ClearContainerID: true})
+		_ = docker.StopContainerWithTimeout(context.WithoutCancel(ctx), client, containerID, engine.StopTimeoutSeconds)
 		fail("database_application_credentials_failed", err)
 		return
 	}

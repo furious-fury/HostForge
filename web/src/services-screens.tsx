@@ -452,37 +452,35 @@ function databaseStatusLabel(status: string) {
   return status.split("_").map((part) => part ? part[0].toUpperCase() + part.slice(1) : part).join(" ")
 }
 
-function DatabaseInstanceDiagnostics({ instanceID, running, defaultOpen = false, metricsAnchorID, logsAnchorID }: { instanceID: string; running: boolean; defaultOpen?: boolean; metricsAnchorID?: string; logsAnchorID?: string }) {
-  const [open, setOpen] = useState(defaultOpen)
+function DatabaseInstanceDiagnostics({ instanceID, running, mode }: { instanceID: string; running: boolean; mode: "metrics" | "logs" }) {
   const viewport = useRef<HTMLDivElement>(null)
   const logsQuery = useQuery({
     queryKey: ["database-instance", instanceID, "logs"],
     queryFn: ({ signal }) => api.databaseLogs(instanceID, 200, signal),
-    enabled: open,
-    refetchInterval: open && running ? 5000 : false,
+    enabled: mode === "logs",
+    refetchInterval: mode === "logs" && running ? 5000 : false,
   })
   const metricsQuery = useQuery({
     queryKey: ["database-instance", instanceID, "metrics"],
     queryFn: ({ signal }) => api.databaseMetrics(instanceID, signal),
-    enabled: open && running,
-    refetchInterval: open && running ? 5000 : false,
+    enabled: mode === "metrics" && running,
+    refetchInterval: mode === "metrics" && running ? 5000 : false,
   })
   useEffect(() => {
     if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight
   }, [logsQuery.data?.logs])
   const lines = logsQuery.data?.logs.trimEnd().split("\n").filter(Boolean) || []
   const metric = metricsQuery.data?.metric
-  return <div className="border-t">
-    <button type="button" className="flex w-full items-center justify-between bg-muted/10 px-5 py-3 text-left text-xs font-semibold hover:bg-muted/30" onClick={() => setOpen((value) => !value)}><span>Logs and resource usage</span><span className="text-[10px] text-muted-foreground">{open ? "Hide" : "View"}</span></button>
-    {open && <div className="border-t p-4">
-      <div id={metricsAnchorID}>{metric && <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><RuntimeValue label="CPU" value={`${metric.cpu_percent.toFixed(1)}%`} /><RuntimeValue label="Memory" value={formatMemory(metric.memory_bytes)} /><RuntimeValue label="Network in" value={formatMemory(metric.network_rx_bytes)} /><RuntimeValue label="Network out" value={formatMemory(metric.network_tx_bytes)} /></div>}</div>
-      {!running && <p className="mb-3 text-[11px] text-muted-foreground">The instance is stopped. Showing its last available container output.</p>}
-      {(logsQuery.isError || metricsQuery.isError) && <p className="mb-3 text-[11px] text-destructive">Some database diagnostics could not be loaded.</p>}
-      <div id={logsAnchorID} ref={viewport} role="log" aria-label="Database logs" className="h-48 overflow-y-auto rounded-lg bg-neutral-950 p-3 text-neutral-200">
-        {logsQuery.isPending ? <p className="font-mono text-xs text-neutral-500">Loading database logs…</p> : lines.length ? lines.map((line, index) => <code key={`${index}-${line}`} className="block whitespace-pre-wrap break-words font-mono text-[11px] leading-5">{line}</code>) : <p className="font-mono text-xs text-neutral-500">No database output recorded.</p>}
-      </div>
-      <p className="mt-2 text-[10px] text-muted-foreground">Last 200 lines · refreshes every 5 seconds while running</p>
-    </div>}
+  if (mode === "metrics") return <div className="p-4">
+    {!running ? <p className="text-[11px] text-muted-foreground">Live metrics are unavailable while this database container is stopped or failed.</p> : metricsQuery.isPending ? <div className="h-24 animate-pulse rounded-lg bg-muted" /> : metricsQuery.isError ? <p className="text-[11px] text-destructive">Database metrics could not be loaded.</p> : metric ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><RuntimeValue label="CPU" value={`${metric.cpu_percent.toFixed(1)}%`} /><RuntimeValue label="Memory" value={formatMemory(metric.memory_bytes)} /><RuntimeValue label="Network in" value={formatMemory(metric.network_rx_bytes)} /><RuntimeValue label="Network out" value={formatMemory(metric.network_tx_bytes)} /></div> : <p className="text-[11px] text-muted-foreground">No database metric has been sampled yet.</p>}
+  </div>
+  return <div className="p-4">
+    {!running && <p className="mb-3 text-[11px] text-muted-foreground">The instance is stopped or failed. Showing its retained container output.</p>}
+    {logsQuery.isError && <p className="mb-3 text-[11px] text-destructive">Database logs could not be loaded.</p>}
+    <div ref={viewport} role="log" aria-label="Database logs" className="h-64 overflow-y-auto rounded-lg bg-neutral-950 p-3 text-neutral-200">
+      {logsQuery.isPending ? <p className="font-mono text-xs text-neutral-500">Loading database logs…</p> : lines.length ? lines.map((line, index) => <code key={`${index}-${line}`} className="block whitespace-pre-wrap break-words font-mono text-[11px] leading-5">{line}</code>) : <p className="font-mono text-xs text-neutral-500">No database output recorded.</p>}
+    </div>
+    <p className="mt-2 text-[10px] text-muted-foreground">Last 200 lines · refreshes every 5 seconds while running</p>
   </div>
 }
 
@@ -526,8 +524,8 @@ function DatabaseServiceOverview({ service, data, environments }: {
   environments: EnvironmentDTO[]
 }) {
   const queryClient = useQueryClient()
-	const location = useLocation()
-	const [currentTime] = useState(() => Date.now())
+  const location = useLocation()
+  const [currentTime] = useState(() => Date.now())
   const database = data.database
   const instances = data.database_instances || []
   const operations = data.database_operations || []
@@ -547,20 +545,48 @@ function DatabaseServiceOverview({ service, data, environments }: {
   const healthy = instances.filter((instance) => instance.status === "healthy").length
   const canRestore = instances.length > 0 && instances.every((instance) => instance.status === "deleted" && instance.purge_after && new Date(instance.purge_after).getTime() > currentTime)
   const overall = activeOperation ? databaseStatusLabel(activeOperation.status) : healthy === instances.length && instances.length ? "Healthy" : instances.some((instance) => instance.status === "failed") ? "Failed" : instances.some((instance) => instance.status === "deleted") ? "Deleted" : "Provisioning"
+  const view = location.hash === "#connections" ? "connections" : location.hash === "#backups" ? "backups" : location.hash === "#metrics" ? "metrics" : location.hash === "#logs" ? "logs" : "overview"
+  const activeTab = view === "connections" ? "Data & connections" : view === "backups" ? "Backups" : view === "metrics" ? "Metrics" : view === "logs" ? "Logs" : "Overview"
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
     <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end"><div className="flex items-start gap-4"><DatabaseIdentity engine={database?.engine} label={service.stack_label} showLabel={false} iconClassName="size-12 rounded-xl bg-accent/10" imageClassName="size-8" /><div><p className="mb-1"><StatusPill status={overall} /></p><h1 className="text-3xl font-semibold tracking-[-0.035em]">{service.name}</h1><p className="mt-2 text-xs text-muted-foreground">{database?.engine || "database"} {database?.default_version} · private environment networking</p></div></div><div className="flex items-center gap-2 xl:ml-auto"><StatusBadge tone="neutral">HostForge private network</StatusBadge>{canRestore && <Button size="sm" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>{restoreMutation.isPending ? "Queuing restore…" : "Restore database"}</Button>}</div></div>
     {restoreMutation.isError && <div className="mb-5 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">The retained database could not be restored. Its retention window may have expired.</div>}
-    <DatabaseServiceTabs active={location.hash === "#connections" ? "Data & connections" : location.hash === "#backups" ? "Backups" : location.hash === "#metrics" ? "Metrics" : location.hash === "#logs" ? "Logs" : "Overview"} serviceID={service.id} applicationID={service.application_id} />
+    <DatabaseServiceTabs active={activeTab} serviceID={service.id} applicationID={service.application_id} />
     {activeOperation && <Panel title="Provisioning database" subtitle="This operation is durable and continues if you leave the page"><div className="p-5"><div className="mb-2 flex items-center justify-between gap-4 text-xs"><span className="font-semibold">{databaseStatusLabel(activeOperation.progress_step)}</span><span className="font-mono text-muted-foreground">{activeOperation.progress_percent}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${activeOperation.progress_percent}%` }} /></div></div></Panel>}
-    <section className="mt-5" id="connections"><div className="mb-3"><h2 className="text-sm font-semibold">Data and connections</h2><p className="mt-1 text-xs text-muted-foreground">Each environment has independent credentials, storage, resources, and private connection identity.</p></div><div className="grid gap-5 xl:grid-cols-2">{instances.map((instance, index) => {
+
+    {view === "overview" && <section className="grid gap-5 xl:grid-cols-2" aria-label="Database instance overview">{instances.map((instance) => {
       const environment = environments.find((candidate) => candidate.id === instance.environment_id)
       const operation = operations.find((candidate) => candidate.database_instance_id === instance.id)
       const status = databaseStatusLabel(instance.status)
-      const runtimeBusy = runtimeMutation.isPending || rotateMutation.isPending || operation?.status === "queued" || operation?.status === "running"
+      return <Panel key={instance.id} title={environment?.name || "Environment"} subtitle={`${environment?.kind || "environment"} · ${instance.engine_version}`} action={<StatusPill status={status} />}>
+        <div className="grid grid-cols-2 gap-px bg-border"><RuntimeValue label="Resources" value={`${instance.cpu_limit_millis / 1000} vCPU · ${formatMemory(instance.memory_limit_bytes)}`} /><RuntimeValue label="Storage" value={instance.storage_checked_at ? `${formatMemory(instance.storage_used_bytes || 0)} used` : "Usage pending"} /></div>
+        {instance.health_message && <div className="border-t px-5 py-3 text-[11px] text-muted-foreground">Health: {instance.health_message.replaceAll("_", " ")}</div>}
+        {operation?.status === "failed" && <div className="border-t bg-destructive/5 px-5 py-3 text-[11px] text-destructive"><strong className="block">{operation.error_code?.replaceAll("_", " ") || "Database operation failed"}</strong>{operation.error_message && <span className="mt-1 block">{operation.error_message}</span>}</div>}
+        {instance.status !== "deleted" && instance.docker_container_id && <DatabaseInstanceUpgrade instanceID={instance.id} />}
+      </Panel>
+    })}</section>}
+
+    {view === "connections" && <section aria-label="Database data and connections"><div className="mb-3"><h2 className="text-sm font-semibold">Data and connections</h2><p className="mt-1 text-xs text-muted-foreground">Each environment has independent credentials, storage, resources, and private connection identity.</p></div><div className="grid gap-5 xl:grid-cols-2">{instances.map((instance) => {
+      const environment = environments.find((candidate) => candidate.id === instance.environment_id)
+      const operation = operations.find((candidate) => candidate.database_instance_id === instance.id)
       const credential = data.database_credentials?.[instance.id]
-      return <Panel key={instance.id} title={environment?.name || "Environment"} subtitle={`${environment?.kind || "environment"} · ${instance.engine_version}`} action={<StatusPill status={status} />}><div className="grid grid-cols-2 gap-px bg-border lg:grid-cols-3"><RuntimeValue label="Private host" value={instance.network_alias} /><RuntimeValue label="Port" value={String(instance.internal_port)} /><RuntimeValue label="Database" value={credential?.database_name || "Unavailable"} /><RuntimeValue label="Username" value={credential?.username || "Unavailable"} /><RuntimeValue label="Persistent volume" value={instance.storage_checked_at ? `${formatMemory(instance.storage_used_bytes || 0)} used` : instance.volume_name} /><RuntimeValue label="Resources" value={`${instance.cpu_limit_millis / 1000} vCPU · ${formatMemory(instance.memory_limit_bytes)}`} /></div>{credential && <div className="border-t px-5 py-3 text-[11px] text-muted-foreground">Credential generation {credential.generation}{credential.rotated_at ? ` · rotated ${new Date(credential.rotated_at).toLocaleString()}` : ""}. Passwords remain sealed and are injected only into bound services.</div>}{instance.health_message && <div className="border-t px-5 py-3 text-[11px] text-muted-foreground">Health: {instance.health_message}</div>}{operation?.status === "failed" && <div className="border-t px-5 py-3 text-[11px] text-destructive">{operation.error_code?.replaceAll("_", " ") || "Database operation failed"}</div>}{instance.status === "deleted" && instance.purge_after && <div className="border-t px-5 py-3 text-[11px] text-amber-700">Volume retained until {new Date(instance.purge_after).toLocaleString()}.</div>}{instance.status !== "deleted" && instance.docker_container_id && <DatabaseInstanceUpgrade instanceID={instance.id} />}{instance.status !== "deleted" && instance.docker_container_id && <DatabaseInstanceDiagnostics key={`diagnostics-${instance.id}-${location.hash}`} instanceID={instance.id} running={instance.status !== "stopped"} defaultOpen={location.hash === "#metrics" || location.hash === "#logs"} metricsAnchorID={index === 0 ? "metrics" : undefined} logsAnchorID={index === 0 ? "logs" : undefined} />}{instance.status !== "deleted" && instance.docker_container_id && <DatabaseInstanceBackups key={`backups-${instance.id}-${location.hash}`} instanceID={instance.id} serviceID={service.id} serviceName={service.name} running={instance.status === "healthy"} defaultOpen={location.hash === "#backups"} anchorID={index === 0 ? "backups" : undefined} />}{instance.status !== "deleted" && instance.docker_container_id && <footer className="flex flex-wrap justify-end gap-2 border-t bg-muted/20 px-5 py-3">{instance.status === "healthy" && <ConfirmationAction title={`Rotate ${environment?.name || "database"} credentials?`} description="HostForge will update the database password and encrypted connection bindings. Bound applications must be redeployed to receive the new connection URL." confirmLabel="Rotate credentials" onConfirm={() => rotateMutation.mutateAsync(instance.id)} trigger={<Button size="sm" variant="outline" disabled={runtimeBusy}>Rotate credentials</Button>} />}{instance.status === "stopped" ? <Button size="sm" disabled={runtimeBusy} onClick={() => runtimeMutation.mutate({ instanceID: instance.id, action: "start" })}>Start</Button> : <><Button size="sm" variant="outline" disabled={runtimeBusy} onClick={() => runtimeMutation.mutate({ instanceID: instance.id, action: "stop" })}>Stop</Button><Button size="sm" disabled={runtimeBusy} onClick={() => runtimeMutation.mutate({ instanceID: instance.id, action: "restart" })}>Restart</Button></>}</footer>}</Panel>
-    })}</div></section>
-    <section className="mt-5 rounded-xl border border-dashed bg-muted/20 p-5"><div className="flex items-start gap-3"><GlobeIcon className="mt-0.5 text-muted-foreground" size={19} /><div><h2 className="text-xs font-semibold">Public access is disabled</h2><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Only HostForge application containers in the matching environment network can reach these instances. No database port is bound to the VPS public interfaces.</p></div></div></section>
+      const runtimeBusy = runtimeMutation.isPending || rotateMutation.isPending || operation?.status === "queued" || operation?.status === "running"
+      return <Panel key={instance.id} title={environment?.name || "Environment"} subtitle={`${environment?.kind || "environment"} · ${instance.engine_version}`} action={<StatusPill status={databaseStatusLabel(instance.status)} />}>
+        <div className="grid grid-cols-2 gap-px bg-border lg:grid-cols-3"><RuntimeValue label="Private host" value={instance.network_alias} /><RuntimeValue label="Port" value={String(instance.internal_port)} /><RuntimeValue label="Database" value={credential?.database_name || "Unavailable"} /><RuntimeValue label="Username" value={credential?.username || "Unavailable"} /><RuntimeValue label="Persistent volume" value={instance.volume_name} /><RuntimeValue label="Resources" value={`${instance.cpu_limit_millis / 1000} vCPU · ${formatMemory(instance.memory_limit_bytes)}`} /></div>
+        {credential && <div className="border-t px-5 py-3 text-[11px] text-muted-foreground">Credential generation {credential.generation}{credential.rotated_at ? ` · rotated ${new Date(credential.rotated_at).toLocaleString()}` : ""}. Passwords remain sealed and are injected only into bound services.</div>}
+        {instance.status === "deleted" && instance.purge_after && <div className="border-t px-5 py-3 text-[11px] text-amber-700">Volume retained until {new Date(instance.purge_after).toLocaleString()}.</div>}
+        {instance.status !== "deleted" && instance.docker_container_id && <footer className="flex flex-wrap justify-end gap-2 border-t bg-muted/20 px-5 py-3">{instance.status === "healthy" && <ConfirmationAction title={`Rotate ${environment?.name || "database"} credentials?`} description="HostForge will update the database password and encrypted connection bindings. Bound applications must be redeployed to receive the new connection URL." confirmLabel="Rotate credentials" onConfirm={() => rotateMutation.mutateAsync(instance.id)} trigger={<Button size="sm" variant="outline" disabled={runtimeBusy}>Rotate credentials</Button>} />}{instance.status === "stopped" ? <Button size="sm" disabled={runtimeBusy} onClick={() => runtimeMutation.mutate({ instanceID: instance.id, action: "start" })}>Start</Button> : <><Button size="sm" variant="outline" disabled={runtimeBusy} onClick={() => runtimeMutation.mutate({ instanceID: instance.id, action: "stop" })}>Stop</Button><Button size="sm" disabled={runtimeBusy} onClick={() => runtimeMutation.mutate({ instanceID: instance.id, action: "restart" })}>Restart</Button></>}</footer>}
+      </Panel>
+    })}</div><section className="mt-5 rounded-xl border border-dashed bg-muted/20 p-5"><div className="flex items-start gap-3"><GlobeIcon className="mt-0.5 text-muted-foreground" size={19} /><div><h2 className="text-xs font-semibold">Public access is disabled</h2><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Only HostForge application containers in the matching environment network can reach these instances. No database port is bound to the VPS public interfaces.</p></div></div></section></section>}
+
+    {view === "backups" && <section className="grid gap-5 xl:grid-cols-2" aria-label="Database backups">{instances.map((instance) => { const environment = environments.find((candidate) => candidate.id === instance.environment_id); return <Panel key={instance.id} title={`${environment?.name || "Environment"} backups`} subtitle="Backup policy and restore history"><DatabaseInstanceBackups instanceID={instance.id} serviceID={service.id} serviceName={service.name} running={instance.status === "healthy"} defaultOpen /></Panel> })}</section>}
+
+    {(view === "metrics" || view === "logs") && <section className="grid gap-5 xl:grid-cols-2" aria-label={view === "metrics" ? "Database metrics" : "Database logs"}>{instances.map((instance) => {
+      const environment = environments.find((candidate) => candidate.id === instance.environment_id)
+      const operation = operations.find((candidate) => candidate.database_instance_id === instance.id)
+      return <Panel key={instance.id} title={`${environment?.name || "Environment"} ${view}`} subtitle={`${databaseStatusLabel(instance.status)} · ${instance.engine_version}`}>
+        {instance.docker_container_id ? <DatabaseInstanceDiagnostics instanceID={instance.id} running={instance.status === "healthy" || instance.status === "starting"} mode={view} /> : <div className="p-5 text-[11px] text-muted-foreground">{view === "logs" && operation?.status === "failed" ? <><p className="font-semibold text-destructive">The failed container was removed by the earlier provisioning workflow, so its raw output is no longer available.</p><p className="mt-2">{operation.error_message || operation.error_code?.replaceAll("_", " ")}</p><p className="mt-2">After this fix is deployed, failed containers are retained in a stopped state so their logs remain accessible here.</p></> : `No ${view} are available until the database container has been provisioned.`}</div>}
+      </Panel>
+    })}</section>}
   </main>
 }
 
