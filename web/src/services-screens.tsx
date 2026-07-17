@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useReducer, useRef, useState } from "react"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
-import { api, APIError, queryKeys, type DatabaseEngineDTO, type DatabaseResourcePresetDTO, type EnvironmentDTO, type ServiceDTO, type ServiceEnvironmentDTO } from "@/api"
+import { api, APIError, queryKeys, type DatabaseEngineDTO, type DatabaseMetricDTO, type DatabaseResourcePresetDTO, type EnvironmentDTO, type ServiceDTO, type ServiceEnvironmentDTO } from "@/api"
 import { Link, useLocation, useNavigate } from "react-router-dom"
 import {
   ActivityIcon,
@@ -452,8 +452,49 @@ function databaseStatusLabel(status: string) {
   return status.split("_").map((part) => part ? part[0].toUpperCase() + part.slice(1) : part).join(" ")
 }
 
-function DatabaseInstanceDiagnostics({ instanceID, running, mode }: { instanceID: string; running: boolean; mode: "metrics" | "logs" }) {
+function metricHistoryReducer(history: DatabaseMetricDTO[], metric: DatabaseMetricDTO) {
+  const next = history.at(-1)?.sampled_at === metric.sampled_at ? [...history.slice(0, -1), metric] : [...history, metric]
+  return next.slice(-60)
+}
+
+function databaseMetricRates(history: DatabaseMetricDTO[], field: "network_rx_bytes" | "network_tx_bytes") {
+  return history.slice(1).map((sample, index) => {
+    const previous = history[index]
+    const seconds = Math.max(1, (new Date(sample.sampled_at).getTime() - new Date(previous.sampled_at).getTime()) / 1000)
+    return Math.max(0, sample[field] - previous[field]) / seconds
+  })
+}
+
+function formatByteRate(value: number) {
+  return `${formatMemory(value)}/s`
+}
+
+function MetricSparkline({ label, description, values, ceiling, formatValue }: { label: string; description: string; values: number[]; ceiling: number; formatValue: (value: number) => string }) {
+  const width = 360
+  const height = 96
+  const safeCeiling = Math.max(1, ceiling, ...values)
+  const points = values.map((value, index) => {
+    const x = values.length <= 1 ? width / 2 : index / (values.length - 1) * width
+    const y = height - Math.max(0, Math.min(1, value / safeCeiling)) * height
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(" ")
+  const current = values.at(-1) || 0
+  const peak = values.length ? Math.max(...values) : 0
+  const lastPoint = values.length ? points.split(" ").at(-1)!.split(",") : [String(width / 2), String(height)]
+  return <div className="rounded-lg border bg-muted/10 p-4">
+    <div className="mb-3 flex items-end justify-between gap-4"><div><p className="text-xs font-medium text-muted-foreground">{label}</p><p className="mt-2 text-2xl font-semibold tabular-nums">{formatValue(current)}</p><p className="mt-1 text-[10px] text-muted-foreground">{description}</p></div><p className="text-[10px] text-muted-foreground">Peak {formatValue(peak)}</p></div>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label} live trend over the last ${values.length} samples`} className="h-24 w-full overflow-visible">
+      {[0.25, 0.5, 0.75].map((ratio) => <line key={ratio} x1="0" x2={width} y1={height * ratio} y2={height * ratio} className="stroke-border" strokeWidth="1" strokeDasharray="3 5" />)}
+      {points && <polyline points={points} fill="none" className="stroke-accent" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
+      <circle cx={lastPoint[0]} cy={lastPoint[1]} r="4" className="fill-accent animate-pulse" />
+    </svg>
+    <p className="mt-2 text-[10px] text-muted-foreground">Live five-second samples · up to five minutes</p>
+  </div>
+}
+
+function DatabaseInstanceDiagnostics({ instanceID, running, mode, memoryLimitBytes }: { instanceID: string; running: boolean; mode: "metrics" | "logs"; memoryLimitBytes: number }) {
   const viewport = useRef<HTMLDivElement>(null)
+  const [metricHistory, appendMetric] = useReducer(metricHistoryReducer, [])
   const logsQuery = useQuery({
     queryKey: ["database-instance", instanceID, "logs"],
     queryFn: ({ signal }) => api.databaseLogs(instanceID, 200, signal),
@@ -462,7 +503,11 @@ function DatabaseInstanceDiagnostics({ instanceID, running, mode }: { instanceID
   })
   const metricsQuery = useQuery({
     queryKey: ["database-instance", instanceID, "metrics"],
-    queryFn: ({ signal }) => api.databaseMetrics(instanceID, signal),
+    queryFn: async ({ signal }) => {
+      const result = await api.databaseMetrics(instanceID, signal)
+      appendMetric(result.metric)
+      return result
+    },
     enabled: mode === "metrics" && running,
     refetchInterval: mode === "metrics" && running ? 5000 : false,
   })
@@ -471,8 +516,10 @@ function DatabaseInstanceDiagnostics({ instanceID, running, mode }: { instanceID
   }, [logsQuery.data?.logs])
   const lines = logsQuery.data?.logs.trimEnd().split("\n").filter(Boolean) || []
   const metric = metricsQuery.data?.metric
+  const ingressRates = databaseMetricRates(metricHistory, "network_rx_bytes")
+  const egressRates = databaseMetricRates(metricHistory, "network_tx_bytes")
   if (mode === "metrics") return <div className="p-4">
-    {!running ? <p className="text-[11px] text-muted-foreground">Live metrics are unavailable while this database container is stopped or failed.</p> : metricsQuery.isPending ? <div className="h-24 animate-pulse rounded-lg bg-muted" /> : metricsQuery.isError ? <p className="text-[11px] text-destructive">Database metrics could not be loaded.</p> : metric ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><RuntimeValue label="CPU" value={`${metric.cpu_percent.toFixed(1)}%`} /><RuntimeValue label="Memory" value={formatMemory(metric.memory_bytes)} /><RuntimeValue label="Network in" value={formatMemory(metric.network_rx_bytes)} /><RuntimeValue label="Network out" value={formatMemory(metric.network_tx_bytes)} /></div> : <p className="text-[11px] text-muted-foreground">No database metric has been sampled yet.</p>}
+    {!running ? <p className="text-[11px] text-muted-foreground">Live metrics are unavailable while this database container is stopped or failed.</p> : metricsQuery.isPending ? <div className="h-24 animate-pulse rounded-lg bg-muted" /> : metricsQuery.isError ? <p className="text-[11px] text-destructive">Database metrics could not be loaded.</p> : metric ? <div className="grid gap-4 lg:grid-cols-2"><MetricSparkline label="CPU usage" description="Percentage across available cores" values={metricHistory.map((sample) => sample.cpu_percent)} ceiling={100} formatValue={(value) => `${value.toFixed(1)}%`} /><MetricSparkline label="Memory usage" description="Container working set" values={metricHistory.map((sample) => sample.memory_bytes)} ceiling={memoryLimitBytes} formatValue={formatMemory} /><MetricSparkline label="Network ingress" description="Received bytes per second" values={ingressRates.length ? ingressRates : [0]} ceiling={0} formatValue={formatByteRate} /><MetricSparkline label="Network egress" description="Sent bytes per second" values={egressRates.length ? egressRates : [0]} ceiling={0} formatValue={formatByteRate} /></div> : <p className="text-[11px] text-muted-foreground">No database metric has been sampled yet.</p>}
   </div>
   return <div className="p-4">
     {!running && <p className="mb-3 text-[11px] text-muted-foreground">The instance is stopped or failed. Showing its retained container output.</p>}
@@ -584,7 +631,7 @@ function DatabaseServiceOverview({ service, data, environments }: {
       const environment = environments.find((candidate) => candidate.id === instance.environment_id)
       const operation = operations.find((candidate) => candidate.database_instance_id === instance.id)
       return <Panel key={instance.id} title={`${environment?.name || "Environment"} ${view}`} subtitle={`${databaseStatusLabel(instance.status)} · ${instance.engine_version}`}>
-        {instance.docker_container_id ? <DatabaseInstanceDiagnostics instanceID={instance.id} running={instance.status === "healthy" || instance.status === "starting"} mode={view} /> : <div className="p-5 text-[11px] text-muted-foreground">{view === "logs" && operation?.status === "failed" ? <><p className="font-semibold text-destructive">The failed container was removed by the earlier provisioning workflow, so its raw output is no longer available.</p><p className="mt-2">{operation.error_message || operation.error_code?.replaceAll("_", " ")}</p><p className="mt-2">After this fix is deployed, failed containers are retained in a stopped state so their logs remain accessible here.</p></> : `No ${view} are available until the database container has been provisioned.`}</div>}
+        {instance.docker_container_id ? <DatabaseInstanceDiagnostics instanceID={instance.id} running={instance.status === "healthy" || instance.status === "starting"} mode={view} memoryLimitBytes={instance.memory_limit_bytes} /> : <div className="p-5 text-[11px] text-muted-foreground">{view === "logs" && operation?.status === "failed" ? <><p className="font-semibold text-destructive">The failed container was removed by the earlier provisioning workflow, so its raw output is no longer available.</p><p className="mt-2">{operation.error_message || operation.error_code?.replaceAll("_", " ")}</p><p className="mt-2">After this fix is deployed, failed containers are retained in a stopped state so their logs remain accessible here.</p></> : `No ${view} are available until the database container has been provisioned.`}</div>}
       </Panel>
     })}</section>}
   </main>

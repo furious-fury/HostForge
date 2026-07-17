@@ -60,6 +60,7 @@ function mockShellAPI() {
   vi.spyOn(api, "application").mockResolvedValue({ application, environments, services: [], service_bindings: {} })
   vi.spyOn(api, "deployments").mockResolvedValue({ deployments: [], next_cursor: "" })
   vi.spyOn(api, "hostSnapshot").mockResolvedValue({ supported: false, error_code: "unsupported_host" })
+  vi.spyOn(api, "hostHistory").mockResolvedValue({ supported: false, error_code: "unsupported_host", samples: [] })
   vi.spyOn(api, "systemStatus").mockResolvedValue({ version: "v0.8.0", checks: [{ id: "docker", label: "Docker daemon", status: "RUNNING" }] })
   vi.spyOn(api, "onboarding").mockResolvedValue({ onboarding: { bootstrap_complete: false, bootstrap_enabled: false, bootstrap_expires_at: "", bootstrap_https_port: 443, bootstrap_public_ip: "", completed_at: "0001-01-01T00:00:00Z", github_app_complete: false, permanent_ingress_complete: false, platform_domain: "" } })
   vi.spyOn(api, "githubInstallations").mockResolvedValue({ installations: [] })
@@ -95,6 +96,40 @@ describe("application shell with a newly created empty application", () => {
     expect(screen.queryByText("This screen could not be rendered")).not.toBeInTheDocument()
     expect(screen.getByText("HostForge Admin")).toBeInTheDocument()
     expect(screen.getByText("Secure control session")).toBeInTheDocument()
+  })
+
+  it("renders Task Manager-style history charts for every host resource", async () => {
+    mockShellAPI()
+    const first = { at: "2026-07-17T08:00:00Z", cpu_pct: 12, per_core_pct: [10, 14], mem: { used_bytes: 2 * 1024 ** 3, total_bytes: 4 * 1024 ** 3, used_pct: 50 }, net: [{ iface: "eth0", rx_bps: 1024, tx_bps: 2048 }], disks: [{ mount: "/", used_bytes: 20 * 1024 ** 3, total_bytes: 40 * 1024 ** 3, used_pct: 50 }], uptime_seconds: 100, rates_ready: true }
+    const current = { ...first, at: "2026-07-17T08:00:05Z", cpu_pct: 18, mem: { ...first.mem, used_pct: 52 }, net: [{ iface: "eth0", rx_bps: 4096, tx_bps: 2048 }] }
+    vi.spyOn(api, "hostSnapshot").mockResolvedValue({ supported: true, sample: current })
+    vi.spyOn(api, "hostHistory").mockResolvedValue({ supported: true, samples: [first, current] })
+
+    renderApp("/")
+
+    expect(await screen.findByRole("img", { name: "CPU host resource history" })).toBeInTheDocument()
+    for (const label of ["Memory", "Root disk", "Network"]) expect(screen.getByRole("img", { name: `${label} host resource history` })).toBeInTheDocument()
+    expect(api.hostHistory).toHaveBeenCalledWith(60, expect.any(AbortSignal))
+  })
+
+  it("uses database engine icons in the application overview service list", async () => {
+    mockShellAPI()
+    const databaseService: ServiceDTO = {
+      ...service,
+      id: "database-1",
+      service_type: "database",
+      name: "Primary database",
+      repo_url: "",
+      stack_kind: "postgresql",
+      stack_label: "PostgreSQL",
+      internal_port: 5432,
+    }
+    vi.spyOn(api, "application").mockResolvedValue({ application, environments, services: [databaseService], service_bindings: {} })
+
+    renderApp(`/applications/${application.id}`)
+
+    expect(await screen.findByRole("img", { name: "PostgreSQL database icon" })).toHaveAttribute("src", "/db/postgresql.png")
+    expect(screen.getByText("HostForge managed database")).toBeInTheDocument()
   })
 
   it("renders the add-service GitHub prerequisite state", async () => {

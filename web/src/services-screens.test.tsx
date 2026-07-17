@@ -336,7 +336,11 @@ describe("service overview", () => {
 	  expect(metrics).not.toHaveBeenCalled()
 
 	  await user.click(within(databaseNavigation).getByRole("tab", { name: "Metrics" }))
-	  expect(await screen.findByText("128.0 MB")).toBeInTheDocument()
+	  expect((await screen.findAllByText("128.0 MB")).length).toBeGreaterThan(0)
+    expect(screen.getByRole("img", { name: /CPU usage live trend/i })).toBeInTheDocument()
+    expect(screen.getByRole("img", { name: /Memory usage live trend/i })).toBeInTheDocument()
+    expect(screen.getByRole("img", { name: /Network ingress live trend/i })).toBeInTheDocument()
+    expect(screen.getByRole("img", { name: /Network egress live trend/i })).toBeInTheDocument()
     expect(metrics).toHaveBeenCalled()
   })
 

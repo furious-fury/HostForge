@@ -14,7 +14,7 @@ import {
   WarningCircleIcon,
 } from "@phosphor-icons/react"
 
-import { api, queryKeys } from "@/api"
+import { api, queryKeys, type HostSampleDTO } from "@/api"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -34,6 +34,38 @@ function relativeTime(value: string) {
   return `${Math.floor(seconds / 86400)}d ago`
 }
 
+function rootDisk(sample: HostSampleDTO) {
+  return sample.disks.find((item) => item.mount === "/") || sample.disks[0]
+}
+
+function networkRate(sample: HostSampleDTO) {
+  return sample.net.reduce((sum, item) => sum + item.rx_bps + item.tx_bps, 0)
+}
+
+function HostResourceChart({ label, value, detail, samples, ceiling }: { label: string; value: string; detail: string; samples: number[]; ceiling?: number }) {
+  const width = 320
+  const height = 86
+  const maximum = Math.max(1, ceiling || 0, ...samples)
+  const points = samples.map((sample, index) => {
+    const x = samples.length <= 1 ? width : index / (samples.length - 1) * width
+    const y = height - Math.max(0, Math.min(1, sample / maximum)) * height
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(" ")
+  const area = points ? `0,${height} ${points} ${width},${height}` : ""
+  return <article className="overflow-hidden rounded-lg border bg-background">
+    <div className="flex items-start justify-between gap-4 px-4 pt-4"><div><p className="text-xs font-medium text-muted-foreground">{label}</p><p className="mt-1 text-[10px] text-muted-foreground">{detail}</p></div><p className="text-xl font-semibold tabular-nums">{value}</p></div>
+    <div className="px-4 pb-3 pt-4">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label} host resource history`} className="h-24 w-full overflow-visible rounded border border-accent/30 bg-accent/[0.025]">
+        {[0.25, 0.5, 0.75].map((ratio) => <line key={`h-${ratio}`} x1="0" x2={width} y1={height * ratio} y2={height * ratio} className="stroke-accent/15" strokeWidth="1" />)}
+        {[0.2, 0.4, 0.6, 0.8].map((ratio) => <line key={`v-${ratio}`} x1={width * ratio} x2={width * ratio} y1="0" y2={height} className="stroke-accent/15" strokeWidth="1" />)}
+        {area && <polygon points={area} className="fill-accent/10" />}
+        {points && <polyline points={points} fill="none" className="stroke-accent" strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
+      </svg>
+      <p className="mt-2 text-[9px] text-muted-foreground">Recent host samples</p>
+    </div>
+  </article>
+}
+
 function Panel({ title, subtitle, children, action }: { title: string; subtitle: string; children: React.ReactNode; action?: React.ReactNode }) {
   return <section className="overflow-hidden rounded-xl border bg-card"><header className="flex min-h-14 items-center gap-4 border-b bg-muted/75 px-5 py-3"><div><h2 className="text-sm font-semibold">{title}</h2><p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p></div>{action && <div className="ml-auto">{action}</div>}</header>{children}</section>
 }
@@ -46,6 +78,7 @@ export function DashboardScreen() {
   const applicationsQuery = useQuery({ queryKey: queryKeys.applications, queryFn: ({ signal }) => api.applications(signal) })
   const deploymentsQuery = useQuery({ queryKey: queryKeys.deployments(), queryFn: ({ signal }) => api.deployments({}, signal) })
   const hostQuery = useQuery({ queryKey: queryKeys.hostSnapshot, queryFn: ({ signal }) => api.hostSnapshot(signal), refetchInterval: 15_000 })
+  const hostHistoryQuery = useQuery({ queryKey: queryKeys.hostHistory(60), queryFn: ({ signal }) => api.hostHistory(60, signal), refetchInterval: 15_000, retry: false })
   const statusQuery = useQuery({ queryKey: queryKeys.systemStatus, queryFn: ({ signal }) => api.systemStatus(signal), refetchInterval: 30_000 })
   const onboardingQuery = useQuery({ queryKey: queryKeys.onboarding, queryFn: ({ signal }) => api.onboarding(signal) })
   const pending = applicationsQuery.isPending || deploymentsQuery.isPending || statusQuery.isPending
@@ -63,8 +96,9 @@ export function DashboardScreen() {
   const statusChecks = statusQuery.data?.checks ?? []
   const allHealthy = statusChecks.every((check) => ["RUNNING", "READY"].includes(check.status))
   const sample = hostQuery.data?.sample
-  const disk = sample?.disks.find((item) => item.mount === "/") || sample?.disks[0]
-  const netRate = sample?.net.reduce((sum, item) => sum + item.rx_bps + item.tx_bps, 0) || 0
+  const disk = sample ? rootDisk(sample) : undefined
+  const netRate = sample ? networkRate(sample) : 0
+  const hostSamples = hostHistoryQuery.data?.supported && hostHistoryQuery.data.samples.length ? hostHistoryQuery.data.samples : sample ? [sample] : []
   const setup = onboardingQuery.data?.onboarding
   const bootstrapDisabled = setup ? !setup.bootstrap_enabled : false
   const setupSteps = setup ? [true, setup.github_app_complete, setup.permanent_ingress_complete, bootstrapDisabled].filter(Boolean).length : 0
@@ -78,16 +112,11 @@ export function DashboardScreen() {
   ]
 
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
-    <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end"><div><p className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground"><span className={`size-1.5 rounded-full ${allHealthy ? "bg-emerald-500" : "bg-amber-500"}`} />{allHealthy ? "All platform checks responding" : "A platform check needs attention"}</p><h1 className="text-3xl font-semibold tracking-[-0.035em]">Overview</h1><p className="mt-2 text-sm text-muted-foreground">Monitor applications, deployments, and host resources.</p></div><div className="flex gap-2 sm:ml-auto"><Button variant="outline" onClick={() => { hostQuery.refetch(); statusQuery.refetch(); deploymentsQuery.refetch() }}><ArrowClockwiseIcon />Refresh</Button><Button asChild><Link to="/applications/new"><AppWindowIcon />Create application</Link></Button></div></div>
+    <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end"><div><p className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground"><span className={`size-1.5 rounded-full ${allHealthy ? "bg-emerald-500" : "bg-amber-500"}`} />{allHealthy ? "All platform checks responding" : "A platform check needs attention"}</p><h1 className="text-3xl font-semibold tracking-[-0.035em]">Overview</h1><p className="mt-2 text-sm text-muted-foreground">Monitor applications, deployments, and host resources.</p></div><div className="flex gap-2 sm:ml-auto"><Button variant="outline" onClick={() => { hostQuery.refetch(); hostHistoryQuery.refetch(); statusQuery.refetch(); deploymentsQuery.refetch() }}><ArrowClockwiseIcon />Refresh</Button><Button asChild><Link to="/applications/new"><AppWindowIcon />Create application</Link></Button></div></div>
     <section className="mb-5 grid grid-cols-2 overflow-hidden rounded-xl border bg-card sm:grid-cols-3 xl:grid-cols-5">{metrics.map((metric) => { const Icon = metric.icon; return <article key={metric.label} className="border-b border-r p-5 last:border-r-0 xl:border-b-0"><div className="flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">{metric.label}</span><Icon size={16} className="text-muted-foreground" /></div><p className="mt-5 text-3xl font-semibold tabular-nums">{metric.value}</p><p className="mt-1 text-[11px] text-muted-foreground">{metric.detail}</p></article> })}</section>
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,.8fr)]">
       <Panel title="Host resources" subtitle={hostQuery.data?.supported ? "Live utilization from the host sampler" : "Host sampling is unavailable"} action={<span className="text-[11px] text-muted-foreground">{sample ? relativeTime(sample.at) : "Unsupported"}</span>}>
-        {sample ? <div className="grid gap-6 p-5 sm:grid-cols-2">{[
-          { label: "CPU", value: `${sample.cpu_pct.toFixed(1)}%`, progress: sample.cpu_pct, detail: `${sample.per_core_pct?.length || 0} cores` },
-          { label: "Memory", value: `${sample.mem.used_pct.toFixed(1)}%`, progress: sample.mem.used_pct, detail: `${formatBytes(sample.mem.used_bytes)} / ${formatBytes(sample.mem.total_bytes)}` },
-          { label: "Root disk", value: disk ? `${disk.used_pct.toFixed(1)}%` : "Unavailable", progress: disk?.used_pct || 0, detail: disk ? `${formatBytes(disk.used_bytes)} / ${formatBytes(disk.total_bytes)}` : "No disk sample" },
-          { label: "Network", value: `${formatBytes(netRate)}/s`, progress: Math.min(100, netRate / 1_000_000), detail: sample.rates_ready ? "Combined receive and transmit" : "Rate sample warming up" },
-        ].map((resource) => <div key={resource.label}><div className="mb-3 flex items-end justify-between"><div><p className="text-xs font-medium text-muted-foreground">{resource.label}</p><p className="mt-1 text-xl font-semibold tabular-nums">{resource.value}</p></div><span className="text-[10px] text-muted-foreground">{resource.detail}</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent" style={{ width: `${Math.max(0, Math.min(100, resource.progress))}%` }} /></div></div>)}</div> : <div className="p-8 text-center"><HardDrivesIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">No host sample available</p><p className="mt-1 text-xs text-muted-foreground">{hostQuery.data?.error_code || "The sampler has not returned data yet."}</p></div>}
+        {sample ? <div className="grid gap-4 p-5 sm:grid-cols-2"><HostResourceChart label="CPU" value={`${sample.cpu_pct.toFixed(1)}%`} detail={`${sample.per_core_pct?.length || 0} cores`} samples={hostSamples.map((item) => item.cpu_pct)} ceiling={100} /><HostResourceChart label="Memory" value={`${sample.mem.used_pct.toFixed(1)}%`} detail={`${formatBytes(sample.mem.used_bytes)} / ${formatBytes(sample.mem.total_bytes)}`} samples={hostSamples.map((item) => item.mem.used_pct)} ceiling={100} /><HostResourceChart label="Root disk" value={disk ? `${disk.used_pct.toFixed(1)}%` : "Unavailable"} detail={disk ? `${formatBytes(disk.used_bytes)} / ${formatBytes(disk.total_bytes)}` : "No disk sample"} samples={hostSamples.map((item) => rootDisk(item)?.used_pct || 0)} ceiling={100} /><HostResourceChart label="Network" value={`${formatBytes(netRate)}/s`} detail={sample.rates_ready ? "Combined receive and transmit" : "Rate sample warming up"} samples={hostSamples.map(networkRate)} /></div> : <div className="p-8 text-center"><HardDrivesIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">No host sample available</p><p className="mt-1 text-xs text-muted-foreground">{hostQuery.data?.error_code || "The sampler has not returned data yet."}</p></div>}
       </Panel>
       <Panel title="System health" subtitle="Read-only platform dependency checks" action={<Link to="/status" className="text-[11px] font-semibold hover:underline">Details</Link>}><div className="divide-y">{statusChecks.map((check) => { const healthy = ["RUNNING", "READY"].includes(check.status); return <div key={check.id} className="flex items-center gap-3 px-5 py-4"><span className="grid size-8 place-items-center rounded-lg border bg-muted"><ActivityIcon size={15} /></span><div className="min-w-0"><p className="text-xs font-semibold">{check.label}</p><p className="truncate text-[10px] text-muted-foreground">{check.detail || "Check completed successfully"}</p></div><StatusBadge className="ml-auto" tone={healthy ? "success" : check.status === "SKIPPED" ? "neutral" : "warning"} dot>{check.status}</StatusBadge></div> })}</div></Panel>
     </div>
