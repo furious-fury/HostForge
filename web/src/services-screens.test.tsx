@@ -128,6 +128,17 @@ describe("add service", () => {
         cpu_limit_millis: 0,
         memory_limit_bytes: 0,
       }],
+      resource_capacity: {
+        available: true,
+        cpu_total_millis: 4000,
+        cpu_allocated_millis: 0,
+        cpu_reserve_millis: 400,
+        cpu_available_millis: 3600,
+        memory_total_bytes: 4 * 1024 ** 3,
+        memory_allocated_bytes: 0,
+        memory_reserve_bytes: 1024 ** 3,
+        memory_available_bytes: 3 * 1024 ** 3,
+      },
       networking: { scope: "hostforge_environment", public_access_available: false },
     })
 
@@ -140,8 +151,11 @@ describe("add service", () => {
     expect(screen.getByText("Private by default")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /create database/i })).toBeEnabled()
     await user.click(screen.getByRole("button", { name: /^custom/i }))
-    expect(screen.getByRole("slider", { name: "CPU allocation" })).toHaveValue("2")
-    expect(screen.getByRole("slider", { name: "Memory allocation" })).toHaveValue("2")
+    expect(screen.getByRole("slider", { name: "CPU allocation" })).toHaveAttribute("aria-valuenow", "2")
+    expect(screen.getByRole("slider", { name: "CPU allocation" })).toHaveAttribute("aria-valuemax", "3.6")
+    expect(screen.getByRole("slider", { name: "Memory allocation" })).toHaveAttribute("aria-valuenow", "2")
+    expect(screen.getByRole("slider", { name: "Memory allocation" })).toHaveAttribute("aria-valuemax", "3")
+    expect(screen.getByText(/3.6 allocatable vCPU remains/i)).toBeInTheDocument()
     expect(github).not.toHaveBeenCalled()
   })
 

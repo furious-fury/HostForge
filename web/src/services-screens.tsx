@@ -31,6 +31,7 @@ import { ConfirmationAction } from "@/components/confirmation-action"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
+import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/toast-provider"
 import "@/services.css"
@@ -229,7 +230,11 @@ function formatMemory(bytes: number) {
   return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`
 }
 
-function ResourceSlider({ id, label, value, min, max, step, unit, minimumLabel, onChange }: {
+function floorToStep(value: number, step: number) {
+  return Math.floor((value + Number.EPSILON) / step) * step
+}
+
+function ResourceSlider({ id, label, value, min, max, step, unit, minimumLabel, capacityLabel, disabled, onChange }: {
   id: string
   label: string
   value: number
@@ -238,14 +243,17 @@ function ResourceSlider({ id, label, value, min, max, step, unit, minimumLabel, 
   step: number
   unit: string
   minimumLabel?: string
+  capacityLabel?: string
+  disabled?: boolean
   onChange: (value: number) => void
 }) {
   const formattedValue = Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)
   return <div className="rounded-lg border bg-background p-4">
-    <div className="mb-4 flex items-center justify-between gap-4"><label htmlFor={id} className="text-xs font-semibold">{label}</label><output htmlFor={id} className="rounded-md border bg-muted/40 px-2.5 py-1 font-mono text-xs font-semibold">{formattedValue} {unit}</output></div>
-    <input id={id} type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} className="h-2 w-full cursor-pointer accent-accent" aria-valuetext={`${formattedValue} ${unit}`} />
+    <div className="mb-4 flex items-center justify-between gap-4"><label id={`${id}-label`} className="text-xs font-semibold">{label}</label><output className="rounded-md border bg-muted/40 px-2.5 py-1 font-mono text-xs font-semibold">{formattedValue} {unit}</output></div>
+    <Slider id={id} min={min} max={max} step={step} value={[value]} onValueChange={([nextValue]) => onChange(nextValue)} disabled={disabled} aria-labelledby={`${id}-label`} aria-valuetext={`${formattedValue} ${unit}`} />
     <div className="mt-2 flex items-center justify-between font-mono text-[10px] text-muted-foreground"><span>{min} {unit}</span><span>{max} {unit}</span></div>
     {minimumLabel && <p className="mt-3 text-[10px] text-muted-foreground">{minimumLabel}</p>}
+    {capacityLabel && <p className="mt-1 text-[10px] text-muted-foreground">{capacityLabel}</p>}
   </div>
 }
 
@@ -298,9 +306,21 @@ function DatabaseServiceWizard({ applicationID, applicationName, environments, s
 	const backupDestination = destinations.find((item) => item.id === backupDestinationID) || destinations[0]
   const selectedPreset = presets.find((candidate) => candidate.id === presetID)
   const preset = selectedPreset && (selectedPreset.id === "custom" || selectedPreset.memory_limit_bytes >= (engine?.minimum_memory_bytes || 0)) ? selectedPreset : presets.find((candidate) => candidate.id !== "custom" && candidate.memory_limit_bytes >= (engine?.minimum_memory_bytes || 0))
-  const effectiveCPUMillis = preset?.id === "custom" ? Math.round(Number(customCPU) * 1000) : preset?.cpu_limit_millis || 0
-  const effectiveMemoryBytes = preset?.id === "custom" ? Math.round(Number(customMemoryGB) * 1024 ** 3) : preset?.memory_limit_bytes || 0
-  const customResourcesValid = preset?.id !== "custom" || Number(customCPU) >= 0.1 && Number(customCPU) <= 32 && Number(customMemoryGB) * 1024 ** 3 >= (engine?.minimum_memory_bytes || 0) && Number(customMemoryGB) <= 256
+  const capacity = catalogQuery.data?.resource_capacity
+  const capacityAvailable = capacity?.available === true
+  const instanceCount = Math.max(1, selectedEnvironmentIDs.length)
+  const minimumMemoryGB = (engine?.minimum_memory_bytes || 512 * 1024 ** 2) / 1024 ** 3
+  const availableCPUPerInstance = capacityAvailable ? capacity.cpu_available_millis / 1000 / instanceCount : 32
+  const availableMemoryPerInstanceGB = capacityAvailable ? capacity.memory_available_bytes / 1024 ** 3 / instanceCount : 256
+  const customCPUCapacityValid = !capacityAvailable || availableCPUPerInstance >= 0.1
+  const customMemoryCapacityValid = !capacityAvailable || availableMemoryPerInstanceGB >= minimumMemoryGB
+  const customCPUMax = capacityAvailable ? Math.max(0.1, floorToStep(Math.min(32, availableCPUPerInstance), 0.1)) : 32
+  const customMemoryMax = capacityAvailable ? Math.max(minimumMemoryGB, floorToStep(Math.min(256, availableMemoryPerInstanceGB), 0.5)) : 256
+  const effectiveCustomCPU = Math.min(customCPUMax, Math.max(0.1, Number(customCPU)))
+  const effectiveCustomMemoryGB = Math.min(customMemoryMax, Math.max(minimumMemoryGB, Number(customMemoryGB)))
+  const effectiveCPUMillis = preset?.id === "custom" ? Math.round(effectiveCustomCPU * 1000) : preset?.cpu_limit_millis || 0
+  const effectiveMemoryBytes = preset?.id === "custom" ? Math.round(effectiveCustomMemoryGB * 1024 ** 3) : preset?.memory_limit_bytes || 0
+  const customResourcesValid = preset?.id !== "custom" || customCPUCapacityValid && customMemoryCapacityValid
   const createMutation = useMutation({
     mutationFn: () => api.createDatabaseService(applicationID, {
       name: databaseName,
@@ -308,8 +328,8 @@ function DatabaseServiceWizard({ applicationID, applicationName, environments, s
       version: selectedVersion,
       environment_ids: selectedEnvironmentIDs,
       resource_preset: preset?.id || presetID,
-	  custom_cpu_millis: preset?.id === "custom" ? Math.round(Number(customCPU) * 1000) : undefined,
-	  custom_memory_bytes: preset?.id === "custom" ? Math.round(Number(customMemoryGB) * 1024 ** 3) : undefined,
+	  custom_cpu_millis: preset?.id === "custom" ? Math.round(effectiveCustomCPU * 1000) : undefined,
+	  custom_memory_bytes: preset?.id === "custom" ? Math.round(effectiveCustomMemoryGB * 1024 ** 3) : undefined,
 	  backup_enabled: backupEnabled,
 	  backup_destination_id: backupEnabled ? backupDestination?.id : undefined,
       connections: consumerServiceIDs.map((serviceID) => ({ service_id: serviceID, variable_key: variableKey, replace_existing: conflictingServiceIDs.includes(serviceID) && replacementServiceIDs.includes(serviceID) })),
@@ -339,8 +359,9 @@ function DatabaseServiceWizard({ applicationID, applicationName, environments, s
       <div className="grid gap-3 p-5 sm:grid-cols-2">{environments.map((environment) => <label key={environment.id} className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border bg-background p-4"><span><span className="block text-xs font-semibold">{environment.name}</span><span className="mt-1 block text-[11px] text-muted-foreground">{environment.kind === "production" ? "Production data" : "Non-production data"} remains isolated.</span></span><Switch checked={selectedEnvironmentIDs.includes(environment.id)} onCheckedChange={() => toggleEnvironment(environment.id)} aria-label={`Create ${environment.name} database`} /></label>)}</div>
     </Panel>
     <Panel title="Resources" subtitle={`Choose limits for each ${engine.name} instance`}>
-      <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">{presets.map((candidate) => { const custom = candidate.id === "custom"; const unavailable = !custom && candidate.memory_limit_bytes < engine.minimum_memory_bytes; return <button key={candidate.id} type="button" disabled={unavailable} onClick={() => setPresetID(candidate.id)} className={`rounded-lg border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${candidate.id === preset?.id ? "border-accent bg-accent/10 ring-2 ring-accent/15" : "bg-background hover:bg-muted/40"}`}><span className="text-xs font-semibold">{candidate.name}</span><span className="mt-1 block text-[10px] font-medium text-muted-foreground">{custom ? "Set exact limits" : `${candidate.cpu_limit_millis / 1000} vCPU · ${formatMemory(candidate.memory_limit_bytes)}`}</span><span className="mt-2 block text-[11px] leading-5 text-muted-foreground">{candidate.description}</span>{unavailable && <span className="mt-2 block text-[10px] text-destructive">Below the {formatMemory(engine.minimum_memory_bytes)} engine minimum</span>}</button> })}</div>
-	  {preset?.id === "custom" && <div className="grid gap-5 border-t bg-muted/10 p-5 sm:grid-cols-2"><ResourceSlider id="database-custom-cpu" label="CPU allocation" value={Number(customCPU)} min={0.1} max={32} step={0.1} unit="vCPU" onChange={(value) => setCustomCPU(String(value))} /><ResourceSlider id="database-custom-memory" label="Memory allocation" value={Number(customMemoryGB)} min={engine.minimum_memory_bytes / 1024 ** 3} max={256} step={0.5} unit="GB" minimumLabel={`Minimum for ${engine.name}: ${formatMemory(engine.minimum_memory_bytes)}`} onChange={(value) => setCustomMemoryGB(String(value))} /></div>}
+      <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">{presets.map((candidate) => { const custom = candidate.id === "custom"; const belowEngineMinimum = !custom && candidate.memory_limit_bytes < engine.minimum_memory_bytes; const exceedsCapacity = capacityAvailable && !custom && (candidate.cpu_limit_millis * instanceCount > capacity.cpu_available_millis || candidate.memory_limit_bytes * instanceCount > capacity.memory_available_bytes); const unavailable = belowEngineMinimum || exceedsCapacity; return <button key={candidate.id} type="button" disabled={unavailable} onClick={() => setPresetID(candidate.id)} className={`rounded-lg border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${candidate.id === preset?.id ? "border-accent bg-accent/10 ring-2 ring-accent/15" : "bg-background hover:bg-muted/40"}`}><span className="text-xs font-semibold">{candidate.name}</span><span className="mt-1 block text-[10px] font-medium text-muted-foreground">{custom ? "Set exact limits" : `${candidate.cpu_limit_millis / 1000} vCPU · ${formatMemory(candidate.memory_limit_bytes)}`}</span><span className="mt-2 block text-[11px] leading-5 text-muted-foreground">{candidate.description}</span>{belowEngineMinimum && <span className="mt-2 block text-[10px] text-destructive">Below the {formatMemory(engine.minimum_memory_bytes)} engine minimum</span>}{exceedsCapacity && <span className="mt-2 block text-[10px] text-destructive">Exceeds current host capacity for {instanceCount} instance{instanceCount === 1 ? "" : "s"}</span>}</button> })}</div>
+	  {preset?.id === "custom" && <div className="grid gap-5 border-t bg-muted/10 p-5 sm:grid-cols-2"><ResourceSlider id="database-custom-cpu" label="CPU allocation" value={effectiveCustomCPU} min={0.1} max={customCPUMax} step={0.1} unit="vCPU" disabled={!customCPUCapacityValid} capacityLabel={capacityAvailable ? `${(capacity.cpu_available_millis / 1000).toFixed(1)} allocatable vCPU remains across ${instanceCount} selected environment${instanceCount === 1 ? "" : "s"}.` : "Host capacity is unavailable; the server validates this value before provisioning."} onChange={(value) => setCustomCPU(String(value))} /><ResourceSlider id="database-custom-memory" label="Memory allocation" value={effectiveCustomMemoryGB} min={minimumMemoryGB} max={customMemoryMax} step={0.5} unit="GB" disabled={!customMemoryCapacityValid} minimumLabel={`Minimum for ${engine.name}: ${formatMemory(engine.minimum_memory_bytes)}`} capacityLabel={capacityAvailable ? `${formatMemory(capacity.memory_available_bytes)} allocatable memory remains across ${instanceCount} selected environment${instanceCount === 1 ? "" : "s"}.` : "Host capacity is unavailable; the server validates this value before provisioning."} onChange={(value) => setCustomMemoryGB(String(value))} /></div>}
+      {preset?.id === "custom" && capacityAvailable && (!customCPUCapacityValid || !customMemoryCapacityValid) && <div role="alert" className="border-t px-5 py-3 text-xs text-destructive">The host does not currently have enough allocatable resources for {instanceCount} {engine.name} instance{instanceCount === 1 ? "" : "s"}. Reduce the selected environments or free host capacity.</div>}
     </Panel>
     <Panel title="Application connections" subtitle="HostForge injects the private connection URL when these services are next deployed">
       {services.filter((service) => service.service_type === "application").length ? <div className="grid gap-3 p-5 sm:grid-cols-2">{services.filter((service) => service.service_type === "application").map((service) => <DatabaseWizardConnection key={service.id} applicationID={applicationID} consumer={service} environmentIDs={selectedEnvironmentIDs} variableKey={variableKey || engine.connection_variable} selected={consumerServiceIDs.includes(service.id)} replaceExisting={replacementServiceIDs.includes(service.id)} onToggle={() => toggleConsumer(service.id)} onReplacementChange={(value) => setReplacementServiceIDs((current) => value ? current.includes(service.id) ? current : [...current, service.id] : current.filter((id) => id !== service.id))} onConflictChange={setConnectionConflict} />)}</div> : <div className="p-5 text-xs text-muted-foreground">No application services are available yet. You can attach this database later.</div>}

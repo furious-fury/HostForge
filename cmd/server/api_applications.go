@@ -4,11 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/hostforge/hostforge/internal/databases"
 	"github.com/hostforge/hostforge/internal/repository"
 	platformservices "github.com/hostforge/hostforge/internal/services"
-	"strings"
 )
 
 func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +133,22 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 		if req.BackupEnabled {
 			if _, err := s.store.GetBackupDestination(r.Context(), req.BackupDestinationID); err != nil {
 				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"status": "error", "error": "backup_destination_required"})
+				return
+			}
+		}
+		preset, presetFound := databases.FindResourcePreset(strings.ToLower(strings.TrimSpace(req.ResourcePreset)))
+		if presetFound {
+			cpuMillis, memoryBytes := preset.CPULimitMillis, preset.MemoryLimitBytes
+			if preset.ID == "custom" {
+				cpuMillis, memoryBytes = req.CustomCPUMillis, req.CustomMemoryBytes
+			}
+			capacity := s.managedDatabaseCapacity(r.Context())
+			instanceCount := len(req.EnvironmentIDs)
+			if capacity.Available && instanceCount > 0 &&
+				(cpuMillis*instanceCount > capacity.CPUAvailableMillis || memoryBytes*int64(instanceCount) > capacity.MemoryAvailableBytes) {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+					"status": "error", "error": "database_resource_capacity_exceeded", "resource_capacity": capacity,
+				})
 				return
 			}
 		}

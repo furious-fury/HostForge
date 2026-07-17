@@ -342,7 +342,7 @@ export type HostSampleDTO = {
   at: string
   cpu_pct: number
   per_core_pct?: number[]
-  mem: { used_bytes: number; total_bytes: number; used_pct: number }
+  mem: { used_bytes: number; total_bytes: number; available_bytes?: number; used_pct: number }
   net: Array<{ iface: string; rx_bps: number; tx_bps: number }>
   disks: Array<{ mount: string; used_bytes: number; total_bytes: number; used_pct: number }>
   uptime_seconds: number
@@ -548,6 +548,17 @@ export const api = {
     apiRequest<{
       engines: DatabaseEngineDTO[]
       resource_presets: DatabaseResourcePresetDTO[]
+      resource_capacity?: {
+        available: boolean
+        cpu_total_millis: number
+        cpu_allocated_millis: number
+        cpu_reserve_millis: number
+        cpu_available_millis: number
+        memory_total_bytes: number
+        memory_allocated_bytes: number
+        memory_reserve_bytes: number
+        memory_available_bytes: number
+      }
       networking: { scope: "hostforge_environment"; public_access_available: false }
     }>("/api/database-engines", { signal }),
   createDatabaseService: (

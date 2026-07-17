@@ -10,11 +10,17 @@ This runbook applies to the current production installation:
 
 ## Deploy a committed update
 
-SSH to the VPS as root, then run the fail-fast update helper with the public management origin:
+SSH to the VPS as root, then run the fail-fast update helper:
 
 ```bash
 cd /opt/hostforge
-HF_SERVER_URL="https://hostforge.mrfury.dev" ./scripts/vps-update-and-smoke.sh
+./scripts/vps-update-and-smoke.sh
+```
+
+The helper reads the platform domain saved during onboarding through the local authenticated HostForge API. `HF_SERVER_URL` is only needed as an override when onboarding is incomplete or when the smoke test must target a different public origin:
+
+```bash
+HF_SERVER_URL="https://alternate-hostforge.example.com" ./scripts/vps-update-and-smoke.sh
 ```
 
 The currently deployed release predates this helper. For its first deployment only, restore the known generated artifact, pull the release, and then invoke the helper:
@@ -23,7 +29,7 @@ The currently deployed release predates this helper. For its first deployment on
 cd /opt/hostforge &&
 git restore -- web/tsconfig.app.tsbuildinfo &&
 git pull --ff-only origin main &&
-HF_SERVER_URL="https://hostforge.mrfury.dev" ./scripts/vps-update-and-smoke.sh
+./scripts/vps-update-and-smoke.sh
 ```
 
 Do not run the restore if `git status --short` shows unrelated tracked changes. Review those changes first.
@@ -33,8 +39,8 @@ The helper:
 1. Restores only the known generated `web/tsconfig.app.tsbuildinfo` artifact when an older checkout still tracks it.
 2. Refuses to continue when any other tracked VPS changes exist.
 3. Pulls `main` with `--ff-only`, records the previous commit, and builds before restarting.
-4. Waits for systemd and the public HTTPS origin.
-5. Reads the management token from `/etc/hostforge/hostforge.env` without printing it.
+4. Reads the management token from `/etc/hostforge/hostforge.env` without printing it and waits for the local authenticated API.
+5. Uses the platform domain saved during onboarding unless `HF_SERVER_URL` explicitly overrides it, then waits for the public HTTPS origin.
 6. Runs the authenticated v2 API smoke, including array contracts, legacy-route absence, logout, and post-logout `401`.
 
 `install.sh --with-systemd` keeps the existing `/etc/hostforge/hostforge.env` file. Do not run `bootstrap-ubuntu.sh` for routine updates; it is only for first-time VPS provisioning.
