@@ -61,6 +61,12 @@ func DeleteDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, stor
 			}
 			inspection, err := docker.InspectManagedContainer(ctx, client, containerID)
 			if err != nil {
+				if docker.IsNotFound(err) {
+					if log != nil {
+						log.Warn("database container already absent during retained deletion", "service_id", serviceID, "instance_id", instance.ID, "container_id", containerID)
+					}
+					continue
+				}
 				return DeleteDatabaseRuntimeResult{}, ErrCode("database_container_inspection_failed", err)
 			}
 			if inspection.Labels[docker.ResourceTypeLabel] != "database-container" ||

@@ -55,6 +55,15 @@ function serviceSourceError(error: unknown) {
   return error.message.replaceAll("_", " ")
 }
 
+function databaseCreationError(error: unknown, name: string) {
+  if (!(error instanceof APIError)) return error instanceof Error ? error.message : "The database could not be created."
+  if (error.code === "database_service_name_conflict" || error.code === "duplicate_service") return `A service named “${name.trim()}” already exists in this application. Choose a different service name.`
+  if (error.code === "database_resource_capacity_exceeded") return "The selected environments and resource limits exceed the host's available capacity. Reduce the allocation or free host resources."
+  if (error.code === "database_binding_variable_conflict") return "A selected application already uses this connection variable. Confirm replacement or choose another variable name."
+  if (error.message && error.message !== error.code) return error.message
+  return `The database could not be created: ${error.code.replaceAll("_", " ")}.`
+}
+
 class InitialServiceDeploymentError extends Error {
   constructor(public service: ServiceDTO, public deploymentError: unknown) {
     super("The service and branch were saved, but the first deployment could not be started.")
@@ -321,6 +330,7 @@ function DatabaseServiceWizard({ applicationID, applicationName, environments, s
   const effectiveCPUMillis = preset?.id === "custom" ? Math.round(effectiveCustomCPU * 1000) : preset?.cpu_limit_millis || 0
   const effectiveMemoryBytes = preset?.id === "custom" ? Math.round(effectiveCustomMemoryGB * 1024 ** 3) : preset?.memory_limit_bytes || 0
   const customResourcesValid = preset?.id !== "custom" || customCPUCapacityValid && customMemoryCapacityValid
+  const nameConflict = Boolean(databaseName.trim()) && services.some((service) => service.name.trim().toLowerCase() === databaseName.trim().toLowerCase())
   const createMutation = useMutation({
     mutationFn: () => api.createDatabaseService(applicationID, {
       name: databaseName,
@@ -353,7 +363,7 @@ function DatabaseServiceWizard({ applicationID, applicationName, environments, s
   return <div className="space-y-5">
     <Panel title="Database engine" subtitle="HostForge controls tested versions, ports, and persistent data paths">
       <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3">{engines.map((candidate) => { const available = candidate.versions.some((item) => item.provisioning_available); return <button key={candidate.id} type="button" disabled={!available} onClick={() => { setEngineID(candidate.id); setVersion(""); setVariableKey(candidate.connection_variable); setCustomMemoryGB((current) => String(Math.max(Number(current), candidate.minimum_memory_bytes / 1024 ** 3))) }} className={`rounded-lg border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${candidate.id === engine.id ? "border-accent bg-accent/10 ring-2 ring-accent/15" : "bg-background hover:bg-muted/40"}`}><span className="flex items-start gap-3"><DatabaseIdentity engine={candidate.id} label={candidate.name} showLabel={false} iconClassName="size-11 bg-card" imageClassName="size-8" /><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2 text-xs font-semibold">{candidate.name}{!available && <StatusBadge tone="neutral">Next</StatusBadge>}</span><span className="mt-1 block text-[10px] font-medium text-muted-foreground">{candidate.category} · :{candidate.internal_port}</span></span></span><span className="mt-3 block text-[11px] leading-5 text-muted-foreground">{candidate.description}</span></button> })}</div>
-      <div className="grid gap-5 border-t p-5 sm:grid-cols-3"><Field label="Service name"><Input value={databaseName} onChange={(event) => setDatabaseName(event.target.value)} placeholder="database" /></Field><Field label="Version"><AppSelect options={availableVersions.map((item) => item.version)} value={selectedVersion} onValueChange={setVersion} className="h-10 w-full bg-background text-xs" /></Field><Field label="Connection variable"><Input value={variableKey} onChange={(event) => setVariableKey(event.target.value.toUpperCase())} /></Field></div>
+      <div className="grid gap-5 border-t p-5 sm:grid-cols-3"><Field label="Service name"><Input aria-label="Service name" value={databaseName} onChange={(event) => { setDatabaseName(event.target.value); createMutation.reset() }} aria-invalid={nameConflict} aria-describedby={nameConflict ? "database-name-error" : undefined} placeholder="database" />{nameConflict && <span id="database-name-error" role="alert" className="mt-1.5 block text-[10px] text-destructive">A service with this name already exists in this application. Choose a different name.</span>}</Field><Field label="Version"><AppSelect options={availableVersions.map((item) => item.version)} value={selectedVersion} onValueChange={setVersion} className="h-10 w-full bg-background text-xs" /></Field><Field label="Connection variable"><Input value={variableKey} onChange={(event) => setVariableKey(event.target.value.toUpperCase())} /></Field></div>
     </Panel>
     <Panel title="Environment isolation" subtitle="Each selected environment receives its own container, volume, credentials, and private network identity">
       <div className="grid gap-3 p-5 sm:grid-cols-2">{environments.map((environment) => <label key={environment.id} className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border bg-background p-4"><span><span className="block text-xs font-semibold">{environment.name}</span><span className="mt-1 block text-[11px] text-muted-foreground">{environment.kind === "production" ? "Production data" : "Non-production data"} remains isolated.</span></span><Switch checked={selectedEnvironmentIDs.includes(environment.id)} onCheckedChange={() => toggleEnvironment(environment.id)} aria-label={`Create ${environment.name} database`} /></label>)}</div>
@@ -371,8 +381,8 @@ function DatabaseServiceWizard({ applicationID, applicationName, environments, s
 	</Panel>
     <Panel title="Review" subtitle="Host allocation and persistent resources created by this request"><div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4"><RuntimeValue label="Instances" value={String(selectedEnvironmentIDs.length)} /><RuntimeValue label="Persistent volumes" value={String(selectedEnvironmentIDs.length)} /><RuntimeValue label="Total CPU limit" value={`${(effectiveCPUMillis * selectedEnvironmentIDs.length / 1000).toFixed(1)} vCPU`} /><RuntimeValue label="Total memory limit" value={formatMemory(effectiveMemoryBytes * selectedEnvironmentIDs.length)} /></div><div className="border-t px-5 py-4 text-[11px] leading-5 text-muted-foreground">{consumerServiceIDs.length ? `${consumerServiceIDs.length} application service${consumerServiceIDs.length === 1 ? "" : "s"} will receive ${variableKey || engine.connection_variable} independently in each selected environment.` : "No application binding will be created yet."} {backupEnabled && backupDestination ? `Daily encrypted backups will use ${backupDestination.name}.` : "Remote backups can be configured later, but this database is not protected from VPS loss until then."}</div></Panel>
     <section className="rounded-xl border border-dashed bg-muted/20 p-5"><div className="flex items-start gap-3"><HardDrivesIcon className="mt-0.5 text-muted-foreground" size={19} /><div><h2 className="text-xs font-semibold">Private by default</h2><p className="mt-1 text-[11px] leading-5 text-muted-foreground">{applicationName} will receive {selectedEnvironmentIDs.length} isolated {engine.name} instance{selectedEnvironmentIDs.length === 1 ? "" : "s"}. No database port is published to the internet. Data volumes are retained for seven days after deletion.</p></div></div></section>
-    {createMutation.isError && <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">{createMutation.error instanceof APIError ? createMutation.error.code.replaceAll("_", " ") : createMutation.error.message}</div>}
-    <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onBack}>Change service type</Button><Button type="button" onClick={() => createMutation.mutate()} disabled={!databaseName.trim() || !selectedVersion || !selectedEnvironmentIDs.length || !preset || !customResourcesValid || backupEnabled && !backupDestination || conflictingServiceIDs.some((id) => consumerServiceIDs.includes(id) && !replacementServiceIDs.includes(id)) || createMutation.isPending}><DatabaseIcon />{createMutation.isPending ? "Queuing database..." : "Create database"}</Button></div>
+    {createMutation.isError && <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">{databaseCreationError(createMutation.error, databaseName)}</div>}
+    <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onBack}>Change service type</Button><Button type="button" onClick={() => createMutation.mutate()} disabled={!databaseName.trim() || nameConflict || !selectedVersion || !selectedEnvironmentIDs.length || !preset || !customResourcesValid || backupEnabled && !backupDestination || conflictingServiceIDs.some((id) => consumerServiceIDs.includes(id) && !replacementServiceIDs.includes(id)) || createMutation.isPending}><DatabaseIcon />{createMutation.isPending ? "Queuing database..." : "Create database"}</Button></div>
   </div>
 }
 
@@ -450,6 +460,10 @@ export function ServiceOverview({ applicationID, service: serviceID }: { applica
 
 function databaseStatusLabel(status: string) {
   return status.split("_").map((part) => part ? part[0].toUpperCase() + part.slice(1) : part).join(" ")
+}
+
+function databaseInstanceGridClass(instanceCount: number) {
+  return instanceCount > 1 ? "grid gap-5 xl:grid-cols-2" : "grid gap-5"
 }
 
 function metricHistoryReducer(history: DatabaseMetricDTO[], metric: DatabaseMetricDTO) {
@@ -600,7 +614,7 @@ function DatabaseServiceOverview({ service, data, environments }: {
     <DatabaseServiceTabs active={activeTab} serviceID={service.id} applicationID={service.application_id} />
     {activeOperation && <Panel title="Provisioning database" subtitle="This operation is durable and continues if you leave the page"><div className="p-5"><div className="mb-2 flex items-center justify-between gap-4 text-xs"><span className="font-semibold">{databaseStatusLabel(activeOperation.progress_step)}</span><span className="font-mono text-muted-foreground">{activeOperation.progress_percent}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${activeOperation.progress_percent}%` }} /></div></div></Panel>}
 
-    {view === "overview" && <section className="grid gap-5 xl:grid-cols-2" aria-label="Database instance overview">{instances.map((instance) => {
+    {view === "overview" && <section className={databaseInstanceGridClass(instances.length)} aria-label="Database instance overview">{instances.map((instance) => {
       const environment = environments.find((candidate) => candidate.id === instance.environment_id)
       const operation = operations.find((candidate) => candidate.database_instance_id === instance.id)
       const status = databaseStatusLabel(instance.status)
@@ -612,7 +626,7 @@ function DatabaseServiceOverview({ service, data, environments }: {
       </Panel>
     })}</section>}
 
-    {view === "connections" && <section aria-label="Database data and connections"><div className="mb-3"><h2 className="text-sm font-semibold">Data and connections</h2><p className="mt-1 text-xs text-muted-foreground">Each environment has independent credentials, storage, resources, and private connection identity.</p></div><div className="grid gap-5 xl:grid-cols-2">{instances.map((instance) => {
+    {view === "connections" && <section aria-label="Database data and connections"><div className="mb-3"><h2 className="text-sm font-semibold">Data and connections</h2><p className="mt-1 text-xs text-muted-foreground">Each environment has independent credentials, storage, resources, and private connection identity.</p></div><div className={databaseInstanceGridClass(instances.length)}>{instances.map((instance) => {
       const environment = environments.find((candidate) => candidate.id === instance.environment_id)
       const operation = operations.find((candidate) => candidate.database_instance_id === instance.id)
       const credential = data.database_credentials?.[instance.id]
@@ -625,9 +639,9 @@ function DatabaseServiceOverview({ service, data, environments }: {
       </Panel>
     })}</div><section className="mt-5 rounded-xl border border-dashed bg-muted/20 p-5"><div className="flex items-start gap-3"><GlobeIcon className="mt-0.5 text-muted-foreground" size={19} /><div><h2 className="text-xs font-semibold">Public access is disabled</h2><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Only HostForge application containers in the matching environment network can reach these instances. No database port is bound to the VPS public interfaces.</p></div></div></section></section>}
 
-    {view === "backups" && <section className="grid gap-5 xl:grid-cols-2" aria-label="Database backups">{instances.map((instance) => { const environment = environments.find((candidate) => candidate.id === instance.environment_id); return <Panel key={instance.id} title={`${environment?.name || "Environment"} backups`} subtitle="Backup policy and restore history"><DatabaseInstanceBackups instanceID={instance.id} serviceID={service.id} serviceName={service.name} running={instance.status === "healthy"} defaultOpen /></Panel> })}</section>}
+    {view === "backups" && <section className={databaseInstanceGridClass(instances.length)} aria-label="Database backups">{instances.map((instance) => { const environment = environments.find((candidate) => candidate.id === instance.environment_id); return <Panel key={instance.id} title={`${environment?.name || "Environment"} backups`} subtitle="Backup policy and restore history"><DatabaseInstanceBackups instanceID={instance.id} serviceID={service.id} serviceName={service.name} running={instance.status === "healthy"} defaultOpen /></Panel> })}</section>}
 
-    {(view === "metrics" || view === "logs") && <section className="grid gap-5 xl:grid-cols-2" aria-label={view === "metrics" ? "Database metrics" : "Database logs"}>{instances.map((instance) => {
+    {(view === "metrics" || view === "logs") && <section className={databaseInstanceGridClass(instances.length)} aria-label={view === "metrics" ? "Database metrics" : "Database logs"}>{instances.map((instance) => {
       const environment = environments.find((candidate) => candidate.id === instance.environment_id)
       const operation = operations.find((candidate) => candidate.database_instance_id === instance.id)
       return <Panel key={instance.id} title={`${environment?.name || "Environment"} ${view}`} subtitle={`${databaseStatusLabel(instance.status)} · ${instance.engine_version}`}>

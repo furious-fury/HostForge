@@ -228,6 +228,13 @@ func (s *Store) CreateDatabaseService(ctx context.Context, in CreateDatabaseServ
 		return CreatedDatabaseService{}, err
 	}
 	defer tx.Rollback()
+	var duplicateName int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM services WHERE application_id=? AND lower(name)=lower(?)`, applicationID, name).Scan(&duplicateName); err != nil {
+		return CreatedDatabaseService{}, err
+	}
+	if duplicateName > 0 {
+		return CreatedDatabaseService{}, ErrDuplicateService
+	}
 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO services(

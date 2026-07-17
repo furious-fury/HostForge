@@ -171,7 +171,13 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 			if code == "env_encryption_key_missing" {
 				status = http.StatusServiceUnavailable
 			}
-			writeJSON(w, status, map[string]string{"status": "error", "error": code})
+			payload := map[string]any{"status": "error", "error": code}
+			if code == "database_service_name_conflict" {
+				status = http.StatusConflict
+				payload["message"] = "A service with this name already exists in the application."
+				payload["fields"] = map[string]string{"name": "already_in_use"}
+			}
+			writeJSON(w, status, payload)
 			return
 		}
 		if req.BackupEnabled {

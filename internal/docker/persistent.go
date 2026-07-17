@@ -298,6 +298,12 @@ func InspectManagedContainer(ctx context.Context, cli *client.Client, containerI
 	return inspection, nil
 }
 
+// IsNotFound lets lifecycle callers treat an already-removed Docker resource
+// as an idempotent cleanup success without depending directly on Docker errors.
+func IsNotFound(err error) bool {
+	return errdefs.IsNotFound(err)
+}
+
 func PullImage(ctx context.Context, cli *client.Client, imageRef string) error {
 	response, err := cli.ImagePull(ctx, strings.TrimSpace(imageRef), client.ImagePullOptions{})
 	if err != nil {

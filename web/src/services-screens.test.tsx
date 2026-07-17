@@ -84,6 +84,19 @@ function mockApplication() {
   return vi.spyOn(api, "application").mockResolvedValue({ application, environments: [environment], services: [], service_bindings: {} })
 }
 
+function mockDatabaseCatalog() {
+  vi.spyOn(api, "databaseEngines").mockResolvedValue({
+    engines: [{
+      id: "postgresql", name: "PostgreSQL", description: "Relational database", category: "Relational",
+      versions: [{ version: "18", default: true, provisioning_available: true }], internal_port: 5432,
+      connection_variable: "DATABASE_URL", minimum_memory_bytes: 512 * 1024 * 1024, public_access_available: false,
+    }],
+    resource_presets: [{ id: "development", name: "Development", description: "Low traffic", cpu_limit_millis: 500, memory_limit_bytes: 512 * 1024 * 1024 }],
+    networking: { scope: "hostforge_environment", public_access_available: false },
+  })
+  vi.spyOn(api, "backupDestinations").mockResolvedValue({ destinations: [] })
+}
+
 afterEach(() => vi.restoreAllMocks())
 
 describe("add service", () => {
@@ -157,6 +170,33 @@ describe("add service", () => {
     expect(screen.getByRole("slider", { name: "Memory allocation" })).toHaveAttribute("aria-valuemax", "3")
     expect(screen.getByText(/3.6 allocatable vCPU remains/i)).toBeInTheDocument()
     expect(github).not.toHaveBeenCalled()
+  })
+
+  it("blocks a known duplicate database service name with actionable guidance", async () => {
+    const user = userEvent.setup()
+    const existingDatabase: ServiceDTO = { ...service, id: "database-1", service_type: "database", name: "database", repo_url: "", runtime: "database" }
+    vi.spyOn(api, "application").mockResolvedValue({ application, environments: [environment], services: [existingDatabase], service_bindings: {} })
+    mockDatabaseCatalog()
+
+    renderScreen()
+    await user.click(await screen.findByRole("button", { name: /configure database/i }))
+
+    expect(await screen.findByText("A service with this name already exists in this application. Choose a different name.")).toBeInTheDocument()
+    expect(screen.getByLabelText("Service name")).toHaveAttribute("aria-invalid", "true")
+    expect(screen.getByRole("button", { name: /^create database$/i })).toBeDisabled()
+  })
+
+  it("explains a duplicate name returned by the database API", async () => {
+    const user = userEvent.setup()
+    mockApplication()
+    mockDatabaseCatalog()
+    vi.spyOn(api, "createDatabaseService").mockRejectedValue(new APIError(409, "database_service_name_conflict"))
+
+    renderScreen()
+    await user.click(await screen.findByRole("button", { name: /configure database/i }))
+    await user.click(await screen.findByRole("button", { name: /^create database$/i }))
+
+    expect(await screen.findByText("A service named “database” already exists in this application. Choose a different service name.")).toBeInTheDocument()
   })
 
   it("creates a deployable service and starts its first deployment", async () => {
@@ -314,6 +354,7 @@ describe("service overview", () => {
 
     renderOverview()
     expect(await screen.findByText("Primary database")).toBeInTheDocument()
+	expect(screen.getByRole("region", { name: "Database instance overview" })).not.toHaveClass("xl:grid-cols-2")
 	expect(screen.getByRole("img", { name: "PostgreSQL database icon" })).toHaveAttribute("src", "/db/postgresql.png")
 	const databaseNavigation = screen.getByRole("tablist", { name: "Database service navigation" })
 	expect(databaseNavigation).toHaveTextContent("Backups")
@@ -326,6 +367,7 @@ describe("service overview", () => {
 
     await user.click(within(databaseNavigation).getByRole("tab", { name: "Data & connections" }))
     expect(await screen.findByText("primary_a1b2c3d4")).toBeInTheDocument()
+    expect(screen.getByRole("region", { name: "Database data and connections" }).querySelector(".xl\\:grid-cols-2")).toBeNull()
     expect(screen.getByText("hf_primary_a1b2c3d4")).toBeInTheDocument()
     expect(screen.queryByRole("log", { name: "Database logs" })).not.toBeInTheDocument()
 

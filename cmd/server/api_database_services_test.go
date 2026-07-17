@@ -94,6 +94,26 @@ func TestDatabaseCreationRejectsVersionOutsidePinnedCatalog(t *testing.T) {
 	assertAPIError(t, recorder, http.StatusUnprocessableEntity, "database_version_not_supported")
 }
 
+func TestDatabaseCreationReportsDuplicateServiceName(t *testing.T) {
+	s := newAPITestServer(t)
+	app, _ := s.store.CreateApplication(context.Background(), "Duplicate database API", "")
+	environments, _ := s.store.ListApplicationEnvironments(context.Background(), app.ID)
+	body := `{"name":"primary","engine":"postgresql","version":"18","environment_ids":["` + environments[0].ID + `"],"resource_preset":"development","connections":[]}`
+	first := httptest.NewRecorder()
+	s.handleApplications(first, httptest.NewRequest(http.MethodPost, "/api/applications/"+app.ID+"/database-services", strings.NewReader(body)))
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first create status=%d body=%s", first.Code, first.Body.String())
+	}
+	duplicate := httptest.NewRecorder()
+	body = strings.Replace(body, `"name":"primary"`, `"name":"PRIMARY"`, 1)
+	s.handleApplications(duplicate, httptest.NewRequest(http.MethodPost, "/api/applications/"+app.ID+"/database-services", strings.NewReader(body)))
+	assertAPIError(t, duplicate, http.StatusConflict, "database_service_name_conflict")
+	payload := decodeResponse(t, duplicate)
+	if payload["message"] == "" || payload["fields"].(map[string]any)["name"] != "already_in_use" {
+		t.Fatalf("duplicate name guidance missing: %+v", payload)
+	}
+}
+
 func TestRestoreDeletedDatabaseQueuesRetainedInstances(t *testing.T) {
 	s := newAPITestServer(t)
 	app, _ := s.store.CreateApplication(context.Background(), "Restore API", "")

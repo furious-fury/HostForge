@@ -236,3 +236,13 @@ func TestInspectManagedContainerReturnsReconciliationInvariants(t *testing.T) {
 		t.Fatalf("managed inspection omitted a reconciliation invariant: %+v", inspection)
 	}
 }
+
+func TestInspectManagedContainerExposesNotFoundForIdempotentCleanup(t *testing.T) {
+	dockerClient := newDockerHTTPTestClient(t, func(request *http.Request) (*http.Response, error) {
+		return dockerResponse(request, http.StatusNotFound, `{"message":"No such container: missing"}`), nil
+	})
+	_, err := InspectManagedContainer(context.Background(), dockerClient, "missing")
+	if err == nil || !IsNotFound(err) {
+		t.Fatalf("expected a Docker not-found error, got %v", err)
+	}
+}

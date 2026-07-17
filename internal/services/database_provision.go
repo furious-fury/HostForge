@@ -348,6 +348,9 @@ func PrepareManagedDatabase(ctx context.Context, store *repository.Store, sealer
 	if errors.Is(err, repository.ErrInvalidDatabaseBinding) {
 		return repository.CreatedDatabaseService{}, ErrCode("database_binding_invalid", err)
 	}
+	if errors.Is(err, repository.ErrDuplicateService) {
+		return repository.CreatedDatabaseService{}, ErrCode("database_service_name_conflict", err)
+	}
 	return created, err
 }
 
