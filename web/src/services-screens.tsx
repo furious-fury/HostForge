@@ -1,7 +1,7 @@
-import { useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { api, APIError, queryKeys, type EnvironmentDTO, type ServiceDTO, type ServiceEnvironmentDTO } from "@/api"
-import { Link, useNavigate } from "react-router-dom"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
+import { api, APIError, queryKeys, type DatabaseEngineDTO, type DatabaseResourcePresetDTO, type EnvironmentDTO, type ServiceDTO, type ServiceEnvironmentDTO } from "@/api"
+import { Link, useLocation, useNavigate } from "react-router-dom"
 import {
   ActivityIcon,
   ArrowSquareOutIcon,
@@ -17,11 +17,13 @@ import {
   PauseIcon,
   PlusIcon,
   RocketLaunchIcon,
+  TrashIcon,
 } from "@phosphor-icons/react"
 
 import { AppSelect } from "@/components/app-select"
 import { ApplicationTabs } from "@/components/application-tabs"
 import { ServiceTabs } from "@/components/service-tabs"
+import { DatabaseServiceTabs } from "@/components/database-service-tabs"
 import { StackIdentity } from "@/components/stack-identity"
 import { StatusBadge } from "@/components/status-badge"
 import { ConfirmationAction } from "@/components/confirmation-action"
@@ -33,7 +35,7 @@ import { useToast } from "@/toast-provider"
 import "@/services.css"
 
 function StatusPill({ status }: { status: string }) {
-  const tone = status === "Running" || status === "Healthy" || status === "Live" ? "success" : status === "Deploying" || status === "Building" ? "info" : status === "Failed" ? "error" : "neutral"
+  const tone = status === "Running" || status === "Healthy" || status === "Live" ? "success" : status === "Deploying" || status === "Building" || status === "Provisioning" || status === "Queued" || status === "Starting" ? "info" : status === "Failed" ? "error" : "neutral"
   return <StatusBadge tone={tone} dot>{status}</StatusBadge>
 }
 
@@ -65,9 +67,10 @@ export function ServicesList({ applicationID }: { applicationID: string }) {
   if (applicationQuery.isPending) return <main className="mx-auto w-full max-w-[1600px] animate-pulse px-4 py-8 sm:px-6 lg:px-8"><div className="h-8 w-48 rounded bg-muted" /><div className="mt-6 h-80 rounded-xl border bg-card" /></main>
   if (applicationQuery.isError) return <main className="mx-auto w-full max-w-[1600px] px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-8 text-center"><h1 className="text-sm font-semibold">Services could not be loaded</h1><Button className="mt-4" variant="outline" onClick={() => applicationQuery.refetch()}>Retry</Button></section></main>
   const { application, environments, services, service_bindings: bindings } = applicationQuery.data
+  const databaseInstances = applicationQuery.data.database_instances || {}
   const visibleRows = services.filter((service) => [service.name, service.repo_url, service.runtime].join(" ").toLowerCase().includes(query.toLowerCase()))
-  const states = services.map((service) => serviceListState(bindings[service.id] || [], environments))
-  const running = states.filter((state) => state.status === "Running").length
+  const states = services.map((service) => service.service_type === "database" ? databaseServiceListState(databaseInstances[service.id] || [], environments) : serviceListState(bindings[service.id] || [], environments))
+  const running = states.filter((state) => state.status === "Running" || state.status === "Healthy").length
   const stopped = states.filter((state) => state.status === "Stopped").length
   const awaiting = states.filter((state) => state.status === "Awaiting deployment").length
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
@@ -75,7 +78,7 @@ export function ServicesList({ applicationID }: { applicationID: string }) {
     <ApplicationTabs active="Services" applicationID={applicationID} />
     <section className="mb-5 grid grid-cols-2 overflow-hidden rounded-xl border bg-card lg:grid-cols-4">{[{ label: "Total services", value: services.length }, { label: "Running", value: running }, { label: "Stopped", value: stopped }, { label: "Awaiting deploy", value: awaiting }].map((item) => <article key={item.label} className="hf-service-summary"><p className="text-xs text-muted-foreground">{item.label}</p><p className="mt-4 text-2xl font-semibold tracking-tight">{item.value}</p><p className="mt-1 text-[11px] text-muted-foreground">Across all environments</p></article>)}</section>
     <section className="overflow-hidden rounded-xl border bg-card"><header className="flex flex-col gap-3 border-b bg-muted/70 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold">All services</h2><p className="mt-0.5 text-xs text-muted-foreground">Source and release bindings</p></div><label className="relative sm:ml-auto sm:w-72"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} /><Input value={query} onChange={(event) => setQuery(event.target.value)} className="h-9 w-full bg-card pl-9 text-xs" placeholder="Search services" /></label></header>
-      {visibleRows.length ? <div className="p-4"><div className="overflow-x-auto rounded-lg border"><Table className="w-full min-w-[880px]"><TableHeader><TableRow><TableHead>Service</TableHead><TableHead>Source</TableHead><TableHead>Stack</TableHead><TableHead>Branch</TableHead><TableHead>Status</TableHead><TableHead>Active deployment</TableHead><TableHead>Port</TableHead></TableRow></TableHeader><TableBody>{visibleRows.map((service) => { const state = serviceListState(bindings[service.id] || [], environments); return <TableRow key={service.id}><TableCell><Link to={"/applications/" + applicationID + "/services/" + service.id} className="flex items-center gap-3 text-xs font-semibold hover:underline"><StackIdentity kind={service.stack_kind} label={service.stack_label} showLabel={false} />{service.name}</Link></TableCell><TableCell className="max-w-64 truncate text-xs text-muted-foreground">{service.repo_url}</TableCell><TableCell><StackIdentity kind={service.stack_kind} label={service.stack_label} iconClassName="size-7 rounded-md" /></TableCell><TableCell><span className="font-mono text-xs">{state.binding?.branch || "Not set"}</span>{state.environment && <span className="mt-1 block text-[10px] text-muted-foreground">{state.environment.name}</span>}</TableCell><TableCell><StatusPill status={state.status} />{state.environment && <span className="mt-1 block text-[10px] text-muted-foreground">{state.environment.name}</span>}</TableCell><TableCell className="font-mono text-xs text-muted-foreground">{state.binding?.active_deployment_id || "None"}</TableCell><TableCell className="font-mono text-xs">:{service.internal_port}</TableCell></TableRow> })}</TableBody></Table></div></div> : <div className="px-6 py-14 text-center"><CubeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">{services.length ? "No matching services" : "No services yet"}</p><Button className="mt-4" onClick={() => navigate("/applications/" + applicationID + "/services/new")}><PlusIcon />Add service</Button></div>}
+      {visibleRows.length ? <div className="p-4"><div className="overflow-x-auto rounded-lg border"><Table className="w-full min-w-[880px]"><TableHeader><TableRow><TableHead>Service</TableHead><TableHead>Source</TableHead><TableHead>Stack</TableHead><TableHead>Binding</TableHead><TableHead>Status</TableHead><TableHead>Active resource</TableHead><TableHead>Port</TableHead></TableRow></TableHeader><TableBody>{visibleRows.map((service) => { const databaseState = service.service_type === "database" ? databaseServiceListState(databaseInstances[service.id] || [], environments) : undefined; const state = databaseState || serviceListState(bindings[service.id] || [], environments); return <TableRow key={service.id}><TableCell><Link to={"/applications/" + applicationID + "/services/" + service.id} className="flex items-center gap-3 text-xs font-semibold hover:underline">{service.service_type === "database" ? <span className="grid size-8 place-items-center rounded-lg bg-accent/15 text-accent"><DatabaseIcon size={16} /></span> : <StackIdentity kind={service.stack_kind} label={service.stack_label} showLabel={false} />}{service.name}</Link></TableCell><TableCell className="max-w-64 truncate text-xs text-muted-foreground">{service.service_type === "database" ? "HostForge managed database" : service.repo_url}</TableCell><TableCell>{service.service_type === "database" ? <span className="text-xs font-medium">{service.stack_label}</span> : <StackIdentity kind={service.stack_kind} label={service.stack_label} iconClassName="size-7 rounded-md" />}</TableCell><TableCell><span className="font-mono text-xs">{databaseState ? `${databaseState.instanceCount} isolated env${databaseState.instanceCount === 1 ? "" : "s"}` : state.binding?.branch || "Not set"}</span>{state.environment && <span className="mt-1 block text-[10px] text-muted-foreground">{state.environment.name}</span>}</TableCell><TableCell><StatusPill status={state.status} />{state.environment && <span className="mt-1 block text-[10px] text-muted-foreground">{state.environment.name}</span>}</TableCell><TableCell className="font-mono text-xs text-muted-foreground">{databaseState ? databaseState.instance?.volume_name || "Reserved" : state.binding?.active_deployment_id || "None"}</TableCell><TableCell className="font-mono text-xs">:{service.internal_port}</TableCell></TableRow> })}</TableBody></Table></div></div> : <div className="px-6 py-14 text-center"><CubeIcon className="mx-auto text-muted-foreground" size={24} /><p className="mt-3 text-sm font-semibold">{services.length ? "No matching services" : "No services yet"}</p><Button className="mt-4" onClick={() => navigate("/applications/" + applicationID + "/services/new")}><PlusIcon />Add service</Button></div>}
       <footer className="border-t bg-muted/30 px-5 py-3 text-[11px] text-muted-foreground">{visibleRows.length} services</footer>
     </section>
   </main>
@@ -97,11 +100,29 @@ function serviceListState(bindings: ServiceEnvironmentDTO[], environments: Envir
   return { binding, environment, status }
 }
 
+function databaseServiceListState(instances: import("@/api").DatabaseInstanceDTO[], environments: EnvironmentDTO[]) {
+  const instance = instances.find((item) => item.status === "healthy")
+    || instances.find((item) => item.status === "starting" || item.status === "provisioning")
+    || instances.find((item) => item.status === "failed")
+    || instances[0]
+  const environment = environments.find((item) => item.id === instance?.environment_id)
+  const status = instances.some((item) => item.status === "healthy")
+    ? "Healthy"
+    : instances.some((item) => item.status === "starting" || item.status === "provisioning")
+      ? "Provisioning"
+      : instances.some((item) => item.status === "failed")
+        ? "Failed"
+        : instances.some((item) => item.status === "deleted")
+          ? "Deleted"
+          : "Stopped"
+  return { instance, instanceCount: instances.length, binding: undefined, environment, status }
+}
+
 export function AddService({ applicationID }: { applicationID: string }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const toast = useToast()
-  const [serviceType, setServiceType] = useState<"application" | null>(null)
+  const [serviceType, setServiceType] = useState<"application" | "database" | null>(null)
   const [installationName, setInstallationName] = useState("")
   const [repositoryName, setRepositoryName] = useState("")
   const [branch, setBranch] = useState("")
@@ -116,7 +137,7 @@ export function AddService({ applicationID }: { applicationID: string }) {
   const [healthPath, setHealthPath] = useState("/")
   const [autoDeploy, setAutoDeploy] = useState(true)
   const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
-  const installationsQuery = useQuery({ queryKey: queryKeys.githubInstallations, queryFn: ({ signal }) => api.githubInstallations(signal) })
+  const installationsQuery = useQuery({ queryKey: queryKeys.githubInstallations, queryFn: ({ signal }) => api.githubInstallations(signal), enabled: serviceType === "application" })
   const installations = installationsQuery.data?.installations.filter((item) => !item.suspended) || []
   const installation = installations.find((item) => item.account_login === installationName) || installations[0]
   const repositoriesQuery = useQuery({ queryKey: queryKeys.githubRepositories(installation?.installation_id || 0), queryFn: ({ signal }) => api.githubRepositories(installation.installation_id, signal), enabled: Boolean(installation) })
@@ -166,13 +187,14 @@ export function AddService({ applicationID }: { applicationID: string }) {
       navigate("/applications/" + applicationID + "/services/" + error.service.id)
     },
   })
-  if (applicationQuery.isPending || installationsQuery.isPending) return <main className="mx-auto w-full max-w-5xl animate-pulse px-4 py-8 sm:px-6 lg:px-8"><div className="h-8 w-48 rounded bg-muted" /><div className="mt-8 h-64 rounded-xl border bg-card" /></main>
-  if (applicationQuery.isError || installationsQuery.isError) return <main className="mx-auto w-full max-w-5xl px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-10 text-center"><GithubLogoIcon className="mx-auto text-muted-foreground" size={24} /><h1 className="mt-3 text-sm font-semibold">Service prerequisites could not be loaded</h1><p className="mt-1 text-xs text-muted-foreground">Check the server and GitHub App integration, then retry.</p><Button className="mt-4" variant="outline" onClick={() => { applicationQuery.refetch(); installationsQuery.refetch() }}>Retry</Button></section></main>
+  if (applicationQuery.isPending || serviceType === "application" && installationsQuery.isPending) return <main className="mx-auto w-full max-w-5xl animate-pulse px-4 py-8 sm:px-6 lg:px-8"><div className="h-8 w-48 rounded bg-muted" /><div className="mt-8 h-64 rounded-xl border bg-card" /></main>
+  if (applicationQuery.isError || serviceType === "application" && installationsQuery.isError) return <main className="mx-auto w-full max-w-5xl px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-10 text-center"><GithubLogoIcon className="mx-auto text-muted-foreground" size={24} /><h1 className="mt-3 text-sm font-semibold">Service prerequisites could not be loaded</h1><p className="mt-1 text-xs text-muted-foreground">Check the server and GitHub App integration, then retry.</p><Button className="mt-4" variant="outline" onClick={() => { applicationQuery.refetch(); installationsQuery.refetch() }}>Retry</Button></section></main>
   if (!environments.length) return <main className="mx-auto w-full max-w-5xl px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-10 text-center"><h1 className="text-sm font-semibold">No environment is available</h1><p className="mt-1 text-xs text-muted-foreground">This application needs an environment before a service can be configured.</p><Button asChild className="mt-4" variant="outline"><Link to={"/applications/" + applicationID + "/settings"}>Open application settings</Link></Button></section></main>
-  if (!installations.length) return <main className="mx-auto w-full max-w-5xl px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-10 text-center"><GithubLogoIcon className="mx-auto text-muted-foreground" size={26} /><h1 className="mt-3 text-sm font-semibold">No active GitHub installation</h1><p className="mx-auto mt-1 max-w-md text-xs leading-5 text-muted-foreground">Configure or restore a GitHub App installation, then synchronize it before adding a repository-backed service.</p><div className="mt-5 flex justify-center gap-2"><Button asChild><Link to="/onboarding">Configure GitHub App</Link></Button><Button variant="outline" onClick={() => installationsQuery.refetch()}>Check again</Button></div></section></main>
+  if (serviceType === "application" && !installations.length) return <main className="mx-auto w-full max-w-5xl px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-10 text-center"><GithubLogoIcon className="mx-auto text-muted-foreground" size={26} /><h1 className="mt-3 text-sm font-semibold">No active GitHub installation</h1><p className="mx-auto mt-1 max-w-md text-xs leading-5 text-muted-foreground">Configure or restore a GitHub App installation, then synchronize it before adding a repository-backed service.</p><div className="mt-5 flex justify-center gap-2"><Button asChild><Link to="/onboarding">Configure GitHub App</Link></Button><Button variant="outline" onClick={() => installationsQuery.refetch()}>Check again</Button></div></section></main>
   return <main className="mx-auto w-full max-w-5xl px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
-    <div className="mb-8"><h1 className="text-3xl font-semibold tracking-[-0.035em]">Add service</h1><p className="mt-2 text-sm text-muted-foreground">{serviceType ? `Configure the application service for ${applicationName}.` : `Choose what ${applicationName} needs.`}</p></div>
-    {!serviceType ? <ServiceTypeChooser onSelectApplication={() => setServiceType("application")} /> :
+    <div className="mb-8"><h1 className="text-3xl font-semibold tracking-[-0.035em]">Add service</h1><p className="mt-2 text-sm text-muted-foreground">{serviceType === "application" ? `Configure the application service for ${applicationName}.` : serviceType === "database" ? `Configure a private database for ${applicationName}.` : `Choose what ${applicationName} needs.`}</p></div>
+    {!serviceType ? <ServiceTypeChooser onSelectApplication={() => setServiceType("application")} onSelectDatabase={() => setServiceType("database")} /> :
+    serviceType === "database" ? <DatabaseServiceWizard applicationID={applicationID} applicationName={applicationName} environments={environments} services={applicationQuery.data?.services || []} onBack={() => setServiceType(null)} /> :
     <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}>
       <Panel title="GitHub source" subtitle="Choose exactly what HostForge should deploy for the first release"><div className="grid gap-5 p-6 sm:grid-cols-2"><Field label="Installation"><AppSelect options={installations.map((item) => item.account_login)} value={installation?.account_login || installationName} onValueChange={(value) => { setInstallationName(value); setRepositoryName(""); setBranch("") }} className="h-10 w-full bg-background text-xs" /></Field><Field label="Repository"><AppSelect searchable searchPlaceholder="Search repositories..." emptyMessage="No repository matches your search." options={repositories.map((item) => item.full_name)} value={repository?.full_name || repositoryName} onValueChange={(value) => { setRepositoryName(value); setBranch("") }} disabled={!installation || repositoriesQuery.isPending} className="h-10 w-full bg-background text-xs" /></Field><Field label="Environment"><AppSelect options={environments.map((item) => item.name)} value={environment?.name || environmentName} onValueChange={setEnvironmentName} className="h-10 w-full bg-background text-xs" /></Field><Field label="Branch"><AppSelect options={branches} value={selectedBranch} onValueChange={setBranch} disabled={!repository || branchesQuery.isPending} className="h-10 w-full bg-background text-xs" /></Field></div><div className="border-t px-6 py-3 text-xs" aria-live="polite">{repositoriesQuery.isPending ? <p className="text-muted-foreground">Loading repositories from GitHub...</p> : repositoriesQuery.isError ? <p role="alert" className="flex items-center justify-between gap-3 text-destructive"><span>Repositories could not be loaded for this installation.</span><Button type="button" size="sm" variant="outline" onClick={() => repositoriesQuery.refetch()}>Retry</Button></p> : !repositories.length ? <p className="text-muted-foreground">This installation does not expose any repositories. Update its repository access on GitHub.</p> : branchesQuery.isPending ? <p className="text-muted-foreground">Loading repository branches...</p> : branchesQuery.isError ? <p role="alert" className="flex items-center justify-between gap-3 text-destructive"><span>Branches could not be loaded for this repository.</span><Button type="button" size="sm" variant="outline" onClick={() => branchesQuery.refetch()}>Retry</Button></p> : !branches.length ? <p className="text-muted-foreground">No branches are available in this repository.</p> : <p className="text-muted-foreground">Ready to deploy <span className="font-mono font-semibold text-foreground">{selectedBranch}</span> to <span className="font-semibold text-foreground">{environment?.name}</span>.</p>}</div></Panel>
       <Panel title="Build and runtime" subtitle="Railpack detects framework defaults during the first deployment"><div className="grid gap-5 p-6 sm:grid-cols-2"><Field label="Service name"><Input value={serviceName} onChange={(event) => setName(event.target.value)} placeholder="api" /></Field><Field label="Runtime"><AppSelect options={["auto", "bun"]} value={runtime} onValueChange={setRuntime} className="h-10 w-full bg-background text-xs" /></Field><Field label="Root directory"><Input value={rootDirectory} onChange={(event) => setRootDirectory(event.target.value)} placeholder="Repository root" /></Field><Field label="Internal port"><Input type="number" min="1" max="65535" value={internalPort} onChange={(event) => setInternalPort(event.target.value)} /></Field><Field label="Install command"><Input value={installCmd} onChange={(event) => setInstallCmd(event.target.value)} placeholder="Auto-detected" /></Field><Field label="Build command"><Input value={buildCmd} onChange={(event) => setBuildCmd(event.target.value)} placeholder="Auto-detected" /></Field><Field label="Start command"><Input value={startCmd} onChange={(event) => setStartCmd(event.target.value)} placeholder="Auto-detected" /></Field><Field label="Health-check path"><Input value={healthPath} onChange={(event) => setHealthPath(event.target.value)} placeholder="/" /><span className="mt-1.5 block text-[10px] leading-4 text-muted-foreground">Use `/` for zero-config framework apps. Set a dedicated endpoint only when the application provides one.</span></Field></div></Panel>
@@ -184,7 +206,7 @@ export function AddService({ applicationID }: { applicationID: string }) {
   </main>
 }
 
-function ServiceTypeChooser({ onSelectApplication }: { onSelectApplication: () => void }) {
+function ServiceTypeChooser({ onSelectApplication, onSelectDatabase }: { onSelectApplication: () => void; onSelectDatabase: () => void }) {
   return <section className="grid gap-4 md:grid-cols-3">
     <button type="button" onClick={onSelectApplication} className="group rounded-xl border bg-card p-6 text-left shadow-sm transition hover:border-accent hover:bg-muted/30 focus:outline-none focus:ring-3 focus:ring-ring/20">
       <span className="grid size-11 place-items-center rounded-lg bg-accent text-accent-foreground"><CodeIcon size={21} /></span>
@@ -192,9 +214,124 @@ function ServiceTypeChooser({ onSelectApplication }: { onSelectApplication: () =
       <p className="mt-2 text-xs leading-5 text-muted-foreground">Frontend, backend, API, worker, or full-stack repository. Railpack detects the framework and build process.</p>
       <span className="mt-5 inline-flex text-xs font-semibold group-hover:underline">Configure service</span>
     </button>
-    <PlannedServiceType icon={DatabaseIcon} title="Database" description="Run a managed local PostgreSQL, MySQL, Redis, or compatible data service." />
+    <button type="button" onClick={onSelectDatabase} className="group rounded-xl border bg-card p-6 text-left shadow-sm transition hover:border-accent hover:bg-muted/30 focus:outline-none focus:ring-3 focus:ring-ring/20">
+      <span className="grid size-11 place-items-center rounded-lg bg-accent text-accent-foreground"><DatabaseIcon size={21} /></span>
+      <h2 className="mt-5 text-sm font-semibold">Database</h2>
+      <p className="mt-2 text-xs leading-5 text-muted-foreground">Persistent PostgreSQL, MySQL, MariaDB, MongoDB, Redis, or Valkey isolated by environment.</p>
+      <span className="mt-5 inline-flex text-xs font-semibold group-hover:underline">Configure database</span>
+    </button>
     <PlannedServiceType icon={CalendarDotsIcon} title="Cron job" description="Run repository commands on a recurring schedule with execution history and logs." />
   </section>
+}
+
+function formatMemory(bytes: number) {
+  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`
+}
+
+function DatabaseWizardConnection({ applicationID, consumer, environmentIDs, variableKey, selected, replaceExisting, onToggle, onReplacementChange, onConflictChange }: {
+  applicationID: string
+  consumer: ServiceDTO
+  environmentIDs: string[]
+  variableKey: string
+  selected: boolean
+  replaceExisting: boolean
+  onToggle: () => void
+  onReplacementChange: (value: boolean) => void
+  onConflictChange: (serviceID: string, conflict: boolean) => void
+}) {
+  const normalizedKey = variableKey.trim().toUpperCase()
+  const variableQueries = useQueries({ queries: environmentIDs.flatMap((environmentID) => [
+    { queryKey: queryKeys.variables(applicationID, environmentID, ""), queryFn: ({ signal }: { signal: AbortSignal }) => api.environmentVariables(applicationID, environmentID, "", signal), enabled: selected && Boolean(normalizedKey) },
+    { queryKey: queryKeys.variables(applicationID, environmentID, consumer.id), queryFn: ({ signal }: { signal: AbortSignal }) => api.environmentVariables(applicationID, environmentID, consumer.id, signal), enabled: selected && Boolean(normalizedKey) },
+  ]) })
+  const conflictCount = selected ? variableQueries.filter((query) => query.data?.variables.some((variable) => variable.key === normalizedKey)).length : 0
+  const conflict = conflictCount > 0
+  useEffect(() => onConflictChange(consumer.id, conflict), [conflict, consumer.id, onConflictChange])
+  return <div className={`rounded-lg border bg-background p-4 ${conflict ? "border-amber-500/50" : ""}`}><label className="flex cursor-pointer items-center justify-between gap-4"><span><span className="block text-xs font-semibold">{consumer.name}</span><span className="mt-1 block font-mono text-[10px] text-muted-foreground">{normalizedKey}</span></span><Switch checked={selected} onCheckedChange={onToggle} aria-label={`Connect ${consumer.name}`} /></label>{selected && conflict && <label className="mt-3 flex items-start gap-3 border-t pt-3"><Switch checked={replaceExisting} onCheckedChange={onReplacementChange} aria-label={`Replace existing ${normalizedKey} for ${consumer.name}`} /><span className="text-[10px] leading-4 text-amber-700 dark:text-amber-400"><strong className="block">Existing variable conflict</strong>{normalizedKey} already exists in {conflictCount} selected environment scope{conflictCount === 1 ? "" : "s"}. Confirm that this managed database URL may replace that value for {consumer.name} at deployment time. The saved variable remains unchanged for other services.</span></label>}</div>
+}
+
+function DatabaseServiceWizard({ applicationID, applicationName, environments, services, onBack }: { applicationID: string; applicationName: string; environments: EnvironmentDTO[]; services: ServiceDTO[]; onBack: () => void }) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const catalogQuery = useQuery({ queryKey: queryKeys.databaseEngines, queryFn: ({ signal }) => api.databaseEngines(signal) })
+  const destinationsQuery = useQuery({ queryKey: queryKeys.backupDestinations, queryFn: ({ signal }) => api.backupDestinations(signal) })
+  const [engineID, setEngineID] = useState<DatabaseEngineDTO["id"]>("postgresql")
+  const [version, setVersion] = useState("")
+  const [databaseName, setDatabaseName] = useState("database")
+  const [presetID, setPresetID] = useState<DatabaseResourcePresetDTO["id"]>("development")
+  const [customCPU, setCustomCPU] = useState("2")
+  const [customMemoryGB, setCustomMemoryGB] = useState("2")
+  const [backupEnabled, setBackupEnabled] = useState(false)
+  const [backupDestinationID, setBackupDestinationID] = useState("")
+  const [selectedEnvironmentIDs, setSelectedEnvironmentIDs] = useState<string[]>(() => environments.map((environment) => environment.id))
+  const [consumerServiceIDs, setConsumerServiceIDs] = useState<string[]>([])
+	const [replacementServiceIDs, setReplacementServiceIDs] = useState<string[]>([])
+	const [conflictingServiceIDs, setConflictingServiceIDs] = useState<string[]>([])
+  const [variableKey, setVariableKey] = useState("DATABASE_URL")
+  const engines = catalogQuery.data?.engines || []
+  const engine = engines.find((candidate) => candidate.id === engineID) || engines[0]
+  const availableVersions = engine?.versions.filter((candidate) => candidate.provisioning_available) || []
+  const selectedVersion = availableVersions.some((candidate) => candidate.version === version) ? version : availableVersions.find((candidate) => candidate.default)?.version || availableVersions[0]?.version || ""
+  const presets = catalogQuery.data?.resource_presets || []
+	const destinations = destinationsQuery.data?.destinations || []
+	const backupDestination = destinations.find((item) => item.id === backupDestinationID) || destinations[0]
+  const selectedPreset = presets.find((candidate) => candidate.id === presetID)
+  const preset = selectedPreset && (selectedPreset.id === "custom" || selectedPreset.memory_limit_bytes >= (engine?.minimum_memory_bytes || 0)) ? selectedPreset : presets.find((candidate) => candidate.id !== "custom" && candidate.memory_limit_bytes >= (engine?.minimum_memory_bytes || 0))
+  const effectiveCPUMillis = preset?.id === "custom" ? Math.round(Number(customCPU) * 1000) : preset?.cpu_limit_millis || 0
+  const effectiveMemoryBytes = preset?.id === "custom" ? Math.round(Number(customMemoryGB) * 1024 ** 3) : preset?.memory_limit_bytes || 0
+  const customResourcesValid = preset?.id !== "custom" || Number(customCPU) >= 0.1 && Number(customCPU) <= 32 && Number(customMemoryGB) * 1024 ** 3 >= (engine?.minimum_memory_bytes || 0) && Number(customMemoryGB) <= 256
+  const createMutation = useMutation({
+    mutationFn: () => api.createDatabaseService(applicationID, {
+      name: databaseName,
+      engine: engineID,
+      version: selectedVersion,
+      environment_ids: selectedEnvironmentIDs,
+      resource_preset: preset?.id || presetID,
+	  custom_cpu_millis: preset?.id === "custom" ? Math.round(Number(customCPU) * 1000) : undefined,
+	  custom_memory_bytes: preset?.id === "custom" ? Math.round(Number(customMemoryGB) * 1024 ** 3) : undefined,
+	  backup_enabled: backupEnabled,
+	  backup_destination_id: backupEnabled ? backupDestination?.id : undefined,
+      connections: consumerServiceIDs.map((serviceID) => ({ service_id: serviceID, variable_key: variableKey, replace_existing: conflictingServiceIDs.includes(serviceID) && replacementServiceIDs.includes(serviceID) })),
+    }),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) })
+      navigate(`/applications/${applicationID}/services/${result.service.id}`)
+    },
+  })
+  const setConnectionConflict = useCallback((serviceID: string, conflict: boolean) => {
+    setConflictingServiceIDs((current) => conflict ? current.includes(serviceID) ? current : [...current, serviceID] : current.filter((id) => id !== serviceID))
+  }, [])
+  if (catalogQuery.isPending) return <section className="h-96 animate-pulse rounded-xl border bg-card" />
+  if (catalogQuery.isError) return <section className="rounded-xl border bg-card p-10 text-center"><DatabaseIcon className="mx-auto text-muted-foreground" size={26} /><h2 className="mt-3 text-sm font-semibold">Database catalog could not be loaded</h2><p className="mt-1 text-xs text-muted-foreground">Retry after checking the HostForge server.</p><Button className="mt-4" variant="outline" onClick={() => catalogQuery.refetch()}>Retry</Button></section>
+  if (!engine) return <section className="rounded-xl border bg-card p-10 text-center text-xs text-muted-foreground">No database engines are available.</section>
+  const toggleEnvironment = (environmentID: string) => setSelectedEnvironmentIDs((current) => current.includes(environmentID) ? current.filter((id) => id !== environmentID) : [...current, environmentID])
+  const toggleConsumer = (serviceID: string) => {
+    setConsumerServiceIDs((current) => current.includes(serviceID) ? current.filter((id) => id !== serviceID) : [...current, serviceID])
+    setReplacementServiceIDs((current) => current.filter((id) => id !== serviceID))
+  }
+  return <div className="space-y-5">
+    <Panel title="Database engine" subtitle="HostForge controls tested versions, ports, and persistent data paths">
+      <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3">{engines.map((candidate) => { const available = candidate.versions.some((item) => item.provisioning_available); return <button key={candidate.id} type="button" disabled={!available} onClick={() => { setEngineID(candidate.id); setVersion(""); setVariableKey(candidate.connection_variable) }} className={`rounded-lg border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${candidate.id === engine.id ? "border-accent bg-accent/10 ring-2 ring-accent/15" : "bg-background hover:bg-muted/40"}`}><span className="flex items-center justify-between gap-2 text-xs font-semibold">{candidate.name}{!available && <StatusBadge tone="neutral">Next</StatusBadge>}</span><span className="mt-1 block text-[10px] font-medium text-muted-foreground">{candidate.category} · :{candidate.internal_port}</span><span className="mt-2 block text-[11px] leading-5 text-muted-foreground">{candidate.description}</span></button> })}</div>
+      <div className="grid gap-5 border-t p-5 sm:grid-cols-3"><Field label="Service name"><Input value={databaseName} onChange={(event) => setDatabaseName(event.target.value)} placeholder="database" /></Field><Field label="Version"><AppSelect options={availableVersions.map((item) => item.version)} value={selectedVersion} onValueChange={setVersion} className="h-10 w-full bg-background text-xs" /></Field><Field label="Connection variable"><Input value={variableKey} onChange={(event) => setVariableKey(event.target.value.toUpperCase())} /></Field></div>
+    </Panel>
+    <Panel title="Environment isolation" subtitle="Each selected environment receives its own container, volume, credentials, and private network identity">
+      <div className="grid gap-3 p-5 sm:grid-cols-2">{environments.map((environment) => <label key={environment.id} className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border bg-background p-4"><span><span className="block text-xs font-semibold">{environment.name}</span><span className="mt-1 block text-[11px] text-muted-foreground">{environment.kind === "production" ? "Production data" : "Non-production data"} remains isolated.</span></span><Switch checked={selectedEnvironmentIDs.includes(environment.id)} onCheckedChange={() => toggleEnvironment(environment.id)} aria-label={`Create ${environment.name} database`} /></label>)}</div>
+    </Panel>
+    <Panel title="Resources" subtitle={`Choose limits for each ${engine.name} instance`}>
+      <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">{presets.map((candidate) => { const custom = candidate.id === "custom"; const unavailable = !custom && candidate.memory_limit_bytes < engine.minimum_memory_bytes; return <button key={candidate.id} type="button" disabled={unavailable} onClick={() => setPresetID(candidate.id)} className={`rounded-lg border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${candidate.id === preset?.id ? "border-accent bg-accent/10 ring-2 ring-accent/15" : "bg-background hover:bg-muted/40"}`}><span className="text-xs font-semibold">{candidate.name}</span><span className="mt-1 block text-[10px] font-medium text-muted-foreground">{custom ? "Set exact limits" : `${candidate.cpu_limit_millis / 1000} vCPU · ${formatMemory(candidate.memory_limit_bytes)}`}</span><span className="mt-2 block text-[11px] leading-5 text-muted-foreground">{candidate.description}</span>{unavailable && <span className="mt-2 block text-[10px] text-destructive">Below the {formatMemory(engine.minimum_memory_bytes)} engine minimum</span>}</button> })}</div>
+	  {preset?.id === "custom" && <div className="grid gap-5 border-t p-5 sm:grid-cols-2"><Field label="CPU cores"><Input type="number" min="0.1" max="32" step="0.1" value={customCPU} onChange={(event) => setCustomCPU(event.target.value)} /></Field><Field label="Memory (GB)"><Input type="number" min={(engine.minimum_memory_bytes / 1024 ** 3).toFixed(1)} max="256" step="0.1" value={customMemoryGB} onChange={(event) => setCustomMemoryGB(event.target.value)} /><span className="mt-1.5 block text-[10px] text-muted-foreground">Minimum for {engine.name}: {formatMemory(engine.minimum_memory_bytes)}</span></Field></div>}
+    </Panel>
+    <Panel title="Application connections" subtitle="HostForge injects the private connection URL when these services are next deployed">
+      {services.filter((service) => service.service_type === "application").length ? <div className="grid gap-3 p-5 sm:grid-cols-2">{services.filter((service) => service.service_type === "application").map((service) => <DatabaseWizardConnection key={service.id} applicationID={applicationID} consumer={service} environmentIDs={selectedEnvironmentIDs} variableKey={variableKey || engine.connection_variable} selected={consumerServiceIDs.includes(service.id)} replaceExisting={replacementServiceIDs.includes(service.id)} onToggle={() => toggleConsumer(service.id)} onReplacementChange={(value) => setReplacementServiceIDs((current) => value ? current.includes(service.id) ? current : [...current, service.id] : current.filter((id) => id !== service.id))} onConflictChange={setConnectionConflict} />)}</div> : <div className="p-5 text-xs text-muted-foreground">No application services are available yet. You can attach this database later.</div>}
+    </Panel>
+	<Panel title="Backups" subtitle="Optionally enable a daily encrypted backup policy for every selected environment">
+	  {destinations.length ? <div className="grid gap-4 p-5 sm:grid-cols-[minmax(0,1fr)_auto]"><Field label="Backup destination"><AppSelect options={destinations.map((item) => item.name)} value={backupDestination?.name || ""} onValueChange={(name) => setBackupDestinationID(destinations.find((item) => item.name === name)?.id || "")} disabled={!backupEnabled} className="h-10 w-full bg-background text-xs" /></Field><label className="flex items-center gap-3 self-end rounded-lg border bg-background px-4 py-2.5"><span className="text-xs font-semibold">Daily at 02:00 UTC</span><Switch checked={backupEnabled} onCheckedChange={setBackupEnabled} aria-label="Enable daily database backups" /></label></div> : <div className="p-5"><p className="text-xs font-semibold">No backup destination connected</p><p className="mt-1 text-[11px] text-muted-foreground">You can create the database now, then connect Cloudflare R2 or generic S3 and enable backups from its detail page.</p><Button asChild className="mt-3" size="sm" variant="outline"><Link to="/settings">Connect backup storage</Link></Button></div>}
+	</Panel>
+    <Panel title="Review" subtitle="Host allocation and persistent resources created by this request"><div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4"><RuntimeValue label="Instances" value={String(selectedEnvironmentIDs.length)} /><RuntimeValue label="Persistent volumes" value={String(selectedEnvironmentIDs.length)} /><RuntimeValue label="Total CPU limit" value={`${(effectiveCPUMillis * selectedEnvironmentIDs.length / 1000).toFixed(1)} vCPU`} /><RuntimeValue label="Total memory limit" value={formatMemory(effectiveMemoryBytes * selectedEnvironmentIDs.length)} /></div><div className="border-t px-5 py-4 text-[11px] leading-5 text-muted-foreground">{consumerServiceIDs.length ? `${consumerServiceIDs.length} application service${consumerServiceIDs.length === 1 ? "" : "s"} will receive ${variableKey || engine.connection_variable} independently in each selected environment.` : "No application binding will be created yet."} {backupEnabled && backupDestination ? `Daily encrypted backups will use ${backupDestination.name}.` : "Remote backups can be configured later, but this database is not protected from VPS loss until then."}</div></Panel>
+    <section className="rounded-xl border border-dashed bg-muted/20 p-5"><div className="flex items-start gap-3"><HardDrivesIcon className="mt-0.5 text-muted-foreground" size={19} /><div><h2 className="text-xs font-semibold">Private by default</h2><p className="mt-1 text-[11px] leading-5 text-muted-foreground">{applicationName} will receive {selectedEnvironmentIDs.length} isolated {engine.name} instance{selectedEnvironmentIDs.length === 1 ? "" : "s"}. No database port is published to the internet. Data volumes are retained for seven days after deletion.</p></div></div></section>
+    {createMutation.isError && <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">{createMutation.error instanceof APIError ? createMutation.error.code.replaceAll("_", " ") : createMutation.error.message}</div>}
+    <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onBack}>Change service type</Button><Button type="button" onClick={() => createMutation.mutate()} disabled={!databaseName.trim() || !selectedVersion || !selectedEnvironmentIDs.length || !preset || !customResourcesValid || backupEnabled && !backupDestination || conflictingServiceIDs.some((id) => consumerServiceIDs.includes(id) && !replacementServiceIDs.includes(id)) || createMutation.isPending}><DatabaseIcon />{createMutation.isPending ? "Queuing database..." : "Create database"}</Button></div>
+  </div>
 }
 
 function PlannedServiceType({ icon: Icon, title, description }: { icon: React.ComponentType<{ size?: number }>; title: string; description: string }) {
@@ -209,10 +346,14 @@ function PlannedServiceType({ icon: Icon, title, description }: { icon: React.Co
 export function ServiceOverview({ applicationID, service: serviceID }: { applicationID: string; service: string }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const serviceQuery = useQuery({ queryKey: queryKeys.service(serviceID), queryFn: ({ signal }) => api.service(serviceID, signal) })
+  const serviceQuery = useQuery({
+    queryKey: queryKeys.service(serviceID),
+    queryFn: ({ signal }) => api.service(serviceID, signal),
+    refetchInterval: (query) => query.state.data?.service.service_type === "database" && query.state.data.database_operations?.some((operation) => operation.status === "queued" || operation.status === "running") ? 2000 : false,
+  })
   const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
   const environments = applicationQuery.data?.environments || []
-  const deploymentsQuery = useQuery({ queryKey: queryKeys.deployments(serviceID), queryFn: ({ signal }) => api.deployments({ serviceID }, signal) })
+  const deploymentsQuery = useQuery({ queryKey: queryKeys.deployments(serviceID), queryFn: ({ signal }) => api.deployments({ serviceID }, signal), enabled: serviceQuery.data?.service.service_type === "application" })
   const invalidate = async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) })
     await queryClient.invalidateQueries({ queryKey: queryKeys.deployments(serviceID) })
@@ -226,6 +367,9 @@ export function ServiceOverview({ applicationID, service: serviceID }: { applica
   if (serviceQuery.isError || applicationQuery.isError) return <main className="mx-auto w-full max-w-[1600px] px-4 py-16 sm:px-6 lg:px-8"><section className="rounded-xl border bg-card p-8 text-center"><h1 className="text-sm font-semibold">Service could not be loaded</h1><Button className="mt-4" variant="outline" onClick={() => { serviceQuery.refetch(); applicationQuery.refetch() }}>Retry</Button></section></main>
 
   const service = serviceQuery.data.service
+  if (service.service_type === "database") {
+    return <DatabaseServiceOverview service={service} data={serviceQuery.data} environments={environments} />
+  }
   const latest = deploymentsQuery.data?.deployments[0]
   const activeEnvironments = serviceQuery.data.environment_states.filter((item) => item.active_deployment_id)
   const state = activeEnvironments.some((item) => item.desired_state === "running") ? "Running" : activeEnvironments.length ? "Stopped" : serviceQuery.data.bindings.some((item) => item.branch) ? "Awaiting deployment" : "Configuration required"
@@ -259,6 +403,122 @@ export function ServiceOverview({ applicationID, service: serviceID }: { applica
       <Panel title="Source configuration" subtitle="Repository and runtime settings"><div className="divide-y"><SourceValue icon={GithubLogoIcon} label="Repository" value={service.repo_url} /><SourceValue icon={CodeIcon} label="Runtime" value={service.runtime} /><SourceValue icon={HardDrivesIcon} label="Root directory" value={service.root_directory || "Repository root"} /><SourceValue icon={HeartbeatIcon} label="Health check" value={service.health_check_path + " on port " + service.internal_port} /></div></Panel>
       <Panel title="Latest deployment" subtitle={latest ? new Date(latest.created_at).toLocaleString() : "No deployment recorded"} action={latest ? <Link to={"/deployments/" + latest.id} className="text-xs font-medium hover:underline">View deployment</Link> : undefined}>{deploymentsQuery.isPending ? <div className="h-36 animate-pulse bg-muted/40" /> : deploymentsQuery.isError ? <PanelQueryError message="Deployment history could not be loaded." retry={() => deploymentsQuery.refetch()} /> : latest ? <div className="p-5"><div className="flex items-center gap-2"><StatusPill status={latest.status === "SUCCESS" ? "Healthy" : latest.status[0] + latest.status.slice(1).toLowerCase()} /><span className="font-mono text-xs">{latest.id}</span></div><p className="mt-4 font-mono text-xs text-muted-foreground">{latest.commit_hash || "Commit pending"}</p><p className="mt-2 text-xs text-muted-foreground">{latest.trigger || "manual"} / {latest.actor || "operator"}</p></div> : <div className="p-8 text-center text-xs text-muted-foreground">Deploy this environment to create its first release.</div>}</Panel>
     </div>
+  </main>
+}
+
+function databaseStatusLabel(status: string) {
+  return status.split("_").map((part) => part ? part[0].toUpperCase() + part.slice(1) : part).join(" ")
+}
+
+function DatabaseInstanceDiagnostics({ instanceID, running, defaultOpen = false, metricsAnchorID, logsAnchorID }: { instanceID: string; running: boolean; defaultOpen?: boolean; metricsAnchorID?: string; logsAnchorID?: string }) {
+  const [open, setOpen] = useState(defaultOpen)
+  const viewport = useRef<HTMLDivElement>(null)
+  const logsQuery = useQuery({
+    queryKey: ["database-instance", instanceID, "logs"],
+    queryFn: ({ signal }) => api.databaseLogs(instanceID, 200, signal),
+    enabled: open,
+    refetchInterval: open && running ? 5000 : false,
+  })
+  const metricsQuery = useQuery({
+    queryKey: ["database-instance", instanceID, "metrics"],
+    queryFn: ({ signal }) => api.databaseMetrics(instanceID, signal),
+    enabled: open && running,
+    refetchInterval: open && running ? 5000 : false,
+  })
+  useEffect(() => {
+    if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight
+  }, [logsQuery.data?.logs])
+  const lines = logsQuery.data?.logs.trimEnd().split("\n").filter(Boolean) || []
+  const metric = metricsQuery.data?.metric
+  return <div className="border-t">
+    <button type="button" className="flex w-full items-center justify-between bg-muted/10 px-5 py-3 text-left text-xs font-semibold hover:bg-muted/30" onClick={() => setOpen((value) => !value)}><span>Logs and resource usage</span><span className="text-[10px] text-muted-foreground">{open ? "Hide" : "View"}</span></button>
+    {open && <div className="border-t p-4">
+      <div id={metricsAnchorID}>{metric && <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><RuntimeValue label="CPU" value={`${metric.cpu_percent.toFixed(1)}%`} /><RuntimeValue label="Memory" value={formatMemory(metric.memory_bytes)} /><RuntimeValue label="Network in" value={formatMemory(metric.network_rx_bytes)} /><RuntimeValue label="Network out" value={formatMemory(metric.network_tx_bytes)} /></div>}</div>
+      {!running && <p className="mb-3 text-[11px] text-muted-foreground">The instance is stopped. Showing its last available container output.</p>}
+      {(logsQuery.isError || metricsQuery.isError) && <p className="mb-3 text-[11px] text-destructive">Some database diagnostics could not be loaded.</p>}
+      <div id={logsAnchorID} ref={viewport} role="log" aria-label="Database logs" className="h-48 overflow-y-auto rounded-lg bg-neutral-950 p-3 text-neutral-200">
+        {logsQuery.isPending ? <p className="font-mono text-xs text-neutral-500">Loading database logs…</p> : lines.length ? lines.map((line, index) => <code key={`${index}-${line}`} className="block whitespace-pre-wrap break-words font-mono text-[11px] leading-5">{line}</code>) : <p className="font-mono text-xs text-neutral-500">No database output recorded.</p>}
+      </div>
+      <p className="mt-2 text-[10px] text-muted-foreground">Last 200 lines · refreshes every 5 seconds while running</p>
+    </div>}
+  </div>
+}
+
+function DatabaseInstanceBackups({ instanceID, serviceID, serviceName, running, defaultOpen = false, anchorID }: { instanceID: string; serviceID: string; serviceName: string; running: boolean; defaultOpen?: boolean; anchorID?: string }) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(defaultOpen)
+  const destinationsQuery = useQuery({ queryKey: queryKeys.backupDestinations, queryFn: ({ signal }) => api.backupDestinations(signal), enabled: open })
+  const policyQuery = useQuery({ queryKey: ["database-backup-policy", instanceID], queryFn: ({ signal }) => api.databaseBackupPolicy(instanceID, signal), enabled: open })
+  const backupsQuery = useQuery({ queryKey: ["database-backups", instanceID], queryFn: ({ signal }) => api.databaseBackups(instanceID, signal), enabled: open, refetchInterval: (query) => query.state.data?.backups.some((backup) => backup.status === "queued" || backup.status === "running") ? 2000 : false })
+  const [draft, setDraft] = useState<{ destination_id: string; enabled: boolean; schedule: string; timezone: string; retention_days: number } | null>(null)
+  const policy = draft || policyQuery.data?.policy || { destination_id: destinationsQuery.data?.destinations[0]?.id || "", enabled: false, schedule: "0 2 * * *", timezone: "UTC", retention_days: 30 }
+  const destinationNames = destinationsQuery.data?.destinations.map((item) => item.name) || []
+  const selectedDestination = destinationsQuery.data?.destinations.find((item) => item.id === policy.destination_id)
+  const save = useMutation({ mutationFn: () => api.saveDatabaseBackupPolicy(instanceID, policy), onSuccess: async (result) => { setDraft({ destination_id: result.policy.destination_id, enabled: result.policy.enabled, schedule: result.policy.schedule, timezone: result.policy.timezone, retention_days: result.policy.retention_days }); await queryClient.invalidateQueries({ queryKey: ["database-backup-policy", instanceID] }) } })
+  const run = useMutation({ mutationFn: () => api.createDatabaseBackup(instanceID), onSuccess: async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["database-backups", instanceID] }), queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) })]) } })
+  const restore = useMutation({ mutationFn: ({ backupID, mode }: { backupID: string; mode: "new_service" | "replace_current" }) => api.restoreDatabaseBackup(backupID, mode === "new_service" ? { mode } : { mode, target_instance_id: instanceID, confirmation: serviceName }), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) }) } })
+  const remove = useMutation({ mutationFn: (backupID: string) => api.deleteDatabaseBackup(backupID), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["database-backups", instanceID] }) } })
+  const set = <K extends keyof typeof policy>(key: K, value: (typeof policy)[K]) => setDraft({ ...policy, [key]: value })
+  return <div className="border-t" id={anchorID}>
+    <button type="button" className="flex w-full items-center justify-between bg-muted/10 px-5 py-3 text-left text-xs font-semibold hover:bg-muted/30" onClick={() => setOpen((value) => !value)}><span>Backups</span><span className="text-[10px] text-muted-foreground">{open ? "Hide" : "Configure"}</span></button>
+    {open && <div className="space-y-4 border-t p-4">
+      {destinationsQuery.isPending || policyQuery.isPending ? <div className="h-24 animate-pulse rounded-lg bg-muted" /> : !destinationsQuery.data?.destinations.length ? <div className="rounded-lg border border-dashed p-4 text-center"><p className="text-xs font-semibold">Connect backup storage first</p><p className="mt-1 text-[11px] text-muted-foreground">Add a verified Cloudflare R2 or S3 destination in platform Settings.</p><Button asChild className="mt-3" size="sm" variant="outline"><Link to="/settings">Open backup settings</Link></Button></div> : <div className="grid gap-3 rounded-lg border bg-muted/15 p-4 sm:grid-cols-2"><Field label="Destination"><AppSelect options={destinationNames} value={selectedDestination?.name || destinationNames[0]} onValueChange={(name) => set("destination_id", destinationsQuery.data?.destinations.find((item) => item.name === name)?.id || "")} className="h-10 w-full bg-background text-xs" /></Field><Field label="Retention days"><Input type="number" min={1} max={3650} value={policy.retention_days} onChange={(event) => set("retention_days", Number(event.target.value))} /></Field><Field label="Schedule"><Input value={policy.schedule} onChange={(event) => set("schedule", event.target.value)} className="font-mono" /></Field><Field label="Timezone"><Input value={policy.timezone} onChange={(event) => set("timezone", event.target.value)} className="font-mono" /></Field><label className="flex items-center justify-between gap-4 rounded-md border bg-background px-3 py-2.5 sm:col-span-2"><span><span className="block text-xs font-semibold">Scheduled backups</span><span className="mt-0.5 block text-[10px] text-muted-foreground">Run this cron schedule in the selected timezone.</span></span><Switch checked={policy.enabled} onCheckedChange={(value) => set("enabled", value)} /></label><div className="flex flex-wrap justify-end gap-2 sm:col-span-2"><Button size="sm" variant="outline" disabled={!running || !policyQuery.data?.policy || run.isPending} onClick={() => run.mutate()}>{run.isPending ? "Queuing…" : "Back up now"}</Button><Button size="sm" disabled={!policy.destination_id || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Saving…" : "Save backup policy"}</Button></div></div>}
+      {(save.isError || run.isError || restore.isError || remove.isError) && <p className="text-[11px] text-destructive">The backup operation could not be completed. Safety backups referenced by restore history cannot be removed.</p>}
+      {backupsQuery.data?.backups.length ? <div className="overflow-hidden rounded-lg border">{backupsQuery.data.backups.slice(0, 5).map((backup) => <div key={backup.id} className="flex flex-wrap items-center gap-3 border-b p-3 last:border-b-0"><StatusPill status={databaseStatusLabel(backup.status)} /><div className="min-w-0 flex-1"><p className="truncate font-mono text-[10px]">{backup.object_key || backup.id}</p><p className="mt-1 text-[10px] text-muted-foreground">{backup.trigger_kind} · {backup.compressed_size ? formatMemory(backup.compressed_size) : "size pending"} · {new Date(backup.created_at).toLocaleString()}</p></div>{backup.status === "success" && <div className="flex gap-2"><Button size="sm" variant="outline" disabled={restore.isPending} onClick={() => restore.mutate({ backupID: backup.id, mode: "new_service" })}>Restore as copy</Button><ConfirmationAction title={`Replace ${serviceName} from this backup?`} description="HostForge will first create a safety backup, stop bound application containers, replace the current database contents, and roll back automatically if the restore fails." confirmLabel="Create safety backup and replace" onConfirm={() => restore.mutateAsync({ backupID: backup.id, mode: "replace_current" })} trigger={<Button size="sm" variant="destructive" disabled={!running || restore.isPending}>Replace current</Button>} /></div>}{["success", "failed", "cancelled"].includes(backup.status) && <ConfirmationAction title="Delete this backup?" description={backup.status === "success" ? "The encrypted object will be permanently removed from backup storage. Backups referenced by restore history remain protected." : "The terminal backup record will be permanently removed."} confirmLabel="Delete backup" destructive onConfirm={() => remove.mutateAsync(backup.id)} trigger={<Button size="sm" variant="ghost" aria-label={`Delete backup ${backup.id}`} disabled={remove.isPending}><TrashIcon /></Button>} />}</div>)}</div> : open && !backupsQuery.isPending && <p className="text-center text-[11px] text-muted-foreground">No backups recorded for this environment.</p>}
+    </div>}
+  </div>
+}
+
+function DatabaseInstanceUpgrade({ instanceID }: { instanceID: string }) {
+  const queryClient = useQueryClient()
+  const preflight = useQuery({ queryKey: ["database-upgrade", instanceID], queryFn: ({ signal }) => api.databaseUpgradePreflight(instanceID, signal), refetchInterval: 30_000 })
+  const upgrade = useMutation({ mutationFn: () => api.upgradeDatabaseInstance(instanceID), onSuccess: async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["database-upgrade", instanceID] }), queryClient.invalidateQueries({ queryKey: ["service"] })]) } })
+  if (preflight.isPending || preflight.isError || !preflight.data.available) return null
+  const reason = preflight.data.reason === "recent_backup_required" ? `Create a successful backup within ${preflight.data.backup_max_age_hours} hours before upgrading.` : preflight.data.reason === "database_not_healthy" ? "The database must be healthy and running before upgrading." : "Upgrade preflight is not ready."
+  return <div className="border-t bg-muted/15 px-5 py-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><p className="text-[11px] font-semibold">Patch image update available</p><p className="mt-1 text-[10px] leading-4 text-muted-foreground">{preflight.data.ready ? "HostForge will replace only the container, retain this volume and network identity, verify health, and restore the previous digest automatically on failure." : reason}</p></div><ConfirmationAction title="Apply the tested patch image?" description="This causes a short database restart. A recent logical backup is required, the major engine version does not change, and the previous digest is retained for automatic rollback." confirmLabel="Upgrade and verify" onConfirm={() => upgrade.mutateAsync()} trigger={<Button size="sm" disabled={!preflight.data.ready || upgrade.isPending}>{upgrade.isPending ? "Queuing…" : "Upgrade patch"}</Button>} /></div>{upgrade.isError && <p role="alert" className="mt-2 text-[10px] text-destructive">{serviceSourceError(upgrade.error)}</p>}</div>
+}
+
+function DatabaseServiceOverview({ service, data, environments }: {
+  service: ServiceDTO
+  data: Awaited<ReturnType<typeof api.service>>
+  environments: EnvironmentDTO[]
+}) {
+  const queryClient = useQueryClient()
+	const location = useLocation()
+	const [currentTime] = useState(() => Date.now())
+  const database = data.database
+  const instances = data.database_instances || []
+  const operations = data.database_operations || []
+  const activeOperation = operations.find((operation) => operation.status === "queued" || operation.status === "running")
+  const restoreMutation = useMutation({
+    mutationFn: () => api.restoreDeletedDatabase(service.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.service(service.id) }),
+  })
+  const runtimeMutation = useMutation({
+    mutationFn: ({ instanceID, action }: { instanceID: string; action: "start" | "stop" | "restart" }) => api.databaseRuntimeAction(instanceID, action),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.service(service.id) }),
+  })
+  const rotateMutation = useMutation({
+    mutationFn: (instanceID: string) => api.rotateDatabaseCredentials(instanceID),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.service(service.id) }),
+  })
+  const healthy = instances.filter((instance) => instance.status === "healthy").length
+  const canRestore = instances.length > 0 && instances.every((instance) => instance.status === "deleted" && instance.purge_after && new Date(instance.purge_after).getTime() > currentTime)
+  const overall = activeOperation ? databaseStatusLabel(activeOperation.status) : healthy === instances.length && instances.length ? "Healthy" : instances.some((instance) => instance.status === "failed") ? "Failed" : instances.some((instance) => instance.status === "deleted") ? "Deleted" : "Provisioning"
+  return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
+    <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end"><div className="flex items-start gap-4"><span className="grid size-12 place-items-center rounded-xl bg-accent text-accent-foreground"><DatabaseIcon size={23} /></span><div><p className="mb-1"><StatusPill status={overall} /></p><h1 className="text-3xl font-semibold tracking-[-0.035em]">{service.name}</h1><p className="mt-2 text-xs text-muted-foreground">{database?.engine || "database"} {database?.default_version} · private environment networking</p></div></div><div className="flex items-center gap-2 xl:ml-auto"><StatusBadge tone="neutral">HostForge private network</StatusBadge>{canRestore && <Button size="sm" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>{restoreMutation.isPending ? "Queuing restore…" : "Restore database"}</Button>}</div></div>
+    {restoreMutation.isError && <div className="mb-5 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">The retained database could not be restored. Its retention window may have expired.</div>}
+    <DatabaseServiceTabs active={location.hash === "#connections" ? "Data & connections" : location.hash === "#backups" ? "Backups" : location.hash === "#metrics" ? "Metrics" : location.hash === "#logs" ? "Logs" : "Overview"} serviceID={service.id} applicationID={service.application_id} />
+    {activeOperation && <Panel title="Provisioning database" subtitle="This operation is durable and continues if you leave the page"><div className="p-5"><div className="mb-2 flex items-center justify-between gap-4 text-xs"><span className="font-semibold">{databaseStatusLabel(activeOperation.progress_step)}</span><span className="font-mono text-muted-foreground">{activeOperation.progress_percent}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${activeOperation.progress_percent}%` }} /></div></div></Panel>}
+    <section className="mt-5" id="connections"><div className="mb-3"><h2 className="text-sm font-semibold">Data and connections</h2><p className="mt-1 text-xs text-muted-foreground">Each environment has independent credentials, storage, resources, and private connection identity.</p></div><div className="grid gap-5 xl:grid-cols-2">{instances.map((instance, index) => {
+      const environment = environments.find((candidate) => candidate.id === instance.environment_id)
+      const operation = operations.find((candidate) => candidate.database_instance_id === instance.id)
+      const status = databaseStatusLabel(instance.status)
+      const runtimeBusy = runtimeMutation.isPending || rotateMutation.isPending || operation?.status === "queued" || operation?.status === "running"
+      const credential = data.database_credentials?.[instance.id]
+      return <Panel key={instance.id} title={environment?.name || "Environment"} subtitle={`${environment?.kind || "environment"} · ${instance.engine_version}`} action={<StatusPill status={status} />}><div className="grid grid-cols-2 gap-px bg-border lg:grid-cols-3"><RuntimeValue label="Private host" value={instance.network_alias} /><RuntimeValue label="Port" value={String(instance.internal_port)} /><RuntimeValue label="Database" value={credential?.database_name || "Unavailable"} /><RuntimeValue label="Username" value={credential?.username || "Unavailable"} /><RuntimeValue label="Persistent volume" value={instance.storage_checked_at ? `${formatMemory(instance.storage_used_bytes || 0)} used` : instance.volume_name} /><RuntimeValue label="Resources" value={`${instance.cpu_limit_millis / 1000} vCPU · ${formatMemory(instance.memory_limit_bytes)}`} /></div>{credential && <div className="border-t px-5 py-3 text-[11px] text-muted-foreground">Credential generation {credential.generation}{credential.rotated_at ? ` · rotated ${new Date(credential.rotated_at).toLocaleString()}` : ""}. Passwords remain sealed and are injected only into bound services.</div>}{instance.health_message && <div className="border-t px-5 py-3 text-[11px] text-muted-foreground">Health: {instance.health_message}</div>}{operation?.status === "failed" && <div className="border-t px-5 py-3 text-[11px] text-destructive">{operation.error_code?.replaceAll("_", " ") || "Database operation failed"}</div>}{instance.status === "deleted" && instance.purge_after && <div className="border-t px-5 py-3 text-[11px] text-amber-700">Volume retained until {new Date(instance.purge_after).toLocaleString()}.</div>}{instance.status !== "deleted" && instance.docker_container_id && <DatabaseInstanceUpgrade instanceID={instance.id} />}{instance.status !== "deleted" && instance.docker_container_id && <DatabaseInstanceDiagnostics key={`diagnostics-${instance.id}-${location.hash}`} instanceID={instance.id} running={instance.status !== "stopped"} defaultOpen={location.hash === "#metrics" || location.hash === "#logs"} metricsAnchorID={index === 0 ? "metrics" : undefined} logsAnchorID={index === 0 ? "logs" : undefined} />}{instance.status !== "deleted" && instance.docker_container_id && <DatabaseInstanceBackups key={`backups-${instance.id}-${location.hash}`} instanceID={instance.id} serviceID={service.id} serviceName={service.name} running={instance.status === "healthy"} defaultOpen={location.hash === "#backups"} anchorID={index === 0 ? "backups" : undefined} />}{instance.status !== "deleted" && instance.docker_container_id && <footer className="flex flex-wrap justify-end gap-2 border-t bg-muted/20 px-5 py-3">{instance.status === "healthy" && <ConfirmationAction title={`Rotate ${environment?.name || "database"} credentials?`} description="HostForge will update the database password and encrypted connection bindings. Bound applications must be redeployed to receive the new connection URL." confirmLabel="Rotate credentials" onConfirm={() => rotateMutation.mutateAsync(instance.id)} trigger={<Button size="sm" variant="outline" disabled={runtimeBusy}>Rotate credentials</Button>} />}{instance.status === "stopped" ? <Button size="sm" disabled={runtimeBusy} onClick={() => runtimeMutation.mutate({ instanceID: instance.id, action: "start" })}>Start</Button> : <><Button size="sm" variant="outline" disabled={runtimeBusy} onClick={() => runtimeMutation.mutate({ instanceID: instance.id, action: "stop" })}>Stop</Button><Button size="sm" disabled={runtimeBusy} onClick={() => runtimeMutation.mutate({ instanceID: instance.id, action: "restart" })}>Restart</Button></>}</footer>}</Panel>
+    })}</div></section>
+    <section className="mt-5 rounded-xl border border-dashed bg-muted/20 p-5"><div className="flex items-start gap-3"><GlobeIcon className="mt-0.5 text-muted-foreground" size={19} /><div><h2 className="text-xs font-semibold">Public access is disabled</h2><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Only HostForge application containers in the matching environment network can reach these instances. No database port is bound to the VPS public interfaces.</p></div></div></section>
   </main>
 }
 

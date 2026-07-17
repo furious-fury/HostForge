@@ -176,6 +176,11 @@ func runServer(log *slog.Logger, args []string) int {
 		}
 		envSealer = sealer
 	}
+	services.StartDatabaseReconciliationLoop(context.Background(), log, store, envSealer)
+	services.StartDatabaseOperationLoop(context.Background(), log, store, envSealer, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg.DatabaseOperationConcurrency)
+	services.StartDatabasePurgeLoop(context.Background(), log, store)
+	services.StartDatabaseBackupScheduleLoop(context.Background(), log, store, cfg.DatabaseTransferMaxPerHour)
+	services.StartDatabaseBackupRetentionLoop(context.Background(), log, store, envSealer)
 
 	handler := &server{
 		log:            log,
@@ -199,6 +204,14 @@ func runServer(log *slog.Logger, args []string) int {
 	mux.HandleFunc("/api/github/", handler.withRequestContext(handler.requireManagementAuth(handler.handleGitHubAppRoutes)))
 	mux.HandleFunc("/api/applications", handler.withRequestContext(handler.requireManagementAuth(handler.handleApplications)))
 	mux.HandleFunc("/api/applications/", handler.withRequestContext(handler.requireManagementAuth(handler.handleApplications)))
+	mux.HandleFunc("/api/database-engines", handler.withRequestContext(handler.requireManagementAuth(handler.handleDatabaseEngines)))
+	mux.HandleFunc("/api/backup-destinations", handler.withRequestContext(handler.requireManagementAuth(handler.handleBackupDestinations)))
+	mux.HandleFunc("/api/backup-destinations/", handler.withRequestContext(handler.requireManagementAuth(handler.handleBackupDestinations)))
+	mux.HandleFunc("/api/database-instances/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDatabaseInstances)))
+	mux.HandleFunc("/api/database-backups/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDatabaseBackups)))
+	mux.HandleFunc("/api/database-bindings/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDatabaseBindings)))
+	mux.HandleFunc("/api/database-operations/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDatabaseOperations)))
+	mux.HandleFunc("/api/database-services/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDatabaseServices)))
 	mux.HandleFunc("/api/services/", handler.withRequestContext(handler.requireManagementAuth(handler.handleServices)))
 	mux.HandleFunc("/api/events", handler.withRequestContext(handler.requireManagementAuth(handler.handlePlatformEvents)))
 	mux.HandleFunc("/api/deployments", handler.withRequestContext(handler.requireManagementAuth(handler.handleDeploymentsV2Collection)))

@@ -93,6 +93,22 @@ No sustained `ERR` or `5xx` window is acceptable during successful cutover or fa
 
 ## 7. Sign-off
 
+Before sign-off, complete the managed-database matrix:
+
+```bash
+ssh "$VPS_HOST" 'cd /opt/hostforge && bash ./scripts/database-services-vps-audit.sh'
+```
+
+1. Provision PostgreSQL, MySQL, MariaDB, MongoDB, Redis, and Valkey in staging and verify no database port appears in `ss -lnt`.
+2. From a bound staging application, write and read a known record; confirm an application in another environment cannot connect.
+3. Restart each database and then restart Docker and `hostforge-server`; verify data, desired state, and ownership reconciliation.
+4. Rotate credentials, confirm the previous password is rejected, redeploy the bound application, and confirm the new connection works.
+5. Back up each engine to the configured R2/S3 destination and restore verified data as a new service.
+6. Exercise replace-current with a deliberately invalid source restore and verify the safety backup rollback preserves the pre-restore data.
+7. Delete one instance, restore it within seven days, then delete it again and confirm only the labelled volume is purged after the retention deadline.
+8. Re-run `database-services-vps-audit.sh` after provisioning and after the Docker restart; attach its disk, limit, network, and exposure output to the acceptance record.
+9. When a same-version catalog digest update is available, verify patch preflight requires a successful backup no older than 24 hours, then confirm volume/alias reuse and previous-digest rollback on a failed health check.
+
 ```text
 Migration and backup: PASS/FAIL
 Session/API smoke: PASS/FAIL

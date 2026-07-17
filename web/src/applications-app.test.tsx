@@ -36,6 +36,7 @@ const environments: EnvironmentDTO[] = application.environment_health!.map((envi
 }))
 
 const service: ServiceDTO = {
+  service_type: "application",
   id: "service-1",
   application_id: application.id,
   name: "Fundraiser",
@@ -97,8 +98,10 @@ describe("application shell with a newly created empty application", () => {
   })
 
   it("renders the add-service GitHub prerequisite state", async () => {
+	const user = userEvent.setup()
     mockShellAPI()
     renderApp(`/applications/${application.id}/services/new`)
+	await user.click(await screen.findByRole("button", { name: /application service/i }))
     expect(await screen.findByText("No active GitHub installation")).toBeInTheDocument()
     const breadcrumbs = screen.getByRole("navigation", { name: "Breadcrumb" })
     expect(breadcrumbs).toHaveTextContent("Applications")

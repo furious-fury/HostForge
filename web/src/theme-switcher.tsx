@@ -16,7 +16,7 @@ const accents: Array<{ id: Accent; label: string; color: string }> = [
   { id: "indigo", label: "Indigo", color: "#6869c9" },
   { id: "cyan", label: "Cyan", color: "#318c9b" },
   { id: "forest", label: "Forest", color: "#4b8a6d" },
-  { id: "amber", label: "Amber", color: "#bc8745" },
+  { id: "amber", label: "Amber", color: "#c65318" },
   { id: "rose", label: "Rose", color: "#bd6b7c" },
   { id: "violet", label: "Violet", color: "#8b64bf" },
 ]

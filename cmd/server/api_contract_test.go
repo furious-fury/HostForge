@@ -46,7 +46,7 @@ func newAPITestServer(t *testing.T) *server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &server{log: slog.New(slog.NewTextHandler(io.Discard, nil)), cfg: &config.Config{}, store: repository.New(db), envSealer: sealer}
+	return &server{log: slog.New(slog.NewTextHandler(io.Discard, nil)), cfg: &config.Config{DatabaseOperationConcurrency: 1, DatabaseTransferMaxPerHour: 60}, store: repository.New(db), envSealer: sealer}
 }
 
 func decodeResponse(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {

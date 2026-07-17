@@ -28,6 +28,7 @@ const environment: EnvironmentDTO = {
 }
 
 const service: ServiceDTO = {
+  service_type: "application",
   id: "service-api",
   application_id: application.id,
   name: "API",
@@ -87,13 +88,51 @@ afterEach(() => vi.restoreAllMocks())
 
 describe("add service", () => {
   it("renders a purposeful empty state when no active GitHub installation exists", async () => {
+    const user = userEvent.setup()
     mockApplication()
     vi.spyOn(api, "githubInstallations").mockResolvedValue({ installations: [] })
 
     renderScreen()
 
+    await user.click(await screen.findByRole("button", { name: /configure service/i }))
     expect(await screen.findByText("No active GitHub installation")).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Configure GitHub App" })).toHaveAttribute("href", "/onboarding")
+  })
+
+  it("opens the private database wizard without requiring GitHub", async () => {
+    const user = userEvent.setup()
+    mockApplication()
+    const github = vi.spyOn(api, "githubInstallations")
+    vi.spyOn(api, "databaseEngines").mockResolvedValue({
+      engines: [{
+        id: "postgresql",
+        name: "PostgreSQL",
+        description: "Relational database",
+        category: "Relational",
+        versions: [{ version: "18", default: true, provisioning_available: true }],
+        internal_port: 5432,
+        connection_variable: "DATABASE_URL",
+        minimum_memory_bytes: 512 * 1024 * 1024,
+        public_access_available: false,
+      }],
+      resource_presets: [{
+        id: "development",
+        name: "Development",
+        description: "Low traffic",
+        cpu_limit_millis: 500,
+        memory_limit_bytes: 512 * 1024 * 1024,
+      }],
+      networking: { scope: "hostforge_environment", public_access_available: false },
+    })
+
+    renderScreen()
+    await user.click(await screen.findByRole("button", { name: /configure database/i }))
+
+    expect(await screen.findByText("Environment isolation")).toBeInTheDocument()
+    expect(screen.getByText(/own container, volume, credentials/i)).toBeInTheDocument()
+    expect(screen.getByText("Private by default")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /create database/i })).toBeEnabled()
+    expect(github).not.toHaveBeenCalled()
   })
 
   it("creates a deployable service and starts its first deployment", async () => {
@@ -150,7 +189,7 @@ describe("add service", () => {
     expect(create).toHaveBeenCalledTimes(1)
   })
 
-  it("shows database and cron as planned service types", async () => {
+  it("offers the database wizard while keeping cron jobs marked as planned", async () => {
     mockApplication()
     vi.spyOn(api, "githubInstallations").mockResolvedValue({ installations: [{ installation_id: 42, account_login: "acme", suspended: false }] })
 
@@ -159,8 +198,8 @@ describe("add service", () => {
     expect(await screen.findByText("Application service")).toBeInTheDocument()
     expect(screen.getByText("Database")).toBeInTheDocument()
     expect(screen.getByText("Cron job")).toBeInTheDocument()
-    expect(screen.getAllByText("Planned")).toHaveLength(2)
-    expect(screen.queryByRole("button", { name: /database/i })).not.toBeInTheDocument()
+    expect(screen.getAllByText("Planned")).toHaveLength(1)
+    expect(screen.getByRole("button", { name: /configure database/i })).toBeInTheDocument()
   })
 })
 
@@ -227,6 +266,45 @@ describe("service overview", () => {
     expect(screen.getByText("Staging")).toBeInTheDocument()
     expect(screen.getAllByRole("img", { name: "Node.js · Vite stack icon" }).length).toBeGreaterThan(0)
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument()
+  })
+
+  it("loads database logs and metrics only when diagnostics are opened", async () => {
+    const user = userEvent.setup()
+    const databaseService: ServiceDTO = { ...service, service_type: "database", name: "Primary database", repo_url: "", stack_kind: "postgresql", stack_label: "PostgreSQL" }
+    vi.spyOn(api, "application").mockResolvedValue({ application, environments: [environment], services: [databaseService], service_bindings: {} })
+    vi.spyOn(api, "service").mockResolvedValue({
+      service: databaseService,
+      database: { service_id: databaseService.id, engine: "postgresql", default_version: "18" },
+      database_instances: [{
+        id: "db-instance-1", service_id: databaseService.id, environment_id: environment.id,
+        engine_version: "18", docker_container_id: "container-1", network_alias: "primary-production",
+        internal_port: 5432, volume_name: "hostforge-db-primary", resource_preset: "development",
+        cpu_limit_millis: 500, memory_limit_bytes: 512 * 1024 * 1024, desired_state: "running",
+        status: "healthy", health_message: "ready", created_at: "2026-07-01T00:00:00Z", updated_at: "2026-07-01T00:00:00Z",
+      }],
+      database_bindings: {}, database_credentials: { "db-instance-1": { database_instance_id: "db-instance-1", database_name: "primary_a1b2c3d4", username: "hf_primary_a1b2c3d4", generation: 1, created_at: "2026-07-01T00:00:00Z", updated_at: "2026-07-01T00:00:00Z" } }, database_operations: [], bindings: [], environment_states: [],
+    })
+    const logs = vi.spyOn(api, "databaseLogs").mockResolvedValue({ instance_id: "db-instance-1", logs: "database system is ready\ncheckpoint complete\n" })
+    const metrics = vi.spyOn(api, "databaseMetrics").mockResolvedValue({ instance_id: "db-instance-1", metric: { cpu_percent: 2.5, memory_bytes: 128 * 1024 * 1024, network_rx_bytes: 1024, network_tx_bytes: 2048, sampled_at: "2026-07-01T00:00:00Z" } })
+    vi.spyOn(api, "databaseUpgradePreflight").mockResolvedValue({ available: false, ready: false, reason: "catalog_image_current", engine_version: "18", current_image_ref: "postgres@sha256:current", target_image_ref: "postgres@sha256:current", backup_max_age_hours: 24 })
+
+    renderOverview()
+    expect(await screen.findByText("Primary database")).toBeInTheDocument()
+	expect(screen.getByText("primary_a1b2c3d4")).toBeInTheDocument()
+	expect(screen.getByText("hf_primary_a1b2c3d4")).toBeInTheDocument()
+	const databaseNavigation = screen.getByRole("tablist", { name: "Database service navigation" })
+	expect(databaseNavigation).toHaveTextContent("Backups")
+	expect(databaseNavigation).toHaveTextContent("Data & connections")
+	expect(databaseNavigation).toHaveTextContent("Metrics")
+	expect(databaseNavigation).toHaveTextContent("Logs")
+	expect(databaseNavigation).toHaveTextContent("Settings")
+    expect(logs).not.toHaveBeenCalled()
+    await user.click(screen.getByRole("button", { name: /logs and resource usage/i }))
+
+    expect(await screen.findByText("database system is ready")).toBeInTheDocument()
+    expect(await screen.findByText("128.0 MB")).toBeInTheDocument()
+    expect(logs).toHaveBeenCalledWith("db-instance-1", 200, expect.any(AbortSignal))
+    expect(metrics).toHaveBeenCalled()
   })
 })
 

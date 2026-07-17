@@ -69,6 +69,19 @@ func TestApplyMigrationsCreatesFinalServiceSchema(t *testing.T) {
 			t.Fatalf("required table %s missing: count=%d err=%v", table, count, err)
 		}
 	}
+	for _, table := range []string{
+		"database_services", "database_instances", "database_credentials", "database_bindings",
+		"backup_destinations", "database_backup_policies", "database_backups", "database_operations", "database_restore_jobs", "database_upgrade_jobs",
+	} {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("database foundation table %s missing: count=%d err=%v", table, count, err)
+		}
+	}
+	var serviceTypeColumns int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('services') WHERE name='service_type'`).Scan(&serviceTypeColumns); err != nil || serviceTypeColumns != 1 {
+		t.Fatalf("expected services.service_type: count=%d err=%v", serviceTypeColumns, err)
+	}
 	for _, column := range []string{"application_id", "service_id", "environment_id"} {
 		var count int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('http_requests') WHERE name=?`, column).Scan(&count); err != nil || count != 1 {

@@ -17,6 +17,13 @@ type DeleteRuntimeResult struct {
 }
 
 func cleanupServiceRuntime(ctx context.Context, log *slog.Logger, store *repository.Store, serviceID string) error {
+	service, err := store.GetService(ctx, serviceID)
+	if err != nil {
+		return err
+	}
+	if service.ServiceType != "application" {
+		return ErrCode("database_service_delete_requires_retention", errors.New("database services require the retained-volume deletion workflow"))
+	}
 	deployments, err := store.ListServiceDeployments(ctx, serviceID, "", 500)
 	if err != nil {
 		return ErrCode("delete_deployments_lookup_failed", err)
@@ -80,6 +87,13 @@ func syncCaddyAfterDelete(ctx context.Context, log *slog.Logger, cfg *config.Con
 }
 
 func DeleteServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, serviceID string) (DeleteRuntimeResult, error) {
+	service, err := store.GetService(ctx, serviceID)
+	if err != nil {
+		return DeleteRuntimeResult{}, err
+	}
+	if service.ServiceType != "application" {
+		return DeleteRuntimeResult{}, ErrCode("database_service_delete_requires_retention", errors.New("database services require the retained-volume deletion workflow"))
+	}
 	if err := cleanupServiceRuntime(ctx, log, store, serviceID); err != nil {
 		return DeleteRuntimeResult{}, err
 	}
@@ -90,9 +104,18 @@ func DeleteServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.
 }
 
 func DeleteApplicationAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, applicationID string) (DeleteRuntimeResult, error) {
+	environments, err := store.ListApplicationEnvironments(ctx, applicationID)
+	if err != nil {
+		return DeleteRuntimeResult{}, err
+	}
 	services, err := store.ListApplicationServices(ctx, applicationID)
 	if err != nil {
 		return DeleteRuntimeResult{}, err
+	}
+	for _, service := range services {
+		if service.ServiceType != "application" {
+			return DeleteRuntimeResult{}, ErrCode("application_has_database_services", errors.New("delete database services through their retained-volume workflow first"))
+		}
 	}
 	for _, service := range services {
 		if err := cleanupServiceRuntime(ctx, log, store, service.ID); err != nil {
@@ -101,6 +124,16 @@ func DeleteApplicationAndRuntime(ctx context.Context, log *slog.Logger, cfg *con
 	}
 	if err := store.DeleteApplication(ctx, applicationID); err != nil {
 		return DeleteRuntimeResult{}, err
+	}
+	if client, dockerErr := docker.NewClient(ctx); dockerErr == nil {
+		defer client.Close()
+		for _, environment := range environments {
+			if _, cleanupErr := docker.RemoveEnvironmentNetworkIfEmpty(ctx, client, environment.ID); cleanupErr != nil && log != nil {
+				log.Warn("application environment network cleanup failed", "environment_id", environment.ID, "error", cleanupErr)
+			}
+		}
+	} else if log != nil {
+		log.Warn("application environment network cleanup skipped; Docker unavailable", "application_id", applicationID, "error", dockerErr)
 	}
 	return DeleteRuntimeResult{CaddySyncError: syncCaddyAfterDelete(ctx, log, cfg, store)}, nil
 }

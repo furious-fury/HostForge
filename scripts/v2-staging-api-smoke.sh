@@ -67,6 +67,25 @@ json_first_environment_by_kind() {
   fi
 }
 
+json_first_service_by_type() {
+  local file="$1"
+  local service_type="$2"
+  if [[ "${json_tool}" == "jq" ]]; then
+    jq -r --arg service_type "${service_type}" '.services[]? | select(.service_type == $service_type) | .id' "${file}" | head -n 1
+  else
+    python3 -c 'import json,sys; rows=json.load(open(sys.argv[1], encoding="utf-8")).get("services") or []; print(next((row.get("id", "") for row in rows if row.get("service_type") == sys.argv[2]), ""))' "${file}" "${service_type}"
+  fi
+}
+
+json_database_catalog() {
+  local file="$1"
+  if [[ "${json_tool}" == "jq" ]]; then
+    jq -e '([.engines[]?.id] | sort) == (["mariadb","mongodb","mysql","postgresql","redis","valkey"] | sort) and (.resource_presets | type == "array") and (.networking.public_access_available == false)' "${file}" >/dev/null
+  else
+    python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); engines={row.get("id") for row in data.get("engines") or []}; ok=engines=={"postgresql","mysql","mariadb","mongodb","redis","valkey"} and isinstance(data.get("resource_presets"),list) and (data.get("networking") or {}).get("public_access_available") is False; raise SystemExit(0 if ok else 1)' "${file}"
+  fi
+}
+
 json_array() {
   local file="$1"
   local field="$2"
@@ -184,6 +203,11 @@ request GET "/api/deployments?limit=10"
 json_array "${response_body}" "deployments"
 request GET "/api/applications"
 json_array "${response_body}" "applications"
+request GET "/api/database-engines"
+json_database_catalog "${response_body}"
+request GET "/api/backup-destinations"
+json_array "${response_body}" "destinations"
+request GET "/api/applications"
 
 application_id="${HF_APPLICATION_ID:-$(json_first "${response_body}" "applications" "id")}"
 if [[ -n "${application_id}" ]]; then
@@ -191,7 +215,8 @@ if [[ -n "${application_id}" ]]; then
   json_array "${response_body}" "environments"
   json_array "${response_body}" "services"
   json_has_environment_kinds "${response_body}"
-  service_id="${HF_SERVICE_ID:-$(json_first "${response_body}" "services" "id")}"
+  service_id="${HF_SERVICE_ID:-$(json_first_service_by_type "${response_body}" "application")}"
+  database_service_id="$(json_first_service_by_type "${response_body}" "database")"
   environment_id="${HF_ENVIRONMENT_ID:-$(json_first_environment_by_kind "${response_body}" "production")}"
 
   if [[ -n "${service_id}" ]]; then
@@ -206,6 +231,15 @@ if [[ -n "${application_id}" ]]; then
       request GET "/api/applications/${application_id}/environments/${environment_id}/variables?service_id=${service_id}"
       json_array "${response_body}" "variables"
     fi
+  else
+    echo "SKIP application service detail checks (no application service exists)"
+  fi
+  if [[ -n "${database_service_id}" ]]; then
+    request GET "/api/database-services/${database_service_id}"
+    json_array "${response_body}" "instances"
+    json_array "${response_body}" "operations"
+  else
+    echo "SKIP database service detail checks (no database service exists)"
   fi
 else
   echo "SKIP application/service detail checks (no application exists)"

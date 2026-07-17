@@ -255,12 +255,27 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	}
 
 	tRun := time.Now()
+	environmentNetwork := docker.EnvironmentNetworkName(job.environmentID())
+	if _, err := docker.EnsureEnvironmentNetwork(ctx, dockerClient, job.Target.Application.ID, job.environmentID()); err != nil {
+		e := ErrCode("environment_network_failed", err)
+		markFailed(e)
+		recordDeployObs(ctx, log, job, "container_start", "failed", tRun, time.Since(tRun).Milliseconds(), FirstPublicCode(e))
+		return DeployResult{}, e
+	}
 	containerID, err := docker.RunContainer(ctx, dockerClient, docker.RunOptions{
 		ImageRef:      job.ImageRef,
 		ContainerName: job.ContainerName,
 		ContainerPort: job.internalPort(cfg),
 		HostPort:      hostPortValue,
-		Env:           extraEnv,
+		NetworkName:   environmentNetwork,
+		Labels: map[string]string{
+			docker.ManagedLabel:       "true",
+			docker.ResourceTypeLabel:  "application-container",
+			docker.ApplicationIDLabel: job.Target.Application.ID,
+			docker.EnvironmentIDLabel: job.environmentID(),
+			docker.ServiceIDLabel:     job.serviceID(),
+		},
+		Env: extraEnv,
 	})
 	if err != nil {
 		e := ErrCode("run_container_failed", err)
@@ -477,6 +492,9 @@ func ValidateRuntimeConfig(cfg *config.Config) error {
 	}
 	if err := ValidateRailpackConfig(cfg); err != nil {
 		return err
+	}
+	if cfg.DatabaseMinFreeDiskBytes <= 0 {
+		return fmt.Errorf("database minimum free disk bytes must be > 0")
 	}
 	return nil
 }

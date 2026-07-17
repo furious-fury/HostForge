@@ -86,6 +86,13 @@ type Config struct {
 	RailpackBuildConcurrency int
 	// RailpackMinFreeDiskBytes is the admission threshold for future build workers.
 	RailpackMinFreeDiskBytes int64
+	// DatabaseMinFreeDiskBytes blocks database provisioning, backup, and restore
+	// before the Docker data filesystem crosses the operator safety reserve.
+	DatabaseMinFreeDiskBytes int64
+	// DatabaseOperationConcurrency bounds concurrent persistent-resource jobs.
+	DatabaseOperationConcurrency int
+	// DatabaseTransferMaxPerHour bounds queued backup and restore operations.
+	DatabaseTransferMaxPerHour int
 	// DNSServerIPv4 is an explicit public IPv4 for DNS A record suggestions (overrides auto-detect).
 	DNSServerIPv4 string
 	// DNSServerIPv6 is an explicit public IPv6 for AAAA suggestions (overrides auto-detect).
@@ -195,6 +202,12 @@ const (
 	RailpackBuildConcurrencyEnv = "HOSTFORGE_RAILPACK_BUILD_CONCURRENCY"
 	// RailpackMinFreeDiskBytesEnv gates future builds under disk pressure.
 	RailpackMinFreeDiskBytesEnv = "HOSTFORGE_RAILPACK_MIN_FREE_DISK_BYTES"
+	// DatabaseMinFreeDiskBytesEnv reserves host storage for database safety.
+	DatabaseMinFreeDiskBytesEnv = "HOSTFORGE_DATABASE_MIN_FREE_DISK_BYTES"
+	// DatabaseOperationConcurrencyEnv bounds concurrent database operation workers.
+	DatabaseOperationConcurrencyEnv = "HOSTFORGE_DATABASE_OPERATION_CONCURRENCY"
+	// DatabaseTransferMaxPerHourEnv rate-limits backup and restore queue admission.
+	DatabaseTransferMaxPerHourEnv = "HOSTFORGE_DATABASE_TRANSFER_MAX_PER_HOUR"
 	// DNSServerIPv4Env sets a fixed IPv4 for DNS guidance (skips auto-detect when set).
 	DNSServerIPv4Env = "HOSTFORGE_DNS_SERVER_IPV4"
 	// DNSServerIPv6Env sets a fixed IPv6 for DNS guidance (optional).
@@ -374,6 +387,24 @@ func Load(dataDirFlag string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	databaseMinFreeDiskBytes, err := envInt64(DatabaseMinFreeDiskBytesEnv, 5*1024*1024*1024)
+	if err != nil {
+		return nil, err
+	}
+	databaseOperationConcurrency, err := envInt(DatabaseOperationConcurrencyEnv, 1)
+	if err != nil {
+		return nil, err
+	}
+	if databaseOperationConcurrency < 1 || databaseOperationConcurrency > 8 {
+		return nil, fmt.Errorf("%s must be between 1 and 8", DatabaseOperationConcurrencyEnv)
+	}
+	databaseTransferMaxPerHour, err := envInt(DatabaseTransferMaxPerHourEnv, 60)
+	if err != nil {
+		return nil, err
+	}
+	if databaseTransferMaxPerHour < 1 || databaseTransferMaxPerHour > 10000 {
+		return nil, fmt.Errorf("%s must be between 1 and 10000", DatabaseTransferMaxPerHourEnv)
+	}
 	dnsServerIPv4 := strings.TrimSpace(os.Getenv(DNSServerIPv4Env))
 	dnsServerIPv6 := strings.TrimSpace(os.Getenv(DNSServerIPv6Env))
 	dnsDetectURL := strings.TrimSpace(os.Getenv(DNSDetectURLEnv))
@@ -410,57 +441,60 @@ func Load(dataDirFlag string) (*Config, error) {
 		return nil, err
 	}
 	return &Config{
-		DataDir:                   abs,
-		ListenAddr:                listen,
-		HostPort:                  hostPort,
-		PortStart:                 portStart,
-		PortEnd:                   portEnd,
-		ContainerPort:             containerPort,
-		CaddyBin:                  caddyBin,
-		CaddyGeneratedPath:        caddyGeneratedPath,
-		CaddyControlPlanePath:     caddyControlPlanePath,
-		CaddyRootConfig:           caddyRootConfig,
-		SyncCaddy:                 syncCaddy,
-		PlatformDomainBase:        strings.Trim(strings.ToLower(strings.TrimSpace(os.Getenv(PlatformDomainBaseEnv))), "."),
-		HealthPath:                healthPath,
-		HealthTimeoutMS:           healthTimeoutMS,
-		HealthRetries:             healthRetries,
-		HealthIntervalMS:          healthIntervalMS,
-		HealthExpectedMin:         healthExpectedMin,
-		HealthExpectedMax:         healthExpectedMax,
-		WebhookBasePath:           webhookBasePath,
-		WebhookMaxBodyBytes:       webhookMaxBodyBytes,
-		WebhookAsync:              webhookAsync,
-		WebhookSecret:             webhookSecret,
-		APIToken:                  apiToken,
-		SessionSecret:             sessionSecret,
-		SessionCookieName:         sessionCookieName,
-		SessionTTLMinutes:         sessionTTLMinutes,
-		SessionCookieSecure:       sessionCookieSecure,
-		WebhookRateLimitPerMinute: webhookRateLimitPerMinute,
-		LogsDirPath:               logsDirPath,
-		RailpackEnabled:           railpackEnabled,
-		RailpackBin:               railpackBin,
-		RailpackVersion:           railpackVersion,
-		RailpackFrontendImage:     railpackFrontendImage,
-		BuildKitBin:               buildKitBin,
-		BuildKitAddress:           buildKitAddress,
-		RailpackArtifactsDir:      railpackArtifactsDir,
-		RailpackBuildConcurrency:  railpackBuildConcurrency,
-		RailpackMinFreeDiskBytes:  railpackMinFreeDiskBytes,
-		DNSServerIPv4:             dnsServerIPv4,
-		DNSServerIPv6:             dnsServerIPv6,
-		DNSDetectURL:              dnsDetectURL,
-		DNSDetectIPv6URL:          dnsDetectIPv6URL,
-		DNSDetectTimeoutMS:        dnsDetectTimeoutMS,
-		DomainSyncAfterMutate:     domainSyncAfterMutate,
-		CaddyCertPollIntervalSec:  caddyCertPollIntervalSec,
-		CaddyAdminURL:             caddyAdminURL,
-		CaddyStorageRoot:          caddyStorageRoot,
-		BootstrapEnabled:          bootstrapEnabled,
-		BootstrapPublicIP:         strings.TrimSpace(os.Getenv(BootstrapPublicIPEnv)),
-		BootstrapHTTPSPort:        bootstrapPort,
-		BootstrapExpiresAt:        strings.TrimSpace(os.Getenv(BootstrapExpiresAtEnv)),
+		DataDir:                      abs,
+		ListenAddr:                   listen,
+		HostPort:                     hostPort,
+		PortStart:                    portStart,
+		PortEnd:                      portEnd,
+		ContainerPort:                containerPort,
+		CaddyBin:                     caddyBin,
+		CaddyGeneratedPath:           caddyGeneratedPath,
+		CaddyControlPlanePath:        caddyControlPlanePath,
+		CaddyRootConfig:              caddyRootConfig,
+		SyncCaddy:                    syncCaddy,
+		PlatformDomainBase:           strings.Trim(strings.ToLower(strings.TrimSpace(os.Getenv(PlatformDomainBaseEnv))), "."),
+		HealthPath:                   healthPath,
+		HealthTimeoutMS:              healthTimeoutMS,
+		HealthRetries:                healthRetries,
+		HealthIntervalMS:             healthIntervalMS,
+		HealthExpectedMin:            healthExpectedMin,
+		HealthExpectedMax:            healthExpectedMax,
+		WebhookBasePath:              webhookBasePath,
+		WebhookMaxBodyBytes:          webhookMaxBodyBytes,
+		WebhookAsync:                 webhookAsync,
+		WebhookSecret:                webhookSecret,
+		APIToken:                     apiToken,
+		SessionSecret:                sessionSecret,
+		SessionCookieName:            sessionCookieName,
+		SessionTTLMinutes:            sessionTTLMinutes,
+		SessionCookieSecure:          sessionCookieSecure,
+		WebhookRateLimitPerMinute:    webhookRateLimitPerMinute,
+		LogsDirPath:                  logsDirPath,
+		RailpackEnabled:              railpackEnabled,
+		RailpackBin:                  railpackBin,
+		RailpackVersion:              railpackVersion,
+		RailpackFrontendImage:        railpackFrontendImage,
+		BuildKitBin:                  buildKitBin,
+		BuildKitAddress:              buildKitAddress,
+		RailpackArtifactsDir:         railpackArtifactsDir,
+		RailpackBuildConcurrency:     railpackBuildConcurrency,
+		RailpackMinFreeDiskBytes:     railpackMinFreeDiskBytes,
+		DatabaseMinFreeDiskBytes:     databaseMinFreeDiskBytes,
+		DatabaseOperationConcurrency: databaseOperationConcurrency,
+		DatabaseTransferMaxPerHour:   databaseTransferMaxPerHour,
+		DNSServerIPv4:                dnsServerIPv4,
+		DNSServerIPv6:                dnsServerIPv6,
+		DNSDetectURL:                 dnsDetectURL,
+		DNSDetectIPv6URL:             dnsDetectIPv6URL,
+		DNSDetectTimeoutMS:           dnsDetectTimeoutMS,
+		DomainSyncAfterMutate:        domainSyncAfterMutate,
+		CaddyCertPollIntervalSec:     caddyCertPollIntervalSec,
+		CaddyAdminURL:                caddyAdminURL,
+		CaddyStorageRoot:             caddyStorageRoot,
+		BootstrapEnabled:             bootstrapEnabled,
+		BootstrapPublicIP:            strings.TrimSpace(os.Getenv(BootstrapPublicIPEnv)),
+		BootstrapHTTPSPort:           bootstrapPort,
+		BootstrapExpiresAt:           strings.TrimSpace(os.Getenv(BootstrapExpiresAtEnv)),
 	}, nil
 }
 

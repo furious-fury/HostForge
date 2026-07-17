@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/hostforge/hostforge/internal/repository"
 	platformservices "github.com/hostforge/hostforge/internal/services"
@@ -107,6 +108,76 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, response)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "database-services" && r.Method == http.MethodPost {
+		var req struct {
+			Name                string   `json:"name"`
+			Engine              string   `json:"engine"`
+			Version             string   `json:"version"`
+			EnvironmentIDs      []string `json:"environment_ids"`
+			ResourcePreset      string   `json:"resource_preset"`
+			CustomCPUMillis     int      `json:"custom_cpu_millis"`
+			CustomMemoryBytes   int64    `json:"custom_memory_bytes"`
+			BackupEnabled       bool     `json:"backup_enabled"`
+			BackupDestinationID string   `json:"backup_destination_id"`
+			Connections         []struct {
+				ServiceID       string `json:"service_id"`
+				VariableKey     string `json:"variable_key"`
+				ReplaceExisting bool   `json:"replace_existing"`
+			} `json:"connections"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_json_payload"})
+			return
+		}
+		if req.BackupEnabled {
+			if _, err := s.store.GetBackupDestination(r.Context(), req.BackupDestinationID); err != nil {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"status": "error", "error": "backup_destination_required"})
+				return
+			}
+		}
+		connections := make([]platformservices.DatabaseConnectionInput, 0, len(req.Connections))
+		for _, connection := range req.Connections {
+			connections = append(connections, platformservices.DatabaseConnectionInput{
+				ConsumerServiceID: connection.ServiceID, VariableKey: connection.VariableKey,
+				ReplaceExisting: connection.ReplaceExisting,
+			})
+		}
+		created, err := platformservices.PrepareManagedDatabase(r.Context(), s.store, s.envSealer, platformservices.CreateManagedDatabaseInput{
+			ApplicationID: app.ID, Name: req.Name, Engine: req.Engine, Version: req.Version,
+			EnvironmentIDs: req.EnvironmentIDs, ResourcePreset: req.ResourcePreset,
+			CustomCPUMillis: req.CustomCPUMillis, CustomMemoryBytes: req.CustomMemoryBytes,
+			Connections: connections, Actor: "operator",
+		})
+		if err != nil {
+			code := publicAPIError(err, "create_database_service_failed")
+			status := http.StatusUnprocessableEntity
+			if code == "env_encryption_key_missing" {
+				status = http.StatusServiceUnavailable
+			}
+			writeJSON(w, status, map[string]string{"status": "error", "error": code})
+			return
+		}
+		if req.BackupEnabled {
+			next, _ := platformservices.NextDatabaseBackupSchedule("0 2 * * *", "UTC", time.Now().UTC())
+			for _, instance := range created.Instances {
+				if _, err := s.store.UpsertDatabaseBackupPolicy(r.Context(), instance.ID, req.BackupDestinationID, true, "0 2 * * *", "UTC", 30, next); err != nil {
+					_ = s.store.DeleteService(r.Context(), created.Service.ID)
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "database_backup_policy_creation_failed"})
+					return
+				}
+			}
+		}
+		_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{
+			ApplicationID: app.ID, ServiceID: created.Service.ID, EventType: "database",
+			Status: "queued", Actor: "operator", Message: "Database provisioning queued",
+			Detail: created.Database.Engine + " " + created.Database.DefaultVersion,
+		})
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status": "queued", "service": created.Service, "database": created.Database,
+			"instances": created.Instances, "bindings": created.Bindings, "operations": created.Operations,
+		})
+		return
+	}
 	if len(parts) == 3 && parts[1] == "environments" && r.Method == http.MethodPatch {
 		environment, err := s.store.GetEnvironment(r.Context(), parts[2])
 		if err != nil || environment.ApplicationID != app.ID {
@@ -143,7 +214,18 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			bindings := make(map[string][]repository.ServiceEnvironment, len(services))
+			databaseInstances := make(map[string][]repository.DatabaseInstance)
 			for _, service := range services {
+				if service.ServiceType == "database" {
+					items, err := s.store.ListDatabaseInstances(r.Context(), service.ID)
+					if err != nil {
+						writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "application_summary_failed"})
+						return
+					}
+					bindings[service.ID] = []repository.ServiceEnvironment{}
+					databaseInstances[service.ID] = items
+					continue
+				}
 				items, err := s.store.ListServiceEnvironments(r.Context(), service.ID)
 				if err != nil {
 					writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "application_summary_failed"})
@@ -151,7 +233,7 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 				}
 				bindings[service.ID] = items
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"application": app, "environments": envs, "services": services, "service_bindings": bindings})
+			writeJSON(w, http.StatusOK, map[string]any{"application": app, "environments": envs, "services": services, "service_bindings": bindings, "database_instances": databaseInstances})
 		case http.MethodPatch:
 			var req struct {
 				Name        *string `json:"name"`

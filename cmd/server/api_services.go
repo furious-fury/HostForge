@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	githubapp "github.com/hostforge/hostforge/internal/github/app"
 	"github.com/hostforge/hostforge/internal/repository"
@@ -302,6 +303,45 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodGet:
+			if service.ServiceType == "database" {
+				databaseService, err := s.store.GetDatabaseService(r.Context(), service.ID)
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "database_service_lookup_failed"})
+					return
+				}
+				instances, err := s.store.ListDatabaseInstances(r.Context(), service.ID)
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "database_instances_lookup_failed"})
+					return
+				}
+				bindings := make(map[string][]repository.DatabaseBinding, len(instances))
+				credentials := make(map[string]repository.DatabaseCredential, len(instances))
+				for _, instance := range instances {
+					items, err := s.store.ListDatabaseBindings(r.Context(), instance.ID)
+					if err != nil {
+						writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "database_bindings_lookup_failed"})
+						return
+					}
+					bindings[instance.ID] = items
+					credential, err := s.store.GetDatabaseCredentialSealed(r.Context(), instance.ID)
+					if err != nil {
+						writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "database_credentials_lookup_failed"})
+						return
+					}
+					credentials[instance.ID] = credential
+				}
+				operations, err := s.store.ListDatabaseOperations(r.Context(), service.ID, 50)
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "database_operations_lookup_failed"})
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{
+					"service": service, "database": databaseService,
+					"database_instances": instances, "database_bindings": bindings, "database_credentials": credentials, "database_operations": operations,
+					"bindings": []repository.ServiceEnvironment{}, "environment_states": []any{},
+				})
+				return
+			}
 			bindings, err := s.store.ListServiceEnvironments(r.Context(), service.ID)
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "list_service_environments_failed"})
@@ -309,6 +349,10 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"service": service, "bindings": bindings, "environment_states": s.serviceEnvironmentStates(r, service, bindings)})
 		case http.MethodPatch:
+			if service.ServiceType != "application" {
+				writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "database_service_settings_endpoint_required"})
+				return
+			}
 			in, sourceChanged, ok := decodeServiceRequest(w, r, service.ApplicationID, &service)
 			if !ok {
 				return
@@ -324,6 +368,33 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: item.ApplicationID, ServiceID: item.ID, EventType: "service", Status: "updated", Actor: "operator", Message: "Service updated", Detail: item.Name})
 			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "service": item})
 		case http.MethodDelete:
+			if service.ServiceType == "database" {
+				var req struct {
+					Confirmation string `json:"confirmation"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_json_payload"})
+					return
+				}
+				if strings.TrimSpace(req.Confirmation) != service.Name {
+					writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"status": "error", "error": "database_delete_confirmation_mismatch"})
+					return
+				}
+				result, err := platformservices.DeleteDatabaseServiceAndRuntime(r.Context(), s.log, s.store, service.ID, "operator")
+				if err != nil {
+					writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": publicAPIError(err, "delete_database_service_failed")})
+					return
+				}
+				_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{
+					ApplicationID: service.ApplicationID, ServiceID: service.ID,
+					EventType: "database", Status: "deleted", Actor: "operator",
+					Message: "Database deleted; volumes retained", Detail: result.PurgeAfter.Format(time.RFC3339),
+				})
+				writeJSON(w, http.StatusOK, map[string]any{
+					"status": "deleted", "retained": true, "purge_after": result.PurgeAfter,
+				})
+				return
+			}
 			result, err := platformservices.DeleteServiceAndRuntime(r.Context(), s.log, s.cfg, s.store, service.ID)
 			if err != nil {
 				writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": publicAPIError(err, "delete_service_failed")})
@@ -344,6 +415,10 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 4 && parts[1] == "environments" {
+		if service.ServiceType != "application" {
+			writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "service_type_not_deployable"})
+			return
+		}
 		if parts[3] == "metrics" {
 			s.handleServiceMetricsV2(w, r, service.ID, parts[2])
 			return
@@ -368,6 +443,10 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 3 && parts[1] == "environments" {
+		if service.ServiceType != "application" {
+			writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "service_type_not_deployable"})
+			return
+		}
 		environment, err := s.store.GetEnvironment(r.Context(), parts[2])
 		if err != nil || environment.ApplicationID != service.ApplicationID {
 			writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "error": "environment_not_found"})

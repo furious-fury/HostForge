@@ -8,15 +8,18 @@ Available now. This category covers frontend applications, backend APIs, full-st
 
 ## Database services
 
-Planned, but not provisioned by the current shell. A future database wizard should cover:
+Implemented pending the mandatory six-engine VPS acceptance matrix. The database wizard covers digest-pinned PostgreSQL, MySQL, MariaDB, MongoDB, Redis, and Valkey releases as environment-isolated, privately networked services with persistent Docker volumes. It supports engine/version, environments, resource presets, editable application connection bindings, encrypted R2/S3 backup policies, restore-as-copy, guarded replace-current restore, retained deletion, and same-version patch-image upgrades. Database detail shows durable operation progress, independent environment state, logs, metrics, storage use, lifecycle controls, credential rotation, backup history, and rollback outcomes.
 
-- engine and version selection for PostgreSQL, MySQL, Redis, and other supported engines;
-- persistent volume creation, backup policy, restore workflows, and storage limits;
-- generated credentials, connection strings, environment injection, and secret rotation;
-- private networking by default, with explicit controls for public access;
-- health, metrics, logs, upgrades, and safe deletion requirements.
+The remaining release gate covers:
+
+- complete lifecycle acceptance runs for every engine on the target VPS;
+- recording measured disk use, restore verification, restart reconciliation, isolation, and zero published database ports.
+
+Secure, audited public database access remains a separate future phase and must not be implemented by publishing a raw Docker port.
 
 Database services must not be represented as ordinary Railpack builds because their lifecycle and durability requirements are different from application containers.
+
+The agreed architecture, delivery phases, supported engine catalog, private networking model, backup design, and acceptance requirements are defined in [database-services-implementation-plan.md](database-services-implementation-plan.md).
 
 ## Cron jobs
 
@@ -32,4 +35,4 @@ Cron jobs may reuse Railpack for building repository code, but scheduling and ex
 
 ## Current UI contract
 
-Database and cron cards are intentionally marked `Planned`. They do not create records, start containers, or imply that provisioning is available. When implementation begins, each card should open its own setup wizard and persist an explicit service type rather than overloading the application-service model.
+The Database card opens its dedicated wizard and persists an explicit `database` service type. Engines without a completed, digest-pinned adapter remain visible but disabled. The Cron card remains marked `Planned` and does not create records or start containers.

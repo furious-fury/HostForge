@@ -12,10 +12,11 @@ import {
   WrenchIcon,
 } from "@phosphor-icons/react"
 
-import { api, APIError, queryKeys, type EnvironmentDTO, type ServiceDTO, type ServiceEnvironmentDTO } from "@/api"
+import { api, APIError, queryKeys, type BackupDestinationDTO, type EnvironmentDTO, type ServiceDTO, type ServiceEnvironmentDTO } from "@/api"
 import { AppSelect } from "@/components/app-select"
 import { ApplicationTabs } from "@/components/application-tabs"
 import { ServiceTabs } from "@/components/service-tabs"
+import { DatabaseServiceTabs } from "@/components/database-service-tabs"
 import { ConfirmationAction } from "@/components/confirmation-action"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
@@ -54,6 +55,78 @@ function Row({ label, value, mono = false }: { label: string; value: React.React
 
 function mutationMessage(error: unknown) {
   return error instanceof APIError ? error.message.replaceAll("_", " ") : "The server could not complete this action."
+}
+
+type DatabaseBinding = { id: string; consumer_service_id: string; variable_key: string; replace_existing: boolean }
+
+function DatabaseBindingControl({ applicationID, environmentID, consumer, binding, defaultVariableKey, busy, onConnect, onUpdate, onDisconnect }: {
+  applicationID: string
+  environmentID: string
+  consumer: ServiceDTO
+  binding?: DatabaseBinding
+  defaultVariableKey: string
+  busy: boolean
+  onConnect: (variableKey: string, replaceExisting: boolean) => void
+  onUpdate: (variableKey: string, replaceExisting: boolean) => void
+  onDisconnect: () => void
+}) {
+  const [variableKey, setVariableKey] = useState(binding?.variable_key || defaultVariableKey)
+  const [replaceExisting, setReplaceExisting] = useState(binding?.replace_existing || false)
+  const normalizedKey = variableKey.trim().toUpperCase()
+  const globalVariables = useQuery({ queryKey: queryKeys.variables(applicationID, environmentID, ""), queryFn: ({ signal }) => api.environmentVariables(applicationID, environmentID, "", signal), enabled: Boolean(normalizedKey) })
+  const serviceVariables = useQuery({ queryKey: queryKeys.variables(applicationID, environmentID, consumer.id), queryFn: ({ signal }) => api.environmentVariables(applicationID, environmentID, consumer.id, signal), enabled: Boolean(normalizedKey) })
+  const conflict = [...(globalVariables.data?.variables || []), ...(serviceVariables.data?.variables || [])].some((variable) => variable.key === normalizedKey)
+  const dirty = Boolean(binding && normalizedKey && (normalizedKey !== binding.variable_key || replaceExisting !== binding.replace_existing))
+  const confirmationMissing = conflict && !replaceExisting
+  return <div className={`rounded-md border bg-background p-3 ${conflict ? "border-amber-500/50" : ""}`}><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[11px] font-semibold">{consumer.name}</p><StatusBadge tone={binding ? "success" : "neutral"}>{binding ? "Connected" : "Not connected"}</StatusBadge></div><div className="mt-3 flex flex-col gap-2 sm:flex-row"><Input aria-label={`${consumer.name} connection variable`} value={variableKey} onChange={(event) => { setVariableKey(event.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "")); setReplaceExisting(false) }} className="h-8 bg-background font-mono text-[10px]" />{binding ? <><Button size="sm" variant="outline" disabled={busy || !dirty || confirmationMissing} onClick={() => onUpdate(normalizedKey, replaceExisting)}>Save key</Button><Button size="sm" variant="ghost" disabled={busy} onClick={onDisconnect}>Disconnect</Button></> : <Button size="sm" variant="outline" disabled={busy || !normalizedKey || confirmationMissing} onClick={() => onConnect(normalizedKey, replaceExisting)}>Connect</Button>}</div>{conflict && <label className="mt-3 flex items-start gap-3 border-t pt-3"><Switch checked={replaceExisting} onCheckedChange={setReplaceExisting} aria-label={`Replace existing ${normalizedKey} for ${consumer.name}`} /><span className="text-[10px] leading-4 text-amber-700 dark:text-amber-400"><strong className="block">Existing variable conflict</strong>Confirm that the managed database URL may replace {normalizedKey} for this service at deployment time. The stored value remains available to other services.</span></label>}{binding && <p className="mt-2 text-[10px] text-muted-foreground">Redeploy this service after changing the key, override choice, or credentials.</p>}</div>
+}
+
+function BackupDestinationsSettings() {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const query = useQuery({ queryKey: queryKeys.backupDestinations, queryFn: ({ signal }) => api.backupDestinations(signal) })
+  const [provider, setProvider] = useState<"r2" | "s3">("r2")
+  const [name, setName] = useState("")
+  const [accountID, setAccountID] = useState("")
+  const [endpoint, setEndpoint] = useState("")
+  const [region, setRegion] = useState("us-east-1")
+  const [bucket, setBucket] = useState("")
+  const [prefix, setPrefix] = useState("hostforge")
+  const [pathStyle, setPathStyle] = useState(false)
+  const [serverSideEncryption, setServerSideEncryption] = useState<"" | "AES256" | "aws:kms">("")
+  const [sseKMSKeyID, setSSEKMSKeyID] = useState("")
+  const [accessKey, setAccessKey] = useState("")
+  const [secretKey, setSecretKey] = useState("")
+  const [editingID, setEditingID] = useState("")
+  const clearForm = () => { setEditingID(""); setName(""); setAccountID(""); setEndpoint(""); setRegion("us-east-1"); setBucket(""); setPrefix("hostforge"); setPathStyle(false); setServerSideEncryption(""); setSSEKMSKeyID(""); setAccessKey(""); setSecretKey("") }
+  const beginEdit = (destination: BackupDestinationDTO) => {
+    setEditingID(destination.id); setProvider(destination.provider); setName(destination.name); setEndpoint(destination.endpoint); setRegion(destination.region); setBucket(destination.bucket); setPrefix(destination.object_prefix); setPathStyle(destination.path_style); setServerSideEncryption(destination.server_side_encryption || ""); setSSEKMSKeyID(destination.sse_kms_key_id || ""); setAccessKey(""); setSecretKey("")
+    if (destination.provider === "r2") setAccountID(new URL(destination.endpoint).hostname.split(".")[0] || "")
+  }
+  const save = useMutation({
+    mutationFn: () => editingID
+      ? api.updateBackupDestination(editingID, { name, provider, account_id: accountID, endpoint, region: provider === "r2" ? "auto" : region, bucket, object_prefix: prefix, path_style: pathStyle, server_side_encryption: provider === "s3" ? serverSideEncryption : "", sse_kms_key_id: provider === "s3" && serverSideEncryption === "aws:kms" ? sseKMSKeyID : "", ...(accessKey.trim() ? { access_key_id: accessKey } : {}), ...(secretKey.trim() ? { secret_access_key: secretKey } : {}) })
+      : api.createBackupDestination({ name, provider, account_id: accountID, endpoint, region: provider === "r2" ? "auto" : region, bucket, object_prefix: prefix, path_style: pathStyle, server_side_encryption: provider === "s3" ? serverSideEncryption : "", sse_kms_key_id: provider === "s3" && serverSideEncryption === "aws:kms" ? sseKMSKeyID : "", access_key_id: accessKey, secret_access_key: secretKey }),
+    onSuccess: async () => {
+      const edited = Boolean(editingID)
+      clearForm()
+      toast(edited ? "Backup destination updated and verified" : "Backup destination connected and verified")
+      await queryClient.invalidateQueries({ queryKey: queryKeys.backupDestinations })
+    },
+  })
+  const test = useMutation({ mutationFn: api.testBackupDestination, onSuccess: async () => { toast("Backup destination verified"); await queryClient.invalidateQueries({ queryKey: queryKeys.backupDestinations }) } })
+  const remove = useMutation({ mutationFn: api.deleteBackupDestination, onSuccess: async () => { toast("Backup destination removed"); await queryClient.invalidateQueries({ queryKey: queryKeys.backupDestinations }) } })
+  const valid = name.trim() && bucket.trim() && (editingID || (accessKey.trim() && secretKey.trim())) && (provider === "r2" ? accountID.trim() : endpoint.trim() && region.trim() && (serverSideEncryption !== "aws:kms" || sseKMSKeyID.trim()))
+  return <Section title="Database backup storage" description="Connect Cloudflare R2 in one guided step or use any HTTPS S3-compatible bucket. HostForge verifies write, read, and delete access before saving encrypted credentials.">
+    {query.isPending ? <div className="h-20 animate-pulse rounded-lg bg-muted" /> : query.isError ? <p className="text-xs text-destructive">Backup destinations could not be loaded.</p> : query.data.destinations.length > 0 && <div className="space-y-2">{query.data.destinations.map((destination) => <div key={destination.id} className="flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted"><HardDrivesIcon size={17} /></span><div className="min-w-0"><p className="text-xs font-semibold">{destination.name}</p><p className="mt-1 truncate font-mono text-[10px] text-muted-foreground">{destination.provider.toUpperCase()} · {destination.bucket}/{destination.object_prefix}{destination.server_side_encryption ? ` · ${destination.server_side_encryption}` : ""}</p></div><StatusBadge className="sm:ml-auto" tone={destination.last_test_status === "success" ? "success" : "warning"}>{destination.last_test_status === "success" ? "Verified" : "Check required"}</StatusBadge><Button size="sm" variant="outline" disabled={save.isPending} onClick={() => beginEdit(destination)}>Edit</Button><Button size="sm" variant="outline" disabled={test.isPending} onClick={() => test.mutate(destination.id)}>Test</Button><ConfirmationAction title={`Remove ${destination.name}?`} description="Existing backup policies must be moved to another destination before it can be removed. Stored backup objects are not deleted." confirmLabel="Remove destination" destructive onConfirm={() => remove.mutateAsync(destination.id)} trigger={<Button size="sm" variant="destructive" disabled={remove.isPending}>Remove</Button>} /></div>)}</div>}
+    <div className="rounded-lg border bg-muted/15 p-4 sm:p-5">
+      <div className="mb-5 flex flex-wrap items-center gap-2"><Button size="sm" variant={provider === "r2" ? "default" : "outline"} onClick={() => setProvider("r2")}>Cloudflare R2</Button><Button size="sm" variant={provider === "s3" ? "default" : "outline"} onClick={() => setProvider("s3")}>S3 compatible</Button>{editingID && <><span className="ml-auto text-[10px] font-semibold text-muted-foreground">Editing saved destination</span><Button size="sm" variant="ghost" onClick={clearForm}>Cancel</Button></>}</div>
+      <div className="grid gap-4 sm:grid-cols-2"><Field label="Connection name"><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Production backups" /></Field><Field label="Bucket"><Input value={bucket} onChange={(event) => setBucket(event.target.value)} placeholder="hostforge-backups" /></Field>{provider === "r2" ? <><Field label="Cloudflare account ID"><Input value={accountID} onChange={(event) => setAccountID(event.target.value.trim())} className="font-mono" /></Field><Field label="R2 endpoint override" hint="Optional. Use the jurisdiction-specific HTTPS endpoint from Cloudflare when data location restrictions apply."><Input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder={`https://${accountID || "account-id"}.r2.cloudflarestorage.com`} className="font-mono" /></Field></> : <><Field label="HTTPS endpoint"><Input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://s3.example.com" className="font-mono" /></Field><Field label="Region"><Input value={region} onChange={(event) => setRegion(event.target.value)} className="font-mono" /></Field><Field label="Provider-side encryption"><AppSelect options={["Provider default", "SSE-S3 (AES256)", "SSE-KMS"]} value={serverSideEncryption === "AES256" ? "SSE-S3 (AES256)" : serverSideEncryption === "aws:kms" ? "SSE-KMS" : "Provider default"} onValueChange={(value) => { setServerSideEncryption(value === "SSE-KMS" ? "aws:kms" : value === "SSE-S3 (AES256)" ? "AES256" : ""); if (value !== "SSE-KMS") setSSEKMSKeyID("") }} className="h-10 bg-background text-xs" /></Field>{serverSideEncryption === "aws:kms" && <Field label="KMS key ID or ARN"><Input value={sseKMSKeyID} onChange={(event) => setSSEKMSKeyID(event.target.value)} className="font-mono" /></Field>}</>}<Field label="Object prefix"><Input value={prefix} onChange={(event) => setPrefix(event.target.value)} placeholder="hostforge" className="font-mono" /></Field><Field label="Access key ID" hint={editingID ? "Leave blank to retain the encrypted key." : undefined}><Input value={accessKey} onChange={(event) => setAccessKey(event.target.value)} autoComplete="off" className="font-mono" /></Field><Field label="Secret access key" hint={editingID ? "Leave blank to retain the encrypted secret." : undefined}><Input type="password" value={secretKey} onChange={(event) => setSecretKey(event.target.value)} autoComplete="new-password" className="font-mono" /></Field>{provider === "s3" && <label className="flex items-center justify-between gap-4 rounded-md border bg-background px-3 py-2.5"><span><span className="block text-xs font-semibold">Path-style requests</span><span className="mt-0.5 block text-[10px] text-muted-foreground">Enable for providers that do not support virtual-hosted buckets.</span></span><Switch checked={pathStyle} onCheckedChange={setPathStyle} /></label>}</div>
+      {save.isError && <p role="alert" className="mt-4 text-xs text-destructive">{save.error instanceof APIError && save.error.code === "backup_destination_test_failed" ? "The bucket probe failed. Verify the endpoint, bucket, credentials, and Object Read & Write permissions." : mutationMessage(save.error)}</p>}
+      {(test.isError || remove.isError) && <p role="alert" className="mt-4 text-xs text-destructive">{mutationMessage(test.error || remove.error)}</p>}
+      <div className="mt-5 flex justify-end"><Button disabled={!valid || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Testing connection…" : editingID ? "Test and save changes" : "Test and connect"}</Button></div>
+    </div>
+  </Section>
 }
 
 export function GlobalSettings() {
@@ -160,6 +233,8 @@ export function GlobalSettings() {
         <div className="overflow-hidden rounded-lg border"><Row label="Host port range" value={`${settings.network.port_start}–${settings.network.port_end}`} mono /><Row label="Default container port" value={settings.network.container_port} mono /><Row label="Health-check path" value={settings.health.path} mono /><Row label="Health timeout" value={`${settings.health.timeout_ms} ms`} /><Row label="Retries" value={settings.health.retries} /><Row label="Expected response" value={`${settings.health.expected_min}–${settings.health.expected_max}`} mono /><Row label="Automatic route sync" value={settings.caddy.domain_sync_after_mutate ? "Enabled" : "Disabled"} /></div>
       </Section>
 
+      <div className="xl:col-span-2"><BackupDestinationsSettings /></div>
+
       <Section title="Security and delivery" description="Authentication, webhook, and session safeguards currently enforced by the server.">
         <div className="overflow-hidden rounded-lg border"><Row label="Session cookies" value={settings.session.cookie_secure ? "Secure HTTPS only" : "Secure flag disabled"} /><Row label="Session lifetime" value={`${settings.session.ttl_minutes} minutes`} /><Row label="Session secret" value={settings.session.session_secret_set ? "Configured" : "Missing"} /><Row label="API token" value={settings.session.api_token_set ? "Configured" : "Not configured"} /><Row label="Webhook secret" value={settings.webhooks.secret_set ? "Configured" : "Missing"} /><Row label="Webhook processing" value={settings.webhooks.async ? "Asynchronous" : "Synchronous"} /><Row label="Webhook rate limit" value={`${settings.webhooks.rate_limit_per_minute}/minute`} /></div>
       </Section>
@@ -245,13 +320,45 @@ export function ServiceSettings({ applicationID, serviceID }: { applicationID: s
   const query = useQuery({ queryKey: queryKeys.service(serviceID), queryFn: ({ signal }) => api.service(serviceID, signal) })
   const applicationQuery = useQuery({ queryKey: queryKeys.application(applicationID), queryFn: ({ signal }) => api.application(applicationID, signal) })
   const [draft, setDraft] = useState<Partial<ServiceDTO>>({})
+	const [currentTime] = useState(() => Date.now())
   const update = useMutation({
     mutationFn: () => api.updateService(serviceID, draft),
     onSuccess: async () => { setDraft({}); await queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) }); await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }) },
   })
-  const remove = useMutation({ mutationFn: () => api.deleteService(serviceID), onSuccess: async (result) => { await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }); if (result.routing_warning) toast(`Service deleted, but Caddy routing cleanup needs attention: ${result.routing_warning.replaceAll("_", " ")}. Run route synchronization from Settings.`, { tone: "warning", duration: 15000 }); else toast("Service deleted."); navigate("/applications/" + applicationID + "/services", { replace: true }) } })
+  const remove = useMutation({ mutationFn: () => api.deleteService(serviceID, query.data?.service.service_type === "database" ? query.data.service.name : undefined), onSuccess: async (result) => { await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }); if (result.routing_warning) toast(`Service deleted, but Caddy routing cleanup needs attention: ${result.routing_warning.replaceAll("_", " ")}. Run route synchronization from Settings.`, { tone: "warning", duration: 15000 }); else toast("Service deleted."); navigate("/applications/" + applicationID + "/services", { replace: true }) } })
+	const createDatabaseBinding = useMutation({ mutationFn: ({ instanceID, consumerServiceID, variableKey, replaceExisting }: { instanceID: string; consumerServiceID: string; variableKey: string; replaceExisting: boolean }) => api.createDatabaseBinding(instanceID, { consumer_service_id: consumerServiceID, variable_key: variableKey, replace_existing: replaceExisting }), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) }) })
+	const updateDatabaseBinding = useMutation({ mutationFn: ({ bindingID, consumerServiceID, variableKey, replaceExisting }: { bindingID: string; consumerServiceID: string; variableKey: string; replaceExisting: boolean }) => api.updateDatabaseBinding(bindingID, { consumer_service_id: consumerServiceID, variable_key: variableKey, replace_existing: replaceExisting }), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) }) })
+	const deleteDatabaseBinding = useMutation({ mutationFn: (bindingID: string) => api.deleteDatabaseBinding(bindingID), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) }) })
+	const rotateDatabaseCredentials = useMutation({ mutationFn: (instanceID: string) => api.rotateDatabaseCredentials(instanceID), onSuccess: async () => { toast("Credential rotation queued."); await queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) }) } })
+	const purgeDatabase = useMutation({ mutationFn: (name: string) => api.purgeDatabaseService(serviceID, name), onSuccess: async () => { toast("Database service and retained volumes permanently purged."); await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }); navigate(`/applications/${applicationID}/services`, { replace: true }) } })
   if (query.isPending || applicationQuery.isPending) return <Loading />
   if (query.isError || applicationQuery.isError) return <ErrorState retry={() => { query.refetch(); applicationQuery.refetch() }} />
+	if (query.data.service.service_type === "database") {
+		const database = query.data.database
+		const instances = query.data.database_instances || []
+		const applicationServices = applicationQuery.data.services.filter((item) => item.service_type === "application")
+		const defaultVariableKey = database?.engine === "redis" ? "REDIS_URL" : database?.engine === "valkey" ? "VALKEY_URL" : "DATABASE_URL"
+		const allDeleted = instances.length > 0 && instances.every((instance) => instance.status === "deleted")
+		const purgeDates = instances.map((instance) => instance.purge_after ? new Date(instance.purge_after) : null).filter((value): value is Date => value !== null)
+		const purgeReady = allDeleted && purgeDates.length === instances.length && purgeDates.every((value) => value.getTime() <= currentTime)
+		const nextPurgeDate = purgeDates.length ? new Date(Math.max(...purgeDates.map((value) => value.getTime()))) : null
+		const bindingBusy = createDatabaseBinding.isPending || updateDatabaseBinding.isPending || deleteDatabaseBinding.isPending
+		return <Page title="Database settings" description={`Persistent-resource configuration and lifecycle controls for ${query.data.service.name}.`}>
+			<DatabaseServiceTabs active="Settings" serviceID={serviceID} applicationID={applicationID} />
+			<div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+				<Section title="Managed database" description="Engine images and major versions are selected from HostForge's tested, digest-pinned catalog.">
+					<div className="overflow-hidden rounded-lg border"><Row label="Engine" value={database?.engine || "database"} mono /><Row label="Pinned version" value={database?.default_version || "unknown"} mono /><Row label="Network access" value="HostForge services in the same environment only" /></div>
+					<div className="space-y-3">{instances.map((instance) => { const environment = applicationQuery.data.environments.find((item) => item.id === instance.environment_id); const bindings = query.data.database_bindings?.[instance.id] || []; return <div key={instance.id} className="rounded-lg border bg-muted/20 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold">{environment?.name || "Environment"}</p><p className="mt-1 font-mono text-[10px] text-muted-foreground">{instance.network_alias}:{instance.internal_port}</p></div>{instance.status === "healthy" && <ConfirmationAction title={`Rotate ${environment?.name || "database"} credentials?`} description="HostForge changes the sealed application password. Redeploy bound services afterward so they receive the new connection URL." confirmLabel="Rotate credentials" onConfirm={() => rotateDatabaseCredentials.mutateAsync(instance.id)} trigger={<Button size="sm" variant="outline" disabled={rotateDatabaseCredentials.isPending}>Rotate credentials</Button>} />}</div><div className="mt-3 grid gap-2 text-[11px] sm:grid-cols-2"><span>{instance.cpu_limit_millis / 1000} vCPU</span><span>{(instance.memory_limit_bytes / 1024 ** 3).toFixed(1)} GB memory</span><span className="font-mono">{instance.volume_name}</span><span>{instance.resource_preset} preset</span></div>{applicationServices.length > 0 && <div className="mt-4 border-t pt-3"><p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Application connections</p><div className="grid gap-2">{applicationServices.map((consumer) => { const binding = bindings.find((item) => item.consumer_service_id === consumer.id); return <DatabaseBindingControl key={consumer.id} applicationID={applicationID} environmentID={instance.environment_id} consumer={consumer} binding={binding} defaultVariableKey={defaultVariableKey} busy={bindingBusy} onConnect={(variableKey, replaceExisting) => createDatabaseBinding.mutate({ instanceID: instance.id, consumerServiceID: consumer.id, variableKey, replaceExisting })} onUpdate={(variableKey, replaceExisting) => binding && updateDatabaseBinding.mutate({ bindingID: binding.id, consumerServiceID: consumer.id, variableKey, replaceExisting })} onDisconnect={() => binding && deleteDatabaseBinding.mutate(binding.id)} /> })}</div></div>}</div> })}</div>
+					{(createDatabaseBinding.isError || updateDatabaseBinding.isError || deleteDatabaseBinding.isError || rotateDatabaseCredentials.isError) && <p role="alert" className="text-xs text-destructive">{mutationMessage(createDatabaseBinding.error || updateDatabaseBinding.error || deleteDatabaseBinding.error || rotateDatabaseCredentials.error)}</p>}
+				</Section>
+				<Section title="Access and lifecycle" description="Public database ingress remains intentionally unavailable until authenticated TCP ingress and database-aware TLS are implemented.">
+					<div className="rounded-lg border p-4"><p className="text-xs font-semibold">Private access only</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Connection credentials are injected into explicitly bound HostForge application services. They are not returned by this settings API.</p></div>
+					{allDeleted ? <div className="rounded-lg border border-destructive/30 p-4"><TrashIcon className="text-destructive" size={18} /><p className="mt-3 text-xs font-semibold">Retained data volumes</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">{purgeReady ? "The seven-day recovery window has ended. Permanent purge removes every retained volume and database record." : `Recovery remains available until ${nextPurgeDate?.toLocaleString() || "the retention deadline"}. HostForge purges expired volumes automatically.`}</p>{purgeReady && <ConfirmationAction title={`Purge ${query.data.service.name} permanently?`} description="Every retained database volume and record will be removed and cannot be recovered." confirmLabel="Purge permanently" confirmationText={query.data.service.name} destructive onConfirm={() => purgeDatabase.mutateAsync(query.data.service.name)} trigger={<Button className="mt-4" variant="destructive" disabled={purgeDatabase.isPending}>Purge permanently</Button>} />}</div> : <div className="rounded-lg border border-destructive/30 p-4"><TrashIcon className="text-destructive" size={18} /><p className="mt-3 text-xs font-semibold">Delete database service</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Containers stop immediately. Labelled data volumes remain recoverable for seven days before permanent purge.</p><ConfirmationAction title={`Delete ${query.data.service.name}?`} description="HostForge will stop every database instance and begin the seven-day retained-volume recovery window." confirmLabel="Delete and retain volumes" confirmationText={query.data.service.name} destructive onConfirm={() => remove.mutate()} trigger={<Button className="mt-4" variant="destructive" disabled={remove.isPending}>Delete database</Button>} /></div>}
+					{(remove.isError || purgeDatabase.isError) && <p role="alert" className="text-xs text-destructive">{mutationMessage(remove.error || purgeDatabase.error)}</p>}
+				</Section>
+			</div>
+		</Page>
+	}
   const service = { ...query.data.service, ...draft }
   const set = <K extends keyof ServiceDTO>(key: K, value: ServiceDTO[K]) => setDraft((current) => ({ ...current, [key]: value }))
 

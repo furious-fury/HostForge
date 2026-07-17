@@ -69,6 +69,7 @@ export type EnvironmentDTO = {
 export type ServiceDTO = {
   id: string
   application_id: string
+  service_type: "application" | "database"
   name: string
   repo_url: string
   stack_kind?: string
@@ -81,6 +82,142 @@ export type ServiceDTO = {
   start_cmd: string
   internal_port: number
   health_check_path: string
+  created_at: string
+  updated_at: string
+}
+
+export type DatabaseEngineDTO = {
+  id: "postgresql" | "mysql" | "mariadb" | "mongodb" | "redis" | "valkey"
+  name: string
+  description: string
+  category: "Relational" | "Document" | "Key-value"
+  versions: Array<{ version: string; default: boolean; provisioning_available: boolean }>
+  internal_port: number
+  connection_variable: string
+  minimum_memory_bytes: number
+  public_access_available: false
+}
+
+export type DatabaseResourcePresetDTO = {
+  id: "development" | "standard" | "performance" | "custom"
+  name: string
+  description: string
+  cpu_limit_millis: number
+  memory_limit_bytes: number
+}
+
+export type DatabaseInstanceDTO = {
+  id: string
+  service_id: string
+  environment_id: string
+  engine_version: string
+  docker_container_id?: string
+  network_alias: string
+  internal_port: number
+  volume_name: string
+  resource_preset: string
+  cpu_limit_millis: number
+  memory_limit_bytes: number
+  desired_state: "running" | "stopped" | "deleted"
+  status: "provisioning" | "starting" | "healthy" | "unhealthy" | "stopping" | "stopped" | "failed" | "deleted" | "purging"
+  health_message?: string
+	storage_used_bytes?: number
+	storage_checked_at?: string
+  purge_after?: string
+  created_at: string
+  updated_at: string
+}
+
+export type DatabaseOperationDTO = {
+  id: string
+  service_id: string
+  database_instance_id?: string
+  operation_type: "provision" | "start" | "stop" | "restart" | "backup" | "restore" | "rotate_credentials" | "delete" | "restore_deleted" | "purge"
+  status: "queued" | "running" | "success" | "failed" | "cancelled"
+  progress_step: string
+  progress_percent: number
+  error_code?: string
+  error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+export type DatabaseCredentialMetadataDTO = {
+  database_instance_id: string
+  database_name: string
+  username: string
+  generation: number
+  rotated_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export type DatabaseMetricDTO = {
+  cpu_percent: number
+  memory_bytes: number
+  network_rx_bytes: number
+  network_tx_bytes: number
+  sampled_at: string
+}
+
+export type DatabaseUpgradePreflightDTO = {
+  available: boolean
+  ready: boolean
+  reason: string
+  engine_version: string
+  current_image_ref: string
+  target_image_ref: string
+  backup_max_age_hours: number
+  latest_backup?: DatabaseBackupDTO
+}
+
+export type BackupDestinationDTO = {
+  id: string
+  name: string
+  provider: "r2" | "s3"
+  endpoint: string
+  region: string
+  bucket: string
+  object_prefix: string
+  path_style: boolean
+  server_side_encryption?: "" | "AES256" | "aws:kms"
+  sse_kms_key_id?: string
+  last_test_status: "" | "success" | "failed"
+  last_test_message?: string
+  last_tested_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export type DatabaseBackupPolicyDTO = {
+  database_instance_id: string
+  destination_id: string
+  enabled: boolean
+  schedule: string
+  timezone: string
+  retention_days: number
+  last_scheduled_at?: string
+  next_scheduled_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export type DatabaseBackupDTO = {
+  id: string
+  database_instance_id: string
+  destination_id?: string
+  status: "queued" | "running" | "success" | "failed" | "cancelled" | "deleting"
+  trigger_kind: "manual" | "scheduled" | "safety"
+  object_key?: string
+  archive_format?: string
+  checksum?: string
+  compressed_size: number
+  engine: "postgresql" | "mysql" | "mariadb" | "mongodb" | "redis" | "valkey"
+  database_name: string
+  engine_version: string
+  error_code?: string
+  completed_at?: string
+  expires_at?: string
   created_at: string
   updated_at: string
 }
@@ -379,7 +516,7 @@ export const api = {
     return { ...payload, applications: Array.isArray(payload.applications) ? payload.applications : [] }
   },
   application: async (id: string, signal?: AbortSignal) => {
-    const payload = await apiRequest<{ application: ApplicationDTO; environments: EnvironmentDTO[] | null; services: ServiceDTO[] | null; service_bindings: Record<string, ServiceEnvironmentDTO[]> | null }>(
+    const payload = await apiRequest<{ application: ApplicationDTO; environments: EnvironmentDTO[] | null; services: ServiceDTO[] | null; service_bindings: Record<string, ServiceEnvironmentDTO[]> | null; database_instances?: Record<string, DatabaseInstanceDTO[]> | null }>(
       `/api/applications/${encodeURIComponent(id)}`,
       { signal },
     )
@@ -388,6 +525,7 @@ export const api = {
       environments: Array.isArray(payload.environments) ? payload.environments : [],
       services: Array.isArray(payload.services) ? payload.services : [],
       service_bindings: payload.service_bindings && typeof payload.service_bindings === "object" ? payload.service_bindings : {},
+      ...(payload.database_instances && typeof payload.database_instances === "object" ? { database_instances: payload.database_instances } : {}),
     }
   },
   createApplication: (input: { name: string; description: string }) =>
@@ -406,17 +544,60 @@ export const api = {
     }),
   deleteApplication: (id: string) =>
     apiRequest<DeleteOutcomeDTO>(`/api/applications/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  databaseEngines: (signal?: AbortSignal) =>
+    apiRequest<{
+      engines: DatabaseEngineDTO[]
+      resource_presets: DatabaseResourcePresetDTO[]
+      networking: { scope: "hostforge_environment"; public_access_available: false }
+    }>("/api/database-engines", { signal }),
+  createDatabaseService: (
+    applicationID: string,
+    input: {
+      name: string
+      engine: DatabaseEngineDTO["id"]
+      version: string
+      environment_ids: string[]
+      resource_preset: DatabaseResourcePresetDTO["id"]
+	  custom_cpu_millis?: number
+	  custom_memory_bytes?: number
+	  backup_enabled?: boolean
+	  backup_destination_id?: string
+      connections: Array<{ service_id: string; variable_key: string; replace_existing?: boolean }>
+    },
+  ) => apiRequest<{
+    status: "queued"
+    service: ServiceDTO
+    database: { service_id: string; engine: DatabaseEngineDTO["id"]; default_version: string }
+    instances: DatabaseInstanceDTO[]
+    bindings: Array<{ id: string; database_instance_id: string; environment_id: string; consumer_service_id: string; variable_key: string; replace_existing: boolean }>
+    operations: DatabaseOperationDTO[]
+  }>(`/api/applications/${encodeURIComponent(applicationID)}/database-services`, { method: "POST", body: JSON.stringify(input) }),
+  databaseOperation: (operationID: string, signal?: AbortSignal) =>
+    apiRequest<{ operation: DatabaseOperationDTO }>(`/api/database-operations/${encodeURIComponent(operationID)}`, { signal }),
 
   service: async (id: string, signal?: AbortSignal) => {
-    const payload = await apiRequest<{ service: ServiceDTO; bindings: ServiceEnvironmentDTO[] | null; environment_states: ServiceEnvironmentStateDTO[] | null }>(
+    const payload = await apiRequest<{
+      service: ServiceDTO
+      bindings: ServiceEnvironmentDTO[] | null
+      environment_states: ServiceEnvironmentStateDTO[] | null
+      database?: { service_id: string; engine: DatabaseEngineDTO["id"]; default_version: string }
+      database_instances?: DatabaseInstanceDTO[] | null
+      database_bindings?: Record<string, Array<{ id: string; database_instance_id: string; environment_id: string; consumer_service_id: string; variable_key: string; replace_existing: boolean }>> | null
+      database_credentials?: Record<string, DatabaseCredentialMetadataDTO> | null
+      database_operations?: DatabaseOperationDTO[] | null
+    }>(
       `/api/services/${encodeURIComponent(id)}`,
       { signal },
     )
-    return { ...payload, bindings: payload.bindings ?? [], environment_states: payload.environment_states ?? [] }
+    return {
+      ...payload,
+      bindings: payload.bindings ?? [],
+      environment_states: payload.environment_states ?? [],
+    }
   },
   createService: (
     applicationID: string,
-    input: Omit<ServiceDTO, "id" | "application_id" | "created_at" | "updated_at"> & {
+    input: Omit<ServiceDTO, "id" | "application_id" | "service_type" | "created_at" | "updated_at"> & {
       environment_id?: string
       branch?: string
       auto_deploy?: boolean
@@ -426,9 +607,62 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  updateService: (id: string, input: Partial<Omit<ServiceDTO, "id" | "application_id" | "created_at" | "updated_at">>) =>
+  updateService: (id: string, input: Partial<Omit<ServiceDTO, "id" | "application_id" | "service_type" | "created_at" | "updated_at">>) =>
     apiRequest<{ service: ServiceDTO }>("/api/services/" + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify(input) }),
-  deleteService: (id: string) => apiRequest<DeleteOutcomeDTO>("/api/services/" + encodeURIComponent(id), { method: "DELETE" }),
+  deleteService: (id: string, confirmation?: string) => apiRequest<DeleteOutcomeDTO>("/api/services/" + encodeURIComponent(id), { method: "DELETE", ...(confirmation ? { body: JSON.stringify({ confirmation }) } : {}) }),
+  restoreDeletedDatabase: (id: string) =>
+    apiRequest<{ status: "queued"; operations: DatabaseOperationDTO[] }>(
+      `/api/database-services/${encodeURIComponent(id)}/restore-deleted`,
+      { method: "POST" },
+    ),
+  purgeDatabaseService: (id: string, confirmation: string) =>
+    apiRequest<{ status: "purged" }>(`/api/database-services/${encodeURIComponent(id)}/purge`, { method: "DELETE", body: JSON.stringify({ confirmation }) }),
+  databaseRuntimeAction: (instanceID: string, action: "start" | "stop" | "restart") =>
+    apiRequest<{ status: "queued"; operation: DatabaseOperationDTO }>(
+      `/api/database-instances/${encodeURIComponent(instanceID)}/${action}`,
+      { method: "POST" },
+    ),
+  rotateDatabaseCredentials: (instanceID: string) =>
+    apiRequest<{ status: "queued"; operation: DatabaseOperationDTO }>(
+      `/api/database-instances/${encodeURIComponent(instanceID)}/rotate-credentials`,
+      { method: "POST" },
+    ),
+  databaseUpgradePreflight: (instanceID: string, signal?: AbortSignal) =>
+    apiRequest<DatabaseUpgradePreflightDTO>(`/api/database-instances/${encodeURIComponent(instanceID)}/upgrade`, { signal }),
+  upgradeDatabaseInstance: (instanceID: string) =>
+    apiRequest<{ status: "queued"; operation: DatabaseOperationDTO }>(`/api/database-instances/${encodeURIComponent(instanceID)}/upgrade`, { method: "POST" }),
+  databaseLogs: (instanceID: string, tail = 200, signal?: AbortSignal) =>
+    apiRequest<{ instance_id: string; logs: string }>(
+      `/api/database-instances/${encodeURIComponent(instanceID)}/logs?tail=${tail}`,
+      { signal },
+    ),
+  databaseMetrics: (instanceID: string, signal?: AbortSignal) =>
+    apiRequest<{ instance_id: string; metric: DatabaseMetricDTO }>(
+      `/api/database-instances/${encodeURIComponent(instanceID)}/metrics`,
+      { signal },
+    ),
+  backupDestinations: (signal?: AbortSignal) =>
+    apiRequest<{ destinations: BackupDestinationDTO[] }>("/api/backup-destinations", { signal }),
+  createBackupDestination: (input: {
+    name: string; provider: "r2" | "s3"; account_id?: string; endpoint?: string; region?: string;
+    bucket: string; object_prefix?: string; path_style?: boolean; server_side_encryption?: "" | "AES256" | "aws:kms"; sse_kms_key_id?: string; access_key_id: string; secret_access_key: string
+  }) => apiRequest<{ destination: BackupDestinationDTO }>("/api/backup-destinations", { method: "POST", body: JSON.stringify(input) }),
+  updateBackupDestination: (id: string, input: Partial<{
+    name: string; provider: "r2" | "s3"; account_id: string; endpoint: string; region: string;
+    bucket: string; object_prefix: string; path_style: boolean; server_side_encryption: "" | "AES256" | "aws:kms"; sse_kms_key_id: string; access_key_id: string; secret_access_key: string
+  }>) => apiRequest<{ destination: BackupDestinationDTO }>(`/api/backup-destinations/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  testBackupDestination: (id: string) => apiRequest<{ destination: BackupDestinationDTO }>(`/api/backup-destinations/${encodeURIComponent(id)}/test`, { method: "POST" }),
+  deleteBackupDestination: (id: string) => apiRequest<{ status: "deleted" }>(`/api/backup-destinations/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  databaseBackupPolicy: (instanceID: string, signal?: AbortSignal) => apiRequest<{ policy: DatabaseBackupPolicyDTO | null }>(`/api/database-instances/${encodeURIComponent(instanceID)}/backup-policy`, { signal }),
+  saveDatabaseBackupPolicy: (instanceID: string, input: { destination_id: string; enabled: boolean; schedule: string; timezone: string; retention_days: number }) => apiRequest<{ policy: DatabaseBackupPolicyDTO }>(`/api/database-instances/${encodeURIComponent(instanceID)}/backup-policy`, { method: "PUT", body: JSON.stringify(input) }),
+  databaseBackups: (instanceID: string, signal?: AbortSignal) => apiRequest<{ backups: DatabaseBackupDTO[] }>(`/api/database-instances/${encodeURIComponent(instanceID)}/backups`, { signal }),
+  createDatabaseBackup: (instanceID: string) => apiRequest<{ backup: DatabaseBackupDTO; operation: DatabaseOperationDTO }>(`/api/database-instances/${encodeURIComponent(instanceID)}/backups`, { method: "POST" }),
+  restoreDatabaseBackup: (backupID: string, input: { mode?: "new_service" | "replace_current"; target_instance_id?: string; confirmation?: string }) =>
+    apiRequest<{ status: "queued"; operation: DatabaseOperationDTO }>(`/api/database-backups/${encodeURIComponent(backupID)}/restore`, { method: "POST", body: JSON.stringify(input) }),
+  deleteDatabaseBackup: (backupID: string) => apiRequest<{ status: "deleted" }>(`/api/database-backups/${encodeURIComponent(backupID)}`, { method: "DELETE" }),
+  createDatabaseBinding: (instanceID: string, input: { consumer_service_id: string; variable_key: string; replace_existing?: boolean }) => apiRequest<{ binding: { id: string } }>(`/api/database-instances/${encodeURIComponent(instanceID)}/bindings`, { method: "POST", body: JSON.stringify(input) }),
+  updateDatabaseBinding: (bindingID: string, input: { consumer_service_id: string; variable_key: string; replace_existing?: boolean }) => apiRequest<{ binding: { id: string; consumer_service_id: string; variable_key: string; replace_existing: boolean } }>(`/api/database-bindings/${encodeURIComponent(bindingID)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  deleteDatabaseBinding: (bindingID: string) => apiRequest<{ status: "deleted" }>(`/api/database-bindings/${encodeURIComponent(bindingID)}`, { method: "DELETE" }),
   updateServiceBinding: (
     serviceID: string,
     environmentID: string,
@@ -536,6 +770,9 @@ export const queryKeys = {
   systemStatus: ["system-status"] as const,
   settings: ["settings"] as const,
   applications: ["applications"] as const,
+  databaseEngines: ["database-engines"] as const,
+  backupDestinations: ["backup-destinations"] as const,
+  databaseOperation: (id: string) => ["database-operations", id] as const,
   application: (id: string) => ["applications", id] as const,
   serviceMetrics: (serviceID: string, environmentID: string, points = 120) => ["service-metrics", serviceID, environmentID, points] as const,
   observabilitySummary: ["observability-summary"] as const,

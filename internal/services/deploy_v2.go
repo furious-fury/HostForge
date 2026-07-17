@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +32,9 @@ func ResolveDeployTarget(ctx context.Context, store *repository.Store, serviceID
 	service, err := store.GetService(ctx, serviceID)
 	if err != nil {
 		return DeployTarget{}, err
+	}
+	if service.ServiceType != "application" {
+		return DeployTarget{}, ErrCode("service_type_not_deployable", fmt.Errorf("service type %s does not use application deployments", service.ServiceType))
 	}
 	environment, err := store.GetEnvironment(ctx, environmentID)
 	if err != nil {
@@ -149,21 +154,63 @@ func buildDockerEnvFromEnvironment(ctx context.Context, log *slog.Logger, store 
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
+	managed, err := store.ListDatabaseConnectionBindingsSealed(ctx, serviceID, environmentID)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 && len(managed) == 0 {
 		return nil, nil
 	}
 	if sealer == nil {
 		return nil, ErrCode("env_encryption_key_missing", fmt.Errorf("environment has stored variables but encryption key is not configured"))
 	}
-	out := make([]string, 0, len(rows))
-	keys := make([]string, 0, len(rows))
+	out := make([]string, 0, len(rows)+len(managed))
+	keys := make([]string, 0, len(rows)+len(managed))
+	seen := map[string]struct{}{}
+	positions := map[string]int{}
 	for _, row := range rows {
 		plaintext, err := sealer.Open(row.ValueCT)
 		if err != nil {
 			return nil, ErrCode("env_decrypt_failed", fmt.Errorf("%s: %w", row.Key, err))
 		}
 		keys = append(keys, row.Key)
+		seen[row.Key] = struct{}{}
+		positions[row.Key] = len(out)
 		out = append(out, row.Key+"="+string(plaintext))
+	}
+	for _, binding := range managed {
+		_, conflict := seen[binding.VariableKey]
+		if conflict && !binding.ReplaceExisting {
+			return nil, ErrCode("database_binding_variable_conflict", fmt.Errorf("%s is already defined", binding.VariableKey))
+		}
+		password, err := sealer.Open(binding.PasswordCT)
+		if err != nil {
+			return nil, ErrCode("database_credential_decrypt_failed", fmt.Errorf("%s: %w", binding.DatabaseInstanceID, err))
+		}
+		scheme := map[string]string{
+			"postgresql": "postgresql", "mysql": "mysql", "mariadb": "mysql",
+			"mongodb": "mongodb", "redis": "redis", "valkey": "redis",
+		}[binding.Engine]
+		if scheme == "" {
+			return nil, ErrCode("database_engine_unsupported", fmt.Errorf("%s", binding.Engine))
+		}
+		connection := &url.URL{
+			Scheme: scheme,
+			User:   url.UserPassword(binding.Username, string(password)),
+			Host:   binding.NetworkAlias + ":" + strconv.Itoa(binding.InternalPort),
+		}
+		if binding.DatabaseName != "" {
+			connection.Path = "/" + binding.DatabaseName
+		}
+		value := binding.VariableKey + "=" + connection.String()
+		if conflict {
+			out[positions[binding.VariableKey]] = value
+		} else {
+			keys = append(keys, binding.VariableKey)
+			seen[binding.VariableKey] = struct{}{}
+			positions[binding.VariableKey] = len(out)
+			out = append(out, value)
+		}
 	}
 	log.Info("deploy step", "step", "container_env_inject", "env_count", len(keys), "env_keys", strings.Join(keys, ","))
 	return out, nil

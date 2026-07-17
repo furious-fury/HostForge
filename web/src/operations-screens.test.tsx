@@ -29,6 +29,7 @@ const environment: EnvironmentDTO = {
 }
 
 const service: ServiceDTO = {
+  service_type: "application",
   id: "service-api",
   application_id: application.id,
   name: "API",

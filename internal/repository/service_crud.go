@@ -43,11 +43,11 @@ func (s *Store) GetService(ctx context.Context, id string) (Service, error) {
 	var item Service
 	var created, updated string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT svc.id,svc.application_id,svc.name,svc.repo_url,
+		SELECT svc.id,svc.application_id,svc.service_type,svc.name,svc.repo_url,
 		       COALESCE((SELECT d.stack_kind FROM deployments d WHERE d.service_id=svc.id AND (d.stack_kind<>'' OR d.stack_label<>'') ORDER BY d.created_at DESC,d.id DESC LIMIT 1),''),
 		       COALESCE((SELECT d.stack_label FROM deployments d WHERE d.service_id=svc.id AND (d.stack_kind<>'' OR d.stack_label<>'') ORDER BY d.created_at DESC,d.id DESC LIMIT 1),''),
 		       svc.github_installation_id,svc.root_directory,svc.deploy_runtime,svc.deploy_install_cmd,svc.deploy_build_cmd,svc.deploy_start_cmd,svc.internal_port,svc.health_check_path,svc.created_at,svc.updated_at
-		FROM services svc WHERE svc.id=?`, strings.TrimSpace(id)).Scan(&item.ID, &item.ApplicationID, &item.Name, &item.RepoURL, &item.StackKind, &item.StackLabel, &item.GitHubInstallationID, &item.RootDirectory, &item.DeployRuntime, &item.InstallCmd, &item.BuildCmd, &item.StartCmd, &item.InternalPort, &item.HealthCheckPath, &created, &updated)
+		FROM services svc WHERE svc.id=?`, strings.TrimSpace(id)).Scan(&item.ID, &item.ApplicationID, &item.ServiceType, &item.Name, &item.RepoURL, &item.StackKind, &item.StackLabel, &item.GitHubInstallationID, &item.RootDirectory, &item.DeployRuntime, &item.InstallCmd, &item.BuildCmd, &item.StartCmd, &item.InternalPort, &item.HealthCheckPath, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Service{}, ErrServiceNotFound
 	}
@@ -75,7 +75,7 @@ func (s *Store) CreateService(ctx context.Context, in CreateServiceInput) (Servi
 	if strings.TrimSpace(in.DeployRuntime) == "" {
 		in.DeployRuntime = "auto"
 	}
-	item := Service{ID: newID(), ApplicationID: strings.TrimSpace(in.ApplicationID), Name: strings.TrimSpace(in.Name), RepoURL: strings.TrimSpace(in.RepoURL), GitHubInstallationID: in.GitHubInstallationID, RootDirectory: strings.TrimSpace(in.RootDirectory), DeployRuntime: strings.TrimSpace(in.DeployRuntime), InstallCmd: strings.TrimSpace(in.InstallCmd), BuildCmd: strings.TrimSpace(in.BuildCmd), StartCmd: strings.TrimSpace(in.StartCmd), InternalPort: in.InternalPort, HealthCheckPath: strings.TrimSpace(in.HealthCheckPath), CreatedAt: now, UpdatedAt: now}
+	item := Service{ID: newID(), ApplicationID: strings.TrimSpace(in.ApplicationID), ServiceType: "application", Name: strings.TrimSpace(in.Name), RepoURL: strings.TrimSpace(in.RepoURL), GitHubInstallationID: in.GitHubInstallationID, RootDirectory: strings.TrimSpace(in.RootDirectory), DeployRuntime: strings.TrimSpace(in.DeployRuntime), InstallCmd: strings.TrimSpace(in.InstallCmd), BuildCmd: strings.TrimSpace(in.BuildCmd), StartCmd: strings.TrimSpace(in.StartCmd), InternalPort: in.InternalPort, HealthCheckPath: strings.TrimSpace(in.HealthCheckPath), CreatedAt: now, UpdatedAt: now}
 	if item.Name == "" || item.RepoURL == "" {
 		return Service{}, fmt.Errorf("name and repository required")
 	}
@@ -103,7 +103,7 @@ func (s *Store) CreateService(ctx context.Context, in CreateServiceInput) (Servi
 		return Service{}, err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO services(id,application_id,name,repo_url,github_installation_id,root_directory,deploy_runtime,deploy_install_cmd,deploy_build_cmd,deploy_start_cmd,internal_port,health_check_path,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, item.ID, item.ApplicationID, item.Name, item.RepoURL, item.GitHubInstallationID, item.RootDirectory, item.DeployRuntime, item.InstallCmd, item.BuildCmd, item.StartCmd, item.InternalPort, item.HealthCheckPath, stamp, stamp)
+	_, err = tx.ExecContext(ctx, `INSERT INTO services(id,application_id,service_type,name,repo_url,github_installation_id,root_directory,deploy_runtime,deploy_install_cmd,deploy_build_cmd,deploy_start_cmd,internal_port,health_check_path,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, item.ID, item.ApplicationID, item.ServiceType, item.Name, item.RepoURL, item.GitHubInstallationID, item.RootDirectory, item.DeployRuntime, item.InstallCmd, item.BuildCmd, item.StartCmd, item.InternalPort, item.HealthCheckPath, stamp, stamp)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return Service{}, ErrDuplicateService
@@ -240,7 +240,7 @@ func (s *Store) CreateEnvironment(ctx context.Context, applicationID, name, slug
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO service_environments(service_id,environment_id,branch,auto_deploy,active_deployment_id,desired_state,created_at,updated_at)
-		SELECT id,?,'',0,'','running',?,? FROM services WHERE application_id=?`, item.ID, stamp, stamp, applicationID); err != nil {
+		SELECT id,?,'',0,'','running',?,? FROM services WHERE application_id=? AND service_type='application'`, item.ID, stamp, stamp, applicationID); err != nil {
 		return Environment{}, err
 	}
 	if err := tx.Commit(); err != nil {

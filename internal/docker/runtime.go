@@ -2,6 +2,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -35,10 +36,13 @@ func NewClient(ctx context.Context) (*client.Client, error) {
 
 // RunOptions configures container creation and startup.
 type RunOptions struct {
-	ImageRef      string
-	ContainerName string
-	ContainerPort int
-	HostPort      int
+	ImageRef       string
+	ContainerName  string
+	ContainerPort  int
+	HostPort       int
+	NetworkName    string
+	NetworkAliases []string
+	Labels         map[string]string
 	// Env is extra KEY=value pairs (runtime). PORT is always set from ContainerPort and wins over any duplicate here.
 	Env []string
 }
@@ -79,13 +83,20 @@ func RunContainer(ctx context.Context, cli *client.Client, opts RunOptions) (str
 		env = append(env, e)
 	}
 
+	var networkingConfig *network.NetworkingConfig
+	if networkName := strings.TrimSpace(opts.NetworkName); networkName != "" {
+		networkingConfig = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+			networkName: {Aliases: opts.NetworkAliases},
+		}}
+	}
 	resp, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config: &container.Config{
 			Image:        opts.ImageRef,
 			ExposedPorts: exposed,
 			// PORT matches common PaaS conventions (e.g. Heroku); app must listen on this port
 			// for the host→container port mapping to receive traffic.
-			Env: env,
+			Env:    env,
+			Labels: opts.Labels,
 		},
 		HostConfig: &container.HostConfig{
 			PortBindings: bindings,
@@ -93,7 +104,8 @@ func RunContainer(ctx context.Context, cli *client.Client, opts RunOptions) (str
 				Name: "unless-stopped",
 			},
 		},
-		Name: opts.ContainerName,
+		NetworkingConfig: networkingConfig,
+		Name:             opts.ContainerName,
 	})
 	if err != nil {
 		return "", fmt.Errorf("create container: %w", err)
@@ -106,7 +118,13 @@ func RunContainer(ctx context.Context, cli *client.Client, opts RunOptions) (str
 
 // StopAndRemove stops a running container (best effort) and removes it.
 func StopAndRemove(ctx context.Context, cli *client.Client, containerID string) error {
-	timeout := 10
+	return StopAndRemoveWithTimeout(ctx, cli, containerID, 10)
+}
+
+func StopAndRemoveWithTimeout(ctx context.Context, cli *client.Client, containerID string, timeout int) error {
+	if timeout <= 0 {
+		timeout = 10
+	}
 	if _, err := cli.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
 		if errdefs.IsNotFound(err) {
 			return nil
@@ -126,10 +144,25 @@ func StopAndRemove(ctx context.Context, cli *client.Client, containerID string) 
 
 // StopContainer stops a running container without removing it.
 func StopContainer(ctx context.Context, cli *client.Client, containerID string) error {
-	timeout := 10
+	return StopContainerWithTimeout(ctx, cli, containerID, 10)
+}
+
+func StopContainerWithTimeout(ctx context.Context, cli *client.Client, containerID string, timeout int) error {
+	if timeout <= 0 {
+		timeout = 10
+	}
 	if _, err := cli.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil &&
 		!strings.Contains(strings.ToLower(err.Error()), "is not running") {
 		return fmt.Errorf("stop container %s: %w", shortID(containerID), err)
+	}
+	return nil
+}
+
+// StartContainer starts an existing stopped container.
+func StartContainer(ctx context.Context, cli *client.Client, containerID string) error {
+	if _, err := cli.ContainerStart(ctx, containerID, client.ContainerStartOptions{}); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "already started") {
+		return fmt.Errorf("start container %s: %w", shortID(containerID), err)
 	}
 	return nil
 }
@@ -195,6 +228,20 @@ func StreamContainerLogs(ctx context.Context, cli *client.Client, containerID st
 		return fmt.Errorf("stream container logs %s: %w", shortID(containerID), err)
 	}
 	return nil
+}
+
+// ReadContainerLogs returns a bounded tail of a container's stdout and stderr.
+func ReadContainerLogs(ctx context.Context, cli *client.Client, containerID string, tail int) (string, error) {
+	if tail <= 0 || tail > 5000 {
+		tail = 200
+	}
+	var output bytes.Buffer
+	if err := StreamContainerLogs(ctx, cli, containerID, LogStreamOptions{
+		Tail: fmt.Sprintf("%d", tail), Timestamps: true, ShowStdout: true, ShowStderr: true,
+	}, &output); err != nil {
+		return "", err
+	}
+	return output.String(), nil
 }
 
 func shortID(id string) string {

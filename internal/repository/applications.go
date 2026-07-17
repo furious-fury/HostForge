@@ -52,6 +52,7 @@ type ApplicationSummary struct {
 type Service struct {
 	ID                   string    `json:"id"`
 	ApplicationID        string    `json:"application_id"`
+	ServiceType          string    `json:"service_type"`
 	Name                 string    `json:"name"`
 	RepoURL              string    `json:"repo_url"`
 	StackKind            string    `json:"stack_kind,omitempty"`
@@ -100,13 +101,32 @@ func (s *Store) ListApplicationSummaries(ctx context.Context) ([]ApplicationSumm
 		summary := ApplicationSummary{Application: application, EnvironmentHealth: []EnvironmentHealth{}}
 		rows, err := s.db.QueryContext(ctx, `
 			SELECT e.id,e.name,e.kind,
-			       COUNT(se.service_id),
-			       COALESCE(SUM(CASE WHEN se.branch<>'' OR se.active_deployment_id<>'' THEN 1 ELSE 0 END),0),
-			       COALESCE(SUM(CASE WHEN se.active_deployment_id<>'' AND se.desired_state='running' THEN 1 ELSE 0 END),0)
+			       (SELECT COUNT(1)
+			        FROM service_environments se
+			        JOIN services svc ON svc.id=se.service_id AND svc.service_type='application'
+			        WHERE se.environment_id=e.id)
+			       +
+			       (SELECT COUNT(1)
+			        FROM database_instances di
+			        WHERE di.environment_id=e.id AND di.deleted_at=''),
+			       (SELECT COUNT(1)
+			        FROM service_environments se
+			        JOIN services svc ON svc.id=se.service_id AND svc.service_type='application'
+			        WHERE se.environment_id=e.id AND (se.branch<>'' OR se.active_deployment_id<>''))
+			       +
+			       (SELECT COUNT(1)
+			        FROM database_instances di
+			        WHERE di.environment_id=e.id AND di.deleted_at=''),
+			       (SELECT COUNT(1)
+			        FROM service_environments se
+			        JOIN services svc ON svc.id=se.service_id AND svc.service_type='application'
+			        WHERE se.environment_id=e.id AND se.active_deployment_id<>'' AND se.desired_state='running')
+			       +
+			       (SELECT COUNT(1)
+			        FROM database_instances di
+			        WHERE di.environment_id=e.id AND di.status='healthy' AND di.desired_state='running' AND di.deleted_at='')
 			FROM environments e
-			LEFT JOIN service_environments se ON se.environment_id=e.id
 			WHERE e.application_id=?
-			GROUP BY e.id,e.name,e.kind
 			ORDER BY CASE e.kind WHEN 'production' THEN 0 ELSE 1 END,e.name`, application.ID)
 		if err != nil {
 			return nil, fmt.Errorf("application environment health: %w", err)
@@ -194,9 +214,15 @@ func (s *Store) ListApplicationEnvironments(ctx context.Context, applicationID s
 
 func (s *Store) ListApplicationServices(ctx context.Context, applicationID string) ([]Service, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT svc.id,svc.application_id,svc.name,svc.repo_url,
-		       COALESCE((SELECT d.stack_kind FROM deployments d WHERE d.service_id=svc.id AND (d.stack_kind<>'' OR d.stack_label<>'') ORDER BY d.created_at DESC,d.id DESC LIMIT 1),''),
-		       COALESCE((SELECT d.stack_label FROM deployments d WHERE d.service_id=svc.id AND (d.stack_kind<>'' OR d.stack_label<>'') ORDER BY d.created_at DESC,d.id DESC LIMIT 1),''),
+		SELECT svc.id,svc.application_id,svc.service_type,svc.name,svc.repo_url,
+		       CASE WHEN svc.service_type='database'
+		            THEN COALESCE((SELECT ds.engine FROM database_services ds WHERE ds.service_id=svc.id),'database')
+		            ELSE COALESCE((SELECT d.stack_kind FROM deployments d WHERE d.service_id=svc.id AND (d.stack_kind<>'' OR d.stack_label<>'') ORDER BY d.created_at DESC,d.id DESC LIMIT 1),'')
+		       END,
+		       CASE WHEN svc.service_type='database'
+		            THEN COALESCE((SELECT ds.engine || ' database' FROM database_services ds WHERE ds.service_id=svc.id),'Database')
+		            ELSE COALESCE((SELECT d.stack_label FROM deployments d WHERE d.service_id=svc.id AND (d.stack_kind<>'' OR d.stack_label<>'') ORDER BY d.created_at DESC,d.id DESC LIMIT 1),'')
+		       END,
 		       svc.github_installation_id,svc.root_directory,svc.deploy_runtime,svc.deploy_install_cmd,svc.deploy_build_cmd,svc.deploy_start_cmd,svc.internal_port,svc.health_check_path,svc.created_at,svc.updated_at
 		FROM services svc WHERE svc.application_id=? ORDER BY svc.name`, strings.TrimSpace(applicationID))
 	if err != nil {
@@ -207,7 +233,7 @@ func (s *Store) ListApplicationServices(ctx context.Context, applicationID strin
 	for rows.Next() {
 		var item Service
 		var created, updated string
-		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.Name, &item.RepoURL, &item.StackKind, &item.StackLabel, &item.GitHubInstallationID, &item.RootDirectory, &item.DeployRuntime, &item.InstallCmd, &item.BuildCmd, &item.StartCmd, &item.InternalPort, &item.HealthCheckPath, &created, &updated); err != nil {
+		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.ServiceType, &item.Name, &item.RepoURL, &item.StackKind, &item.StackLabel, &item.GitHubInstallationID, &item.RootDirectory, &item.DeployRuntime, &item.InstallCmd, &item.BuildCmd, &item.StartCmd, &item.InternalPort, &item.HealthCheckPath, &created, &updated); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = parseTime(created)

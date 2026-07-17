@@ -128,6 +128,39 @@ systemctl --no-pager --full status hostforge-server
 
 After either path, hard-refresh the dashboard with `Ctrl+Shift+R`.
 
+## Database-services upgrade and restore drill
+
+Before restarting into a release that adds database migrations, copy the SQLite database and confirm the encryption key remains present:
+
+```bash
+install -m 0600 -o root -g root /var/lib/hostforge/hostforge.db "/var/lib/hostforge/hostforge.db.pre-database-services.$(date +%Y%m%d%H%M%S)"
+grep -q '^HOSTFORGE_ENV_ENCRYPTION_KEY=' /etc/hostforge/hostforge.env
+grep -q '^HOSTFORGE_DATABASE_MIN_FREE_DISK_BYTES=' /etc/hostforge/hostforge.env || printf '%s\n' 'HOSTFORGE_DATABASE_MIN_FREE_DISK_BYTES=5368709120' >> /etc/hostforge/hostforge.env
+grep -q '^HOSTFORGE_DATABASE_OPERATION_CONCURRENCY=' /etc/hostforge/hostforge.env || printf '%s\n' 'HOSTFORGE_DATABASE_OPERATION_CONCURRENCY=1' >> /etc/hostforge/hostforge.env
+grep -q '^HOSTFORGE_DATABASE_TRANSFER_MAX_PER_HOUR=' /etc/hostforge/hostforge.env || printf '%s\n' 'HOSTFORGE_DATABASE_TRANSFER_MAX_PER_HOUR=60' >> /etc/hostforge/hostforge.env
+```
+
+Run the read-only capacity and exposure audit before provisioning, and again after each engine is added:
+
+```bash
+cd /opt/hostforge
+bash ./scripts/database-services-vps-audit.sh
+```
+
+The audit fails when Docker storage is below the configured reserve, a managed database publishes a host port, or a managed database lacks CPU or memory enforcement. It reports allocated bytes for every labelled HostForge database volume and their combined total, plus Docker image/volume usage, private environment networks, and any standard database ports listening on the host. Run it as root when possible so the volume mountpoints can be measured; inaccessible mountpoints are reported as `unavailable` without weakening the exposure and resource-limit checks. The listener list is diagnostic because the VPS may contain an independently managed database; HostForge ownership and port-publication checks remain label-scoped.
+
+For the complete six-engine drill, start with at least 15 GiB free in Docker storage and preferably 20 GiB. Image layers are shared, so `docker system df -v` on the target host is authoritative; do not estimate total usage by adding every image's virtual size. Running every engine concurrently also requires enough memory for their configured limits plus Docker, HostForge, BuildKit, Caddy, and the operating system.
+
+As a planning allowance, reserve roughly 4–7 GiB for the six initial engine images and freshly initialized staging volumes, in addition to HostForge's 5 GiB safety floor. This is deliberately conservative rather than a quota: real database rows, indexes, temporary files, retained seven-day volumes, Docker build cache, and old image digests determine ongoing usage. Remote backups stream to R2/S3 and are not retained as a second full local archive. Use the audit output before and after each engine to record the actual delta on this VPS.
+
+The default Development presets total 4.5 GiB of enforceable database memory across all six engines. Prefer an 8 GiB or larger VPS for the simultaneous acceptance matrix; on a smaller host, provision and verify engines sequentially and stop completed instances before starting the next one, while still completing the restart and persistence checks for each.
+
+After update, provision one disposable instance of each enabled engine and verify the pinned image, private network, health, CPU/memory limits, and observed volume usage. Connect R2 or S3, create a manual backup, restore it as a new service, and verify known data before testing replace-current. Replace-current must show a successful safety backup and must restart bound application containers.
+
+When a later release changes only a digest within the same catalog version, open the database instance and run the patch-upgrade preflight. It must refuse an unhealthy instance or one without a successful backup from the previous 24 hours. After a qualifying backup, verify the upgrade reuses the same volume, alias, engine version, and limits. A deliberately failing candidate must recreate the previous digest and return the database to healthy state.
+
+Rollback the server binary only after stopping `hostforge-server`; restore the pre-upgrade SQLite copy only when the newer process cannot be recovered. Never remove a `hostforge-db-*` volume as part of application rollback. Keep remote backup objects and the encryption key so a fresh HostForge install can recreate an isolated service and restore the logical backup.
+
 ## If the update fails
 
 Check the service logs first:
