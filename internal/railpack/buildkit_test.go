@@ -97,10 +97,23 @@ func TestBuildKitExecutor_FailsWhenImageImportFails(t *testing.T) {
 func TestBuildKitExecutor_BuildsRepositoryDockerfile(t *testing.T) {
 	t.Parallel()
 	request, _ := preparedBuildInput(t)
+	request.BuildSecrets = map[string]string{"TOKEN": "dockerfile-secret"}
 	if err := os.WriteFile(filepath.Join(request.Worktree, "Dockerfile"), []byte("FROM scratch\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runner := &fakeRunner{run: func(_ string, _ []string, _ string, stdout, _ io.Writer) error {
+	var secretPath string
+	runner := &fakeRunner{run: func(_ string, args []string, _ string, stdout, _ io.Writer) error {
+		for index, arg := range args {
+			if arg == "--secret" && index+1 < len(args) {
+				parts := strings.SplitN(args[index+1], ",src=", 2)
+				if len(parts) == 2 && parts[0] == "id=TOKEN" {
+					secretPath = parts[1]
+				}
+			}
+		}
+		if value, err := os.ReadFile(secretPath); err != nil || string(value) != request.BuildSecrets["TOKEN"] {
+			t.Fatalf("Dockerfile secret unavailable during solve: value=%q err=%v", value, err)
+		}
 		_, _ = io.WriteString(stdout, "docker image tar")
 		return nil
 	}}
@@ -110,6 +123,9 @@ func TestBuildKitExecutor_BuildsRepositoryDockerfile(t *testing.T) {
 	}
 	if result.Kind != builder.KindDockerfile || result.ImageID != "sha256:dockerfile" {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+	if _, err := os.Stat(secretPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Dockerfile secret remains after build: %v", err)
 	}
 	args := strings.Join(runner.calls[0].args, " ")
 	if !strings.Contains(args, "--frontend=dockerfile.v0") || !strings.Contains(args, "filename=Dockerfile") {
@@ -168,7 +184,8 @@ func TestBuildKitExecutor_RejectsMismatchedPreparation(t *testing.T) {
 
 func TestMaterializeBuildSecretsUsesPrivateFilesAndCleansUp(t *testing.T) {
 	t.Parallel()
-	args, cleanup, err := materializeBuildSecrets(map[string]string{"TOKEN": "super-secret", "DATABASE_URL": "postgres://db"})
+	root := t.TempDir()
+	args, cleanup, err := materializeBuildSecrets(root, map[string]string{"TOKEN": "super-secret", "DATABASE_URL": "postgres://db"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,12 +205,63 @@ func TestMaterializeBuildSecretsUsesPrivateFilesAndCleansUp(t *testing.T) {
 		if info.Mode().Perm() != 0o600 {
 			t.Fatalf("secret mode=%o", info.Mode().Perm())
 		}
+		if filepath.Dir(filepath.Dir(parts[1])) != root {
+			t.Fatalf("secret path %q is not rooted beneath %q", parts[1], root)
+		}
 		paths = append(paths, parts[1])
+	}
+	directory := filepath.Dir(paths[0])
+	if info, err := os.Stat(directory); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("secret directory mode: info=%v err=%v", info, err)
 	}
 	cleanup()
 	for _, path := range paths {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("secret file remains at %s: %v", path, err)
 		}
+	}
+	if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("secret directory remains at %s: %v", directory, err)
+	}
+}
+
+func TestBuildKitExecutor_KeepsSecretsVisibleForRailpackSolveAndCleansUp(t *testing.T) {
+	t.Parallel()
+	request, preparation := preparedBuildInput(t)
+	request.BuildSecrets = map[string]string{"DATABASE_URL": "postgres://private-db"}
+	var secretPath string
+	runner := &fakeRunner{run: func(_ string, args []string, _ string, stdout, _ io.Writer) error {
+		for index, arg := range args {
+			if arg != "--secret" || index+1 >= len(args) {
+				continue
+			}
+			parts := strings.SplitN(args[index+1], ",src=", 2)
+			if len(parts) == 2 && strings.HasPrefix(parts[0], "id=DATABASE_URL") {
+				secretPath = parts[1]
+			}
+		}
+		if secretPath == "" {
+			t.Fatal("DATABASE_URL secret argument was not supplied")
+		}
+		value, err := os.ReadFile(secretPath)
+		if err != nil {
+			t.Fatalf("secret unavailable while buildctl is running: %v", err)
+		}
+		if string(value) != request.BuildSecrets["DATABASE_URL"] {
+			t.Fatal("secret content changed before buildctl consumed it")
+		}
+		if filepath.Dir(filepath.Dir(secretPath)) != filepath.Dir(request.Worktree) {
+			t.Fatalf("secret path %q is not beside managed worktree %q", secretPath, request.Worktree)
+		}
+		_, _ = io.WriteString(stdout, "docker image tar")
+		return nil
+	}}
+
+	_, err := testExecutor(t, runner, &fakeImageStore{imageID: "sha256:abc"}).Build(context.Background(), request, preparation, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(secretPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("secret remains after build: %v", err)
 	}
 }

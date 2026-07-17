@@ -108,7 +108,7 @@ func (e *BuildKitExecutor) Build(ctx context.Context, request builder.Request, p
 	if err := validateBuildInput(request, preparation, e.railpackVersion); err != nil {
 		return builder.Result{}, err
 	}
-	secretArgs, cleanup, err := materializeBuildSecrets(request.BuildSecrets)
+	secretArgs, cleanup, err := materializeBuildSecrets(filepath.Dir(request.Worktree), request.BuildSecrets)
 	if err != nil {
 		return builder.Result{}, err
 	}
@@ -136,7 +136,7 @@ func (e *BuildKitExecutor) BuildDockerfile(ctx context.Context, request builder.
 	if err := validateDockerfileBuildInput(request); err != nil {
 		return builder.Result{}, err
 	}
-	secretArgs, cleanup, err := materializeBuildSecrets(request.BuildSecrets)
+	secretArgs, cleanup, err := materializeBuildSecrets(filepath.Dir(request.Worktree), request.BuildSecrets)
 	if err != nil {
 		return builder.Result{}, err
 	}
@@ -249,11 +249,18 @@ func validateDockerfileBuildInput(request builder.Request) error {
 	return nil
 }
 
-func materializeBuildSecrets(secrets map[string]string) ([]string, func(), error) {
+func materializeBuildSecrets(root string, secrets map[string]string) ([]string, func(), error) {
 	if len(secrets) == 0 {
 		return nil, func() {}, nil
 	}
-	directory, err := os.MkdirTemp("", "hostforge-build-secrets-")
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil, func() {}, errors.New("build secret root is required")
+	}
+	// HostForge runs with systemd PrivateTmp enabled. Keep buildctl inputs beside
+	// the platform-managed worktrees instead of in the service's private /tmp so
+	// the BuildKit client/session can reliably stat and stream them.
+	directory, err := os.MkdirTemp(root, ".hostforge-build-secrets-")
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("create build secret directory: %w", err)
 	}
