@@ -43,6 +43,16 @@
 .hf-log-stage-system { color: #a9afa5; }
 .hf-log-message { color: #d7dbd2; }
 
+.hf-terminal-wrap .hf-log-line {
+  width: 100%;
+  min-width: 0;
+}
+
+.hf-terminal-wrap .hf-log-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .hf-log-toggle {
   display: inline-flex;
   height: 2.1rem;
