@@ -214,6 +214,14 @@ func TestRunManagedDatabaseGatewayIsHardenedAndPublishesOnlyPostgreSQL(t *testin
 			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 				t.Fatal(err)
 			}
+			entrypoint, ok := payload["Entrypoint"].([]any)
+			if !ok || len(entrypoint) != 0 {
+				t.Fatalf("gateway image entrypoint was not reset: %+v", payload["Entrypoint"])
+			}
+			command, ok := payload["Cmd"].([]any)
+			if !ok || len(command) != 2 || command[0] != "pgbouncer" || command[1] != "/etc/hostforge-gateway/current/pgbouncer.ini" {
+				t.Fatalf("gateway command is not deterministic: %+v", payload["Cmd"])
+			}
 			hostConfig, ok := payload["HostConfig"].(map[string]any)
 			if !ok {
 				t.Fatalf("missing host config: %+v", payload)

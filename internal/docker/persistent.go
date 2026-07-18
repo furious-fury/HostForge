@@ -355,8 +355,9 @@ func RunManagedDatabaseGateway(ctx context.Context, cli *client.Client, opts Man
 	postgresPort := network.MustParsePort("5432/tcp")
 	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config: &container.Config{
-			Image: imageRef,
-			Cmd:   []string{"pgbouncer", "/etc/hostforge-gateway/current/pgbouncer.ini"},
+			Image:      imageRef,
+			Entrypoint: []string{},
+			Cmd:        []string{"pgbouncer", "/etc/hostforge-gateway/current/pgbouncer.ini"},
 			Labels: map[string]string{
 				ManagedLabel:       "true",
 				ResourceTypeLabel:  "database-gateway-container",

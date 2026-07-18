@@ -17,7 +17,7 @@ The connection URLs returned by HostForge are secrets. Keep them in environment 
 ```bash
 ssh "$VPS_HOST" 'grep -q "^HOSTFORGE_DATABASE_GATEWAYS_ENABLED=false$" /etc/hostforge/hostforge.env'
 ssh "$VPS_HOST" 'cd /opt/hostforge && ./scripts/vps-update-and-smoke.sh'
-ssh "$VPS_HOST" 'cd /opt/hostforge && HF_EXPECT_DATABASE_GATEWAY_STATE=absent ./scripts/database-services-vps-audit.sh'
+ssh "$VPS_HOST" 'cd /opt/hostforge && HF_EXPECT_DATABASE_GATEWAY_STATE=absent bash ./scripts/database-services-vps-audit.sh'
 ssh "$VPS_HOST" 'if ss -lntH "sport = :5432" | grep -q .; then echo "unexpected TCP/5432 listener" >&2; exit 1; fi'
 ```
 
@@ -38,7 +38,7 @@ ssh -t "$VPS_HOST" 'sudoedit /etc/hostforge/hostforge.env'
 ssh "$VPS_HOST" 'systemctl restart hostforge-server && systemctl is-active --quiet hostforge-server'
 ssh "$VPS_HOST" 'if ss -lntH "sport = :5432" | grep -q .; then echo "gateway activated before provisioning" >&2; exit 1; fi'
 # Provision the gateway in Database settings and wait for its operation to succeed.
-ssh "$VPS_HOST" 'cd /opt/hostforge && HF_EXPECT_DATABASE_GATEWAY_STATE=active ./scripts/database-services-vps-audit.sh'
+ssh "$VPS_HOST" 'cd /opt/hostforge && HF_EXPECT_DATABASE_GATEWAY_STATE=active bash ./scripts/database-services-vps-audit.sh'
 ```
 
 Do not make `true` the repository, installer, or production default after Phase B. The flag remains a staging-only override until every acceptance section passes and the test connections are revoked.
@@ -135,7 +135,7 @@ For a connection that remains active:
 Run the audit after each restart/upgrade/delete boundary:
 
 ```bash
-ssh "$VPS_HOST" 'cd /opt/hostforge && ./scripts/database-services-vps-audit.sh'
+ssh "$VPS_HOST" 'cd /opt/hostforge && bash ./scripts/database-services-vps-audit.sh'
 ```
 
 ## 7. Sign-off

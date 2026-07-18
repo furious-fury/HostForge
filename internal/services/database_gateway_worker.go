@@ -352,6 +352,9 @@ func ensurePostgreSQLGatewayDataPlane(ctx context.Context, log *slog.Logger, cfg
 	} else if inspection, inspectErr := docker.InspectManagedContainer(ctx, client, containerID); inspectErr != nil || inspection.Labels[docker.ResourceTypeLabel] != "database-gateway-container" || inspection.Labels[docker.GatewayEngineLabel] != endpoint.Engine {
 		return ErrCode("database_gateway_container_drift", errors.New("gateway container is missing or ownership does not match"))
 	}
+	if err := ValidatePostgreSQLGatewayContainerImage(ctx, client, containerID, endpoint.ImageVersion); err != nil {
+		return ErrCode("database_gateway_image_unavailable", err)
+	}
 	if err := docker.ValidateDatabaseGatewayNetworkMembership(ctx, client, endpoint.IngressNetworkName, "database-gateway-ingress", containerID); err != nil {
 		return ErrCode("database_gateway_network_drift", err)
 	}
