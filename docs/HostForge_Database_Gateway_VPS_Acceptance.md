@@ -6,20 +6,41 @@ The connection URLs returned by HostForge are secrets. Keep them in environment 
 
 ## 1. Prerequisites and activation
 
-1. Point `postgres.<platform-domain>` A and, when supported, AAAA records at the staging VPS.
+### Phase A: deploy disabled
+
+1. Confirm `/etc/hostforge/hostforge.env` explicitly contains `HOSTFORGE_DATABASE_GATEWAYS_ENABLED=false`. Do not rely only on the compiled default for this first deployment.
 2. Configure `HOSTFORGE_POSTGRES_GATEWAY_IMAGE` with a reviewed digest-pinned image containing both PgBouncer and `psql`, and set `HOSTFORGE_POSTGRES_GATEWAY_VERSION` to its version, which must be at least 1.25.2.
-3. Verify TCP/5432 is either free or already owned by HostForge's labelled PostgreSQL gateway. The privileged installer fails closed for any foreign listener.
-4. Set `HOSTFORGE_DATABASE_GATEWAYS_ENABLED=true`, leave operation concurrency at one for the first run, and run the standard update helper.
-5. Confirm Caddy issued a certificate whose SAN exactly matches the reserved hostname and that TCP/5432 is allowed through the host/provider firewalls.
-6. In Database settings, provision the PostgreSQL gateway. Wait for the durable operation and TLS/auth probe to report success.
-7. Provision one healthy PostgreSQL database instance for the test environment. Keep Production and Staging instance IDs in the acceptance record.
+3. Verify TCP/5432 is free. The privileged installer fails closed for any foreign listener.
+4. Deploy the candidate release with the standard update helper and run the isolation audit.
+5. Verify HostForge is healthy, gateway APIs report the feature disabled, no gateway container exists, and no process listens on TCP/5432.
 
 ```bash
+ssh "$VPS_HOST" 'grep -q "^HOSTFORGE_DATABASE_GATEWAYS_ENABLED=false$" /etc/hostforge/hostforge.env'
 ssh "$VPS_HOST" 'cd /opt/hostforge && ./scripts/vps-update-and-smoke.sh'
+ssh "$VPS_HOST" 'cd /opt/hostforge && ./scripts/database-services-vps-audit.sh'
+ssh "$VPS_HOST" 'if ss -lntH "sport = :5432" | grep -q .; then echo "unexpected TCP/5432 listener" >&2; exit 1; fi'
+```
+
+A listener, gateway container, or successful gateway mutation during Phase A is a blocking failure. Private database containers must still have no host port bindings.
+
+### Phase B: enable on staging only
+
+1. Point `postgres.<platform-domain>` A and, when supported, AAAA records at the staging VPS.
+2. Confirm Caddy issued a certificate whose SAN exactly matches the reserved hostname and TCP/5432 is allowed through both host and provider firewalls.
+3. Change only the staging VPS environment to `HOSTFORGE_DATABASE_GATEWAYS_ENABLED=true`, leave operation concurrency at one, and restart `hostforge-server`.
+4. Confirm the gateway status API reports the feature enabled but TCP/5432 remains unused before lazy provisioning.
+5. Provision one healthy PostgreSQL database instance for the test environment. Keep Production and Staging instance IDs in the acceptance record.
+6. In Database settings, provision the PostgreSQL gateway. Wait for the durable operation and TLS/auth probe to report success.
+7. Run the isolation audit again. It must show exactly one hardened gateway container and only its owned port 5432.
+
+```bash
+ssh -t "$VPS_HOST" 'sudoedit /etc/hostforge/hostforge.env'
+ssh "$VPS_HOST" 'systemctl restart hostforge-server && systemctl is-active --quiet hostforge-server'
+ssh "$VPS_HOST" 'if ss -lntH "sport = :5432" | grep -q .; then echo "gateway activated before provisioning" >&2; exit 1; fi'
 ssh "$VPS_HOST" 'cd /opt/hostforge && ./scripts/database-services-vps-audit.sh'
 ```
 
-The first audit must show exactly one hardened gateway container and only its owned port 5432. Private database containers must have no host port bindings.
+Do not make `true` the repository, installer, or production default after Phase B. The flag remains a staging-only override until every acceptance section passes and the test connections are revoked.
 
 ## 2. Permission and TLS fixture
 
