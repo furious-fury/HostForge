@@ -108,6 +108,7 @@ ssh "$VPS_HOST" 'cd /opt/hostforge && bash ./scripts/database-services-vps-audit
 7. Delete one instance, restore it within seven days, then delete it again and confirm only the labelled volume is purged after the retention deadline.
 8. Re-run `database-services-vps-audit.sh` after provisioning and after the Docker restart; attach its disk, limit, network, and exposure output to the acceptance record.
 9. When a same-version catalog digest update is available, verify patch preflight requires a successful backup no older than 24 hours, then confirm volume/alias reuse and previous-digest rollback on a failed health check.
+10. Complete the PostgreSQL public gateway matrix in [HostForge_Database_Gateway_VPS_Acceptance.md](HostForge_Database_Gateway_VPS_Acceptance.md) while the feature remains staging-only.
 
 ```text
 Migration and backup: PASS/FAIL

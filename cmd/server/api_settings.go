@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -279,6 +280,21 @@ func (s *server) handleSettingsPlatformDomainUpdate(w http.ResponseWriter, r *ht
 		writeJSON(w, http.StatusOK, map[string]any{"status": "unchanged", "platform_domain": current})
 		return
 	}
+	// Serialize the database transition, Caddy replacement, route sync, and any
+	// rollback against public-gateway mutations in this control-plane process.
+	s.databaseGatewayDomainMu.Lock()
+	defer s.databaseGatewayDomainMu.Unlock()
+
+	if err := s.store.CheckDatabaseGatewayDomainChangeAllowed(r.Context()); errors.Is(err, repository.ErrGatewayHasActiveConnections) {
+		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "database_gateway_has_active_connections"})
+		return
+	} else if errors.Is(err, repository.ErrGatewayTeardownRequired) {
+		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "database_gateway_teardown_required"})
+		return
+	} else if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "database_gateway_state_check_failed"})
+		return
+	}
 	expectedIPv4, _, _ := dnsops.ResolveExpectedIPv4(r.Context(), s.cfg)
 	if expectedIPv4 == "" {
 		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "expected_public_ipv4_unavailable"})
@@ -303,6 +319,14 @@ func (s *server) handleSettingsPlatformDomainUpdate(w http.ResponseWriter, r *ht
 		return
 	}
 	if err := s.store.UpdatePlatformDomain(r.Context(), current, next); err != nil {
+		if errors.Is(err, repository.ErrGatewayHasActiveConnections) || errors.Is(err, repository.ErrGatewayTeardownRequired) {
+			code := "database_gateway_teardown_required"
+			if errors.Is(err, repository.ErrGatewayHasActiveConnections) {
+				code = "database_gateway_has_active_connections"
+			}
+			writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": code})
+			return
+		}
 		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "platform_domain_update_failed"})
 		return
 	}

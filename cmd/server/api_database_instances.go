@@ -22,6 +22,14 @@ func (s *server) handleDatabaseInstances(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	action := strings.ToLower(parts[1])
+	if action == "external-access" && r.Method == http.MethodGet {
+		s.handleDatabaseInstanceExternalAccess(w, r, parts[0])
+		return
+	}
+	if action == "external-connections" && r.Method == http.MethodPost {
+		s.handleDatabaseInstanceExternalConnections(w, r, parts[0])
+		return
+	}
 	if action == "upgrade" && (r.Method == http.MethodGet || r.Method == http.MethodPost) {
 		s.handleDatabaseInstanceUpgrade(w, r, parts[0])
 		return

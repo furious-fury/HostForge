@@ -72,6 +72,8 @@ func TestApplyMigrationsCreatesFinalServiceSchema(t *testing.T) {
 	for _, table := range []string{
 		"database_services", "database_instances", "database_credentials", "database_bindings",
 		"backup_destinations", "database_backup_policies", "database_backups", "database_operations", "database_restore_jobs", "database_upgrade_jobs",
+		"database_gateway_endpoints", "database_gateway_routes", "database_external_connections",
+		"database_external_credentials", "database_external_connection_cidrs", "database_gateway_operations",
 	} {
 		var count int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil || count != 1 {

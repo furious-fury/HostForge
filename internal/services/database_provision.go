@@ -18,6 +18,7 @@ import (
 
 	"github.com/containerd/errdefs"
 	backupstorage "github.com/hostforge/hostforge/internal/backups"
+	"github.com/hostforge/hostforge/internal/config"
 	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
 	"github.com/hostforge/hostforge/internal/databases"
 	"github.com/hostforge/hostforge/internal/docker"
@@ -31,7 +32,7 @@ type DatabaseConnectionInput struct {
 	ReplaceExisting   bool
 }
 
-func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, operation repository.DatabaseOperation, fail func(string, error)) {
+func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, operation repository.DatabaseOperation, fail func(string, error), gatewayCfg *config.Config) {
 	job, err := store.GetDatabaseUpgradeJob(ctx, operation.ID)
 	if err != nil {
 		fail("database_upgrade_job_missing", err)
@@ -47,6 +48,19 @@ func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *reposi
 		return
 	}
 	if instance.ImageRef == job.TargetImageRef && instance.Status == "healthy" {
+		if gatewayCfg != nil {
+			client, clientErr := docker.NewClient(ctx)
+			if clientErr != nil {
+				fail("docker_unavailable", clientErr)
+				return
+			}
+			resumeErr := resumePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance.ID)
+			_ = client.Close()
+			if resumeErr != nil {
+				fail("database_gateway_route_resume_failed", resumeErr)
+				return
+			}
+		}
 		_ = store.UpdateDatabaseUpgradeJobStatus(ctx, operation.ID, "success")
 		_, _ = store.UpdateDatabaseOperation(ctx, operation.ID, "success", "upgrade_complete", 100, "", "")
 		return
@@ -113,6 +127,13 @@ func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *reposi
 		fail("database_upgrade_image_pull_failed", err)
 		return
 	}
+	if databaseService.Engine == "postgresql" && gatewayCfg != nil {
+		if err := pausePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance); err != nil {
+			_ = store.UpdateDatabaseUpgradeJobStatus(ctx, operation.ID, "failed")
+			fail("database_gateway_route_pause_failed", err)
+			return
+		}
+	}
 	stoppedConsumers, err := stopDatabaseConsumers(ctx, store, client, instance)
 	if err != nil {
 		_ = store.UpdateDatabaseUpgradeJobStatus(ctx, operation.ID, "failed")
@@ -169,6 +190,13 @@ func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *reposi
 		_, targetErr = store.CommitDatabaseInstanceUpgrade(ctx, instance.ID, job.PreviousImageRef, job.TargetImageRef, targetContainerID)
 	}
 	if targetErr == nil {
+		if databaseService.Engine == "postgresql" && gatewayCfg != nil {
+			if resumeErr := resumePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance.ID); resumeErr != nil {
+				_ = store.UpdateDatabaseUpgradeJobStatus(ctx, operation.ID, "failed")
+				fail("database_gateway_route_resume_failed", resumeErr)
+				return
+			}
+		}
 		_ = store.UpdateDatabaseUpgradeJobStatus(ctx, operation.ID, "success")
 		_, _ = store.UpdateDatabaseOperation(ctx, operation.ID, "success", "upgrade_complete", 100, "", "")
 		if log != nil {
@@ -191,6 +219,11 @@ func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *reposi
 		return
 	}
 	_, _ = store.UpdateDatabaseInstanceState(context.WithoutCancel(ctx), instance.ID, repository.UpdateDatabaseInstanceStateInput{DockerContainerID: rollbackContainerID, DesiredState: "running", Status: "healthy", HealthMessage: "ready", HealthCheckedAt: time.Now().UTC()})
+	if databaseService.Engine == "postgresql" && gatewayCfg != nil {
+		if resumeErr := resumePostgreSQLGatewayRoute(rollbackCtx, log, gatewayCfg, store, sealer, client, instance.ID); resumeErr != nil && log != nil {
+			log.Error("database gateway route remained disabled after upgrade rollback", "instance_id", instance.ID, "error", resumeErr)
+		}
+	}
 	_ = store.UpdateDatabaseUpgradeJobStatus(context.WithoutCancel(ctx), operation.ID, "rolled_back")
 	fail("database_upgrade_failed_rolled_back", fmt.Errorf("patch image failed and the previous image was restored: %w", targetErr))
 }
@@ -354,7 +387,7 @@ func PrepareManagedDatabase(ctx context.Context, store *repository.Store, sealer
 	return created, err
 }
 
-func StartDatabaseOperationLoop(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dataDir string, minFreeDiskBytes int64, concurrency int) {
+func StartDatabaseOperationLoop(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dataDir string, minFreeDiskBytes int64, concurrency int, gatewayCfg *config.Config) {
 	if sealer == nil {
 		if log != nil {
 			log.Warn("database operation worker disabled; encryption key is not configured")
@@ -376,11 +409,11 @@ func StartDatabaseOperationLoop(ctx context.Context, log *slog.Logger, store *re
 			return
 		}
 		workerID := fmt.Sprintf("hostforge-%d-%d-%s", os.Getpid(), workerIndex, workerToken)
-		go runDatabaseOperationWorker(ctx, log, store, sealer, dataDir, minFreeDiskBytes, workerID)
+		go runDatabaseOperationWorker(ctx, log, store, sealer, dataDir, minFreeDiskBytes, workerID, gatewayCfg)
 	}
 }
 
-func runDatabaseOperationWorker(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dataDir string, minFreeDiskBytes int64, workerID string) {
+func runDatabaseOperationWorker(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dataDir string, minFreeDiskBytes int64, workerID string, gatewayCfg *config.Config) {
 	const leaseDuration = 2 * time.Minute
 	const leaseRefresh = 30 * time.Second
 	ticker := time.NewTicker(2 * time.Second)
@@ -418,7 +451,7 @@ func runDatabaseOperationWorker(ctx context.Context, log *slog.Logger, store *re
 					}
 				}
 			}(operation.ID)
-			processDatabaseOperation(operationCtx, log, store, sealer, operation, dataDir, minFreeDiskBytes)
+			processDatabaseOperation(operationCtx, log, store, sealer, operation, dataDir, minFreeDiskBytes, gatewayCfg)
 			cancelOperation()
 			<-leaseDone
 		}
@@ -430,7 +463,7 @@ func runDatabaseOperationWorker(ctx context.Context, log *slog.Logger, store *re
 	}
 }
 
-func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, operation repository.DatabaseOperation, dataDir string, minFreeDiskBytes int64) {
+func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, operation repository.DatabaseOperation, dataDir string, minFreeDiskBytes int64, gatewayCfg *config.Config) {
 	defer func() {
 		completed, err := store.GetDatabaseOperation(context.WithoutCancel(ctx), operation.ID)
 		if err != nil || (completed.Status != "success" && completed.Status != "failed" && completed.Status != "cancelled") {
@@ -487,10 +520,10 @@ func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repo
 		processDatabaseCredentialRotation(ctx, log, store, sealer, operation, fail)
 		return
 	case "upgrade":
-		processDatabaseUpgrade(ctx, log, store, sealer, operation, fail)
+		processDatabaseUpgrade(ctx, log, store, sealer, operation, fail, gatewayCfg)
 		return
 	case "start", "stop", "restart":
-		processDatabaseRuntimeOperation(ctx, log, store, sealer, operation, fail)
+		processDatabaseRuntimeOperation(ctx, log, store, sealer, operation, fail, gatewayCfg)
 		return
 	case "provision", "restore_deleted":
 	default:
@@ -1246,6 +1279,7 @@ func processDatabaseRuntimeOperation(
 	sealer *envcrypt.Sealer,
 	operation repository.DatabaseOperation,
 	fail func(string, error),
+	gatewayCfg *config.Config,
 ) {
 	instance, err := store.GetDatabaseInstance(ctx, operation.DatabaseInstanceID)
 	if err != nil {
@@ -1281,6 +1315,12 @@ func processDatabaseRuntimeOperation(
 	if !engineFound {
 		fail("database_engine_unsupported", fmt.Errorf("engine %s is unavailable", databaseService.Engine))
 		return
+	}
+	if databaseService.Engine == "postgresql" && gatewayCfg != nil {
+		if err := pausePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance); err != nil {
+			fail("database_gateway_route_pause_failed", err)
+			return
+		}
 	}
 	_, _ = store.UpdateDatabaseOperation(ctx, operation.ID, "running", operation.OperationType, 50, "", "")
 	if operation.OperationType == "stop" {
@@ -1344,6 +1384,12 @@ func processDatabaseRuntimeOperation(
 	}); err != nil {
 		fail("database_state_update_failed", err)
 		return
+	}
+	if databaseService.Engine == "postgresql" && gatewayCfg != nil {
+		if err := resumePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance.ID); err != nil {
+			fail("database_gateway_route_resume_failed", err)
+			return
+		}
 	}
 	_, _ = store.UpdateDatabaseOperation(ctx, operation.ID, "success", "ready", 100, "", "")
 	if log != nil {

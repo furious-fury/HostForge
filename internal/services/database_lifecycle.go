@@ -2,11 +2,14 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/hostforge/hostforge/internal/config"
+	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
 	"github.com/hostforge/hostforge/internal/databases"
 	"github.com/hostforge/hostforge/internal/docker"
 	"github.com/hostforge/hostforge/internal/repository"
@@ -21,7 +24,7 @@ type DeleteDatabaseRuntimeResult struct {
 
 // DeleteDatabaseServiceAndRuntime removes only the database containers and then
 // starts the retained-volume window. Named volumes are deliberately untouched.
-func DeleteDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, store *repository.Store, serviceID, actor string) (DeleteDatabaseRuntimeResult, error) {
+func DeleteDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, serviceID, actor string) (DeleteDatabaseRuntimeResult, error) {
 	service, err := store.GetService(ctx, serviceID)
 	if err != nil {
 		return DeleteDatabaseRuntimeResult{}, err
@@ -42,18 +45,33 @@ func DeleteDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, stor
 		return DeleteDatabaseRuntimeResult{}, ErrCode("database_operation_in_progress", err)
 	}
 	needsDocker := false
+	hasGatewayRoute := false
 	for _, instance := range instances {
 		if strings.TrimSpace(instance.DockerContainerID) != "" {
 			needsDocker = true
-			break
+		}
+		if _, routeErr := store.GetDatabaseGatewayRouteByInstance(ctx, instance.ID); routeErr == nil {
+			hasGatewayRoute = true
+		} else if !errors.Is(routeErr, repository.ErrDatabaseGatewayRouteNotFound) {
+			return DeleteDatabaseRuntimeResult{}, ErrCode("database_gateway_route_lookup_failed", routeErr)
 		}
 	}
-	if needsDocker {
+	if needsDocker || hasGatewayRoute {
 		client, err := docker.NewClient(ctx)
 		if err != nil {
 			return DeleteDatabaseRuntimeResult{}, ErrCode("docker_unavailable", err)
 		}
 		defer client.Close()
+		if hasGatewayRoute {
+			if cfg == nil || sealer == nil {
+				return DeleteDatabaseRuntimeResult{}, ErrCode("database_gateway_revocation_unavailable", errors.New("gateway configuration and encryption key are required to revoke external access"))
+			}
+			for _, instance := range instances {
+				if err := revokePostgreSQLGatewayRouteForDeletion(ctx, log, cfg, store, sealer, client, instance); err != nil {
+					return DeleteDatabaseRuntimeResult{}, ErrCode("database_gateway_revocation_failed", err)
+				}
+			}
+		}
 		for _, instance := range instances {
 			containerID := strings.TrimSpace(instance.DockerContainerID)
 			if containerID == "" {

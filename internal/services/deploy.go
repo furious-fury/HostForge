@@ -423,6 +423,7 @@ func SyncCaddyRoutes(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 	}
 	var routes []caddy.Route
 	var activeDomainIDs []string
+	var certificateDomains []string
 	for _, domainRoute := range domainRoutes {
 		if domainRoute.HostPort <= 0 {
 			log.Warn("domain has no successful deployment upstream yet", "domain", domainRoute.DomainName)
@@ -437,11 +438,15 @@ func SyncCaddyRoutes(ctx context.Context, log *slog.Logger, cfg *config.Config, 
 		})
 		activeDomainIDs = append(activeDomainIDs, domainRoute.ID)
 	}
+	if endpoint, endpointErr := store.GetDatabaseGatewayEndpoint(ctx, "postgresql"); endpointErr == nil && endpoint.DesiredStatus == "active" {
+		certificateDomains = append(certificateDomains, endpoint.Hostname)
+	}
 	syncRes, err := caddy.Sync(ctx, caddy.SyncOptions{
-		CaddyBin:      cfg.CaddyBin,
-		GeneratedPath: cfg.CaddyGeneratedPath,
-		RootConfig:    cfg.CaddyRootConfig,
-		Routes:        routes,
+		CaddyBin:           cfg.CaddyBin,
+		GeneratedPath:      cfg.CaddyGeneratedPath,
+		RootConfig:         cfg.CaddyRootConfig,
+		Routes:             routes,
+		CertificateDomains: certificateDomains,
 	})
 	if err != nil {
 		for _, domainID := range activeDomainIDs {

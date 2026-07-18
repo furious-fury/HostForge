@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -198,6 +199,149 @@ func TestRunManagedContainerHasNoPublishedPortsAndUsesLimits(t *testing.T) {
 	}
 	if id != "container-1" {
 		t.Fatalf("container id=%q", id)
+	}
+}
+
+func TestRunManagedDatabaseGatewayIsHardenedAndPublishesOnlyPostgreSQL(t *testing.T) {
+	var calls atomic.Int32
+	dockerClient := newDockerHTTPTestClient(t, func(request *http.Request) (*http.Response, error) {
+		switch calls.Add(1) {
+		case 1:
+			if request.Method != http.MethodPost || !strings.Contains(request.URL.Path, "/containers/create") {
+				t.Fatalf("unexpected create request %s %s", request.Method, request.URL.Path)
+			}
+			var payload map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			hostConfig, ok := payload["HostConfig"].(map[string]any)
+			if !ok {
+				t.Fatalf("missing host config: %+v", payload)
+			}
+			if hostConfig["ReadonlyRootfs"] != true {
+				t.Fatalf("gateway root filesystem is writable: %+v", hostConfig)
+			}
+			capDrop, _ := hostConfig["CapDrop"].([]any)
+			securityOpt, _ := hostConfig["SecurityOpt"].([]any)
+			if len(capDrop) != 1 || capDrop[0] != "ALL" || len(securityOpt) != 1 || securityOpt[0] != "no-new-privileges" {
+				t.Fatalf("gateway capabilities are not hardened: %+v", hostConfig)
+			}
+			bindings, ok := hostConfig["PortBindings"].(map[string]any)
+			if !ok || len(bindings) != 1 || bindings["5432/tcp"] == nil {
+				t.Fatalf("gateway did not publish exactly PostgreSQL: %+v", hostConfig["PortBindings"])
+			}
+			mounts, _ := hostConfig["Mounts"].([]any)
+			if len(mounts) != 1 {
+				t.Fatalf("gateway has unexpected mounts: %+v", mounts)
+			}
+			mount := mounts[0].(map[string]any)
+			if mount["Target"] != "/etc/hostforge-gateway" || mount["ReadOnly"] != true || strings.Contains(strings.ToLower(fmt.Sprint(mount["Source"])), "docker.sock") {
+				t.Fatalf("gateway config mount is unsafe: %+v", mount)
+			}
+			labels, _ := payload["Labels"].(map[string]any)
+			if labels[ResourceTypeLabel] != "database-gateway-container" || labels[GatewayEngineLabel] != "postgresql" {
+				t.Fatalf("gateway ownership labels missing: %+v", labels)
+			}
+			return dockerResponse(request, http.StatusCreated, `{"Id":"gateway-1","Warnings":[]}`), nil
+		case 2:
+			return dockerResponse(request, http.StatusNoContent, ""), nil
+		default:
+			t.Fatalf("unexpected extra Docker request")
+			return nil, nil
+		}
+	})
+	id, err := RunManagedDatabaseGateway(context.Background(), dockerClient, ManagedDatabaseGatewayOptions{Engine: "postgresql", ImageRef: "pgbouncer@sha256:pinned", ContainerName: "hostforge-database-gateway-postgresql", IngressNetwork: "hostforge-database-gateway-postgresql-ingress", ConfigDir: t.TempDir(), HostPort: 5432})
+	if err != nil || id != "gateway-1" {
+		t.Fatalf("gateway id=%q err=%v", id, err)
+	}
+}
+
+func TestEnsureDatabaseGatewayLinkNetworkCarriesRouteAndInstanceOwnership(t *testing.T) {
+	var calls atomic.Int32
+	dockerClient := newDockerHTTPTestClient(t, func(request *http.Request) (*http.Response, error) {
+		switch calls.Add(1) {
+		case 1:
+			return dockerResponse(request, http.StatusNotFound, `{"message":"not found"}`), nil
+		case 2:
+			var payload struct {
+				Name   string            `json:"Name"`
+				Labels map[string]string `json:"Labels"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Labels[ResourceTypeLabel] != "database-gateway-link" || payload.Labels[GatewayRouteLabel] != "route-1" || payload.Labels[InstanceIDLabel] != "instance-1" {
+				t.Fatalf("link ownership labels=%+v", payload.Labels)
+			}
+			return dockerResponse(request, http.StatusCreated, `{"Id":"link-1"}`), nil
+		default:
+			t.Fatalf("unexpected extra Docker request")
+			return nil, nil
+		}
+	})
+	if _, err := EnsureDatabaseGatewayLinkNetwork(context.Background(), dockerClient, "postgresql", "route-1", "instance-1", "hostforge-link-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateDatabaseGatewayNetworkMembershipRejectsForeignContainers(t *testing.T) {
+	dockerClient := newDockerHTTPTestClient(t, func(request *http.Request) (*http.Response, error) {
+		return dockerResponse(request, http.StatusOK, `{"Id":"link-1","Name":"hostforge-link-1","Labels":{"dev.hostforge.managed":"true","dev.hostforge.resource-type":"database-gateway-link"},"Containers":{"gateway-container":{},"database-container":{},"foreign-container":{}}}`), nil
+	})
+	err := ValidateDatabaseGatewayNetworkMembership(context.Background(), dockerClient, "hostforge-link-1", "database-gateway-link", "gateway-container", "database-container")
+	if err == nil || !strings.Contains(err.Error(), "foreign container") {
+		t.Fatalf("foreign gateway link member was accepted: %v", err)
+	}
+}
+
+func TestValidateDatabaseGatewayNetworkMembershipAcceptsOnlyReconciledContainers(t *testing.T) {
+	dockerClient := newDockerHTTPTestClient(t, func(request *http.Request) (*http.Response, error) {
+		return dockerResponse(request, http.StatusOK, `{"Id":"link-1","Name":"hostforge-link-1","Labels":{"dev.hostforge.managed":"true","dev.hostforge.resource-type":"database-gateway-link"},"Containers":{"gateway-container-full-id":{},"database-container-full-id":{}}}`), nil
+	})
+	if err := ValidateDatabaseGatewayNetworkMembership(context.Background(), dockerClient, "hostforge-link-1", "database-gateway-link", "gateway-container", "database-container"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemoveDatabaseGatewayLinkNetworkIfEmptyRequiresRouteOwnership(t *testing.T) {
+	var calls atomic.Int32
+	dockerClient := newDockerHTTPTestClient(t, func(request *http.Request) (*http.Response, error) {
+		switch calls.Add(1) {
+		case 1:
+			return dockerResponse(request, http.StatusOK, `{"Id":"link-1","Name":"hostforge-link-1","Labels":{"dev.hostforge.managed":"true","dev.hostforge.resource-type":"database-gateway-link","dev.hostforge.database-gateway-route-id":"route-1"},"Containers":{}}`), nil
+		case 2:
+			if request.Method != http.MethodDelete || !strings.Contains(request.URL.Path, "/networks/link-1") {
+				t.Fatalf("unexpected network removal request %s %s", request.Method, request.URL.Path)
+			}
+			return dockerResponse(request, http.StatusNoContent, ""), nil
+		default:
+			t.Fatalf("unexpected extra Docker request")
+			return nil, nil
+		}
+	})
+	removed, err := RemoveDatabaseGatewayLinkNetworkIfEmpty(context.Background(), dockerClient, "hostforge-link-1", "route-1")
+	if err != nil || !removed {
+		t.Fatalf("removed=%t err=%v", removed, err)
+	}
+}
+
+func TestRemoveDatabaseGatewayLinkNetworkRefusesWrongRoute(t *testing.T) {
+	dockerClient := newDockerHTTPTestClient(t, func(request *http.Request) (*http.Response, error) {
+		return dockerResponse(request, http.StatusOK, `{"Id":"link-1","Name":"hostforge-link-1","Labels":{"dev.hostforge.managed":"true","dev.hostforge.resource-type":"database-gateway-link","dev.hostforge.database-gateway-route-id":"route-2"},"Containers":{}}`), nil
+	})
+	removed, err := RemoveDatabaseGatewayLinkNetworkIfEmpty(context.Background(), dockerClient, "hostforge-link-1", "route-1")
+	if err == nil || removed || !strings.Contains(err.Error(), "matching gateway route ownership") {
+		t.Fatalf("wrong-route network removal was accepted: removed=%t err=%v", removed, err)
+	}
+}
+
+func TestRemoveDatabaseGatewayLinkNetworkTreatsMissingAsRemoved(t *testing.T) {
+	dockerClient := newDockerHTTPTestClient(t, func(request *http.Request) (*http.Response, error) {
+		return dockerResponse(request, http.StatusNotFound, `{"message":"network not found"}`), nil
+	})
+	removed, err := RemoveDatabaseGatewayLinkNetworkIfEmpty(context.Background(), dockerClient, "hostforge-link-1", "route-1")
+	if err != nil || !removed {
+		t.Fatalf("missing link is not idempotent: removed=%t err=%v", removed, err)
 	}
 }
 

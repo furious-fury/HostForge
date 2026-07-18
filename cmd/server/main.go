@@ -177,10 +177,11 @@ func runServer(log *slog.Logger, args []string) int {
 		envSealer = sealer
 	}
 	services.StartDatabaseReconciliationLoop(context.Background(), log, store, envSealer)
-	services.StartDatabaseOperationLoop(context.Background(), log, store, envSealer, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg.DatabaseOperationConcurrency)
+	services.StartDatabaseOperationLoop(context.Background(), log, store, envSealer, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg.DatabaseOperationConcurrency, cfg)
 	services.StartDatabasePurgeLoop(context.Background(), log, store)
 	services.StartDatabaseBackupScheduleLoop(context.Background(), log, store, cfg.DatabaseTransferMaxPerHour)
 	services.StartDatabaseBackupRetentionLoop(context.Background(), log, store, envSealer)
+	services.StartDatabaseGatewayOperationLoop(context.Background(), log, cfg, store, envSealer)
 
 	handler := &server{
 		log:            log,
@@ -205,6 +206,9 @@ func runServer(log *slog.Logger, args []string) int {
 	mux.HandleFunc("/api/applications", handler.withRequestContext(handler.requireManagementAuth(handler.handleApplications)))
 	mux.HandleFunc("/api/applications/", handler.withRequestContext(handler.requireManagementAuth(handler.handleApplications)))
 	mux.HandleFunc("/api/database-engines", handler.withRequestContext(handler.requireManagementAuth(handler.handleDatabaseEngines)))
+	mux.HandleFunc("/api/database-gateways/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDatabaseGateways)))
+	mux.HandleFunc("/api/database-gateway-operations/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDatabaseGatewayOperations)))
+	mux.HandleFunc("/api/database-external-connections/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDatabaseExternalConnections)))
 	mux.HandleFunc("/api/backup-destinations", handler.withRequestContext(handler.requireManagementAuth(handler.handleBackupDestinations)))
 	mux.HandleFunc("/api/backup-destinations/", handler.withRequestContext(handler.requireManagementAuth(handler.handleBackupDestinations)))
 	mux.HandleFunc("/api/database-instances/", handler.withRequestContext(handler.requireManagementAuth(handler.handleDatabaseInstances)))
@@ -236,17 +240,18 @@ func runServer(log *slog.Logger, args []string) int {
 }
 
 type server struct {
-	log                *slog.Logger
-	cfg                *config.Config
-	store              *repository.Store
-	webhookLimiter     *fixedWindowLimiter
-	hostSampler        *hostmetrics.Sampler
-	hostSnapCache      hostSnapshotCache
-	envSealer          *envcrypt.Sealer
-	appCache           *appClientHolder
-	githubRepoLister   githubRepositoryLister
-	deploymentCancelMu sync.Mutex
-	deploymentCancels  map[string]context.CancelFunc
+	log                     *slog.Logger
+	cfg                     *config.Config
+	store                   *repository.Store
+	webhookLimiter          *fixedWindowLimiter
+	hostSampler             *hostmetrics.Sampler
+	hostSnapCache           hostSnapshotCache
+	envSealer               *envcrypt.Sealer
+	appCache                *appClientHolder
+	githubRepoLister        githubRepositoryLister
+	deploymentCancelMu      sync.Mutex
+	databaseGatewayDomainMu sync.RWMutex
+	deploymentCancels       map[string]context.CancelFunc
 }
 
 type githubPushPayload struct {

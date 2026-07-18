@@ -18,6 +18,34 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
+echo
+echo "Managed database gateway"
+mapfile -t gateways < <(docker ps -a -q \
+  --filter "label=${MANAGED_LABEL}" \
+  --filter "label=${RESOURCE_LABEL}=database-gateway-container" | sort)
+if (( ${#gateways[@]} > 1 )); then
+  echo "FAIL: more than one managed database gateway container exists" >&2
+  failures=$((failures + 1))
+fi
+for gateway_id in "${gateways[@]}"; do
+  gateway_inspection="$(docker inspect --format '{{.Name}}|{{json .HostConfig.PortBindings}}|{{.HostConfig.ReadonlyRootfs}}|{{json .HostConfig.CapDrop}}|{{json .HostConfig.SecurityOpt}}|{{json .Mounts}}' "${gateway_id}")"
+  IFS='|' read -r gateway_name gateway_ports gateway_readonly gateway_caps gateway_security gateway_mounts <<<"${gateway_inspection}"
+  gateway_name="${gateway_name#/}"
+  if [[ "${gateway_ports}" != *'5432/tcp'* ]] || [[ "${gateway_ports}" == *'3306/tcp'* || "${gateway_ports}" == *'6379/tcp'* || "${gateway_ports}" == *'27017/tcp'* ]]; then
+    echo "FAIL: ${gateway_name} does not publish exactly the PostgreSQL gateway port: ${gateway_ports}" >&2
+    failures=$((failures + 1))
+  fi
+  if [[ "${gateway_readonly}" != "true" || "${gateway_caps}" != *'ALL'* || "${gateway_security}" != *'no-new-privileges'* ]]; then
+    echo "FAIL: ${gateway_name} is missing required container hardening" >&2
+    failures=$((failures + 1))
+  fi
+  if [[ "${gateway_mounts,,}" == *'docker.sock'* ]]; then
+    echo "FAIL: ${gateway_name} has access to the Docker socket" >&2
+    failures=$((failures + 1))
+  fi
+  echo "PASS: ${gateway_name} is the owned, hardened PostgreSQL ingress"
+done
+
 min_free_bytes="${HF_DATABASE_MIN_FREE_DISK_BYTES:-}"
 if [[ -z "${min_free_bytes}" && -r "${ENV_FILE}" ]]; then
   min_free_bytes="$(awk -F= '/^[[:space:]]*HOSTFORGE_DATABASE_MIN_FREE_DISK_BYTES=/{value=$0; sub(/^[^=]*=/, "", value); gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); print value; exit}' "${ENV_FILE}")"
@@ -129,7 +157,19 @@ if command -v ss >/dev/null 2>&1; then
   listeners="$(ss -lntH | awk '$4 ~ /:(3306|5432|6379|27017)$/ {print}' || true)"
   if [[ -n "${listeners}" ]]; then
     printf '%s\n' "${listeners}"
-    echo "Review these listeners. Managed-container host publication is checked separately above."
+    forbidden_listeners="$(printf '%s\n' "${listeners}" | awk '$4 ~ /:(3306|6379|27017)$/ {print}' || true)"
+    if [[ -n "${forbidden_listeners}" ]]; then
+      echo "FAIL: a non-gateway database protocol is listening publicly" >&2
+      failures=$((failures + 1))
+    fi
+    if printf '%s\n' "${listeners}" | awk '$4 ~ /:5432$/ {found=1} END {exit !found}'; then
+      if (( ${#gateways[@]} != 1 )); then
+        echo "FAIL: TCP/5432 is listening without exactly one owned gateway container" >&2
+        failures=$((failures + 1))
+      else
+        echo "PASS: TCP/5432 belongs to the single owned gateway container"
+      fi
+    fi
   else
     echo "No standard database TCP listeners are bound on the host."
   fi

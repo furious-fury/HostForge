@@ -141,6 +141,29 @@ if ! command -v systemctl >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v ss >/dev/null 2>&1; then
+  echo "error: ss is required to verify TCP/5432 ownership; install the iproute2 package and rerun this installer." >&2
+  exit 1
+fi
+if [[ -n "$(ss -H -ltn 'sport = :5432')" ]]; then
+  managed_gateway_id=""
+  if command -v docker >/dev/null 2>&1; then
+    if ! managed_gateway_id="$(docker ps \
+      --filter 'label=dev.hostforge.managed=true' \
+      --filter 'label=dev.hostforge.resource-type=database-gateway-container' \
+      --filter 'label=dev.hostforge.database-gateway-engine=postgresql' \
+      --filter 'publish=5432' \
+      --format '{{.ID}}' 2>/dev/null)"; then
+      managed_gateway_id=""
+    fi
+  fi
+  if [[ -z "${managed_gateway_id}" ]]; then
+    echo "error: TCP/5432 is occupied by a listener HostForge does not own; setup cannot safely reserve the PostgreSQL gateway port." >&2
+    exit 1
+  fi
+  echo "TCP/5432 is already owned by the active HostForge PostgreSQL gateway; continuing the idempotent update."
+fi
+
 if ! getent passwd hostforge >/dev/null 2>&1; then
   echo "Creating system user and group hostforge..."
   useradd --system --user-group --home-dir "${DATA_DIR}" --create-home --shell /usr/sbin/nologin hostforge
@@ -241,6 +264,30 @@ if getent group caddy >/dev/null 2>&1; then
   echo "Adding hostforge to caddy group for managed route snippets..."
   usermod -aG caddy hostforge
   bash "${REPO_ROOT}/scripts/migrate-caddy-layout.sh"
+  CADDY_CERTIFICATE_ROOT="/var/lib/caddy/.local/share/caddy/certificates"
+  if ! getent passwd caddy >/dev/null 2>&1; then
+    echo "error: the caddy group exists but the caddy service account is unavailable." >&2
+    exit 1
+  fi
+  # Establish the default ACL before Caddy writes or renews gateway material.
+  install -d -m 0700 -o caddy -g caddy "${CADDY_CERTIFICATE_ROOT}"
+  if [[ -d "${CADDY_CERTIFICATE_ROOT}" ]]; then
+    if ! command -v setfacl >/dev/null 2>&1; then
+      echo "error: the acl package is required to grant HostForge read-only access to the reserved Caddy certificate pair." >&2
+      echo "Install it with 'apt-get install acl' and rerun this installer." >&2
+      exit 1
+    fi
+    echo "Granting hostforge narrow read-only traversal of Caddy certificate storage..."
+    setfacl -R -m u:hostforge:rX "${CADDY_CERTIFICATE_ROOT}"
+    setfacl -d -m u:hostforge:rX "${CADDY_CERTIFICATE_ROOT}"
+  fi
+fi
+
+if command -v ufw >/dev/null 2>&1; then
+  echo "Reserving UFW TCP/5432 for the opt-in HostForge PostgreSQL gateway..."
+  ufw allow 5432/tcp >/dev/null
+else
+  echo "NOTICE: UFW is not installed. Allow inbound TCP/5432 manually before enabling the PostgreSQL gateway."
 fi
 
 systemctl daemon-reload
