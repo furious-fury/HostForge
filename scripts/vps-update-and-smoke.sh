@@ -36,6 +36,15 @@ json_platform_domain() {
   fi
 }
 
+json_gateway_feature_enabled() {
+  local file="$1"
+  if [[ "${json_tool}" == "jq" ]]; then
+    jq -er 'if .feature_enabled == true then "true" elif .feature_enabled == false then "false" else error("feature_enabled is not boolean") end' "${file}"
+  else
+    python3 -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")).get("feature_enabled"); sys.exit("feature_enabled is not boolean") if not isinstance(value, bool) else None; print(str(value).lower())' "${file}"
+  fi
+}
+
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "error: run this update helper as root" >&2
   exit 1
@@ -81,8 +90,9 @@ if [[ -z "${HF_LOCAL_SERVER_URL}" ]]; then
 fi
 
 onboarding_body="$(mktemp "${TMPDIR:-/tmp}/hostforge-onboarding.XXXXXX")"
+gateway_body="$(mktemp "${TMPDIR:-/tmp}/hostforge-database-gateway.XXXXXX")"
 cleanup() {
-  rm -f "${onboarding_body}"
+  rm -f "${onboarding_body}" "${gateway_body}"
 }
 trap cleanup EXIT
 
@@ -142,6 +152,35 @@ if [[ "${local_ready}" -ne 1 ]]; then
   exit 1
 fi
 
+configured_gateway_flag="$(read_env_value HOSTFORGE_DATABASE_GATEWAYS_ENABLED)"
+configured_gateway_flag="${configured_gateway_flag//[[:space:]]/}"
+configured_gateway_flag="${configured_gateway_flag,,}"
+case "${configured_gateway_flag:-false}" in
+  1|t|true) expected_gateway_enabled="true" ;;
+  0|f|false) expected_gateway_enabled="false" ;;
+  *)
+    echo "error: HOSTFORGE_DATABASE_GATEWAYS_ENABLED must be a boolean" >&2
+    exit 1
+    ;;
+esac
+echo "Verifying the running database gateway feature state is ${expected_gateway_enabled}..."
+if ! curl --silent --show-error --fail --output "${gateway_body}" --max-time 5 \
+  -H "Accept: application/json" \
+  -H "Authorization: Bearer ${api_token}" \
+  "${HF_LOCAL_SERVER_URL%/}/api/database-gateways/postgresql"; then
+  echo "error: local PostgreSQL gateway status endpoint is unavailable" >&2
+  exit 1
+fi
+if ! observed_gateway_enabled="$(json_gateway_feature_enabled "${gateway_body}")"; then
+  echo "error: local PostgreSQL gateway status response is invalid" >&2
+  exit 1
+fi
+if [[ "${observed_gateway_enabled}" != "${expected_gateway_enabled}" ]]; then
+  echo "error: running database gateway feature state is ${observed_gateway_enabled}, expected ${expected_gateway_enabled}" >&2
+  exit 1
+fi
+echo "Database gateway feature state matches the configured rollout state."
+
 if [[ -z "${HF_SERVER_URL}" ]]; then
   if ! platform_domain="$(json_platform_domain "${onboarding_body}")"; then
     echo "error: the local onboarding response was not valid JSON" >&2
@@ -182,6 +221,9 @@ echo "Running HostForge v2 API acceptance smoke..."
 HF_TOKEN="${api_token}" \
   HF_SERVER_URL="${HF_SERVER_URL}" \
   ./scripts/v2-staging-api-smoke.sh
+echo "Running managed database and gateway isolation audit..."
+./scripts/database-services-vps-audit.sh
+
 unset api_token
 
 systemctl --no-pager --full status "${SERVICE}"

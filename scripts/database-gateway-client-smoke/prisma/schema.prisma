@@ -1,0 +1,14 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model GatewaySmokePlaceholder {
+  id Int @id
+
+  @@map("hostforge_gateway_smoke_placeholder")
+}

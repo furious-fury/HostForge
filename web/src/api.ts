@@ -142,6 +142,119 @@ export type DatabaseOperationDTO = {
   updated_at: string
 }
 
+export type DatabaseGatewayEndpointDTO = {
+  engine: string
+  hostname: string
+  port: number
+  image_ref?: string
+  image_version?: string
+  container_name: string
+  docker_container_id?: string
+  ingress_network_name: string
+  desired_status: "active" | "absent" | "deleting"
+  observed_status: "absent" | "provisioning" | "active" | "degraded" | "failed" | "deleting"
+  certificate_fingerprint?: string
+  certificate_expires_at?: string
+  certificate_synced_at?: string
+  desired_config_generation: number
+  rendered_config_generation: number
+  applied_config_generation: number
+  last_error_code?: string
+  last_error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+export type DatabaseGatewayRouteDTO = {
+  id: string
+  engine: string
+  database_instance_id: string
+  route_alias: string
+  backend_alias: string
+  link_network_name: string
+  desired_status: string
+  observed_status: string
+  route_backend_limit: number
+  credential_backend_limit: number
+  last_error_code?: string
+  last_error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+export type DatabaseExternalCredentialDTO = {
+  id: string
+  connection_id: string
+  username: string
+  generation: number
+  state: "active" | "grace" | "revoked"
+  grace_deadline?: string
+  last_used_at?: string
+  revoked_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export type DatabaseExternalConnectionDTO = {
+  id: string
+  route_id: string
+  name: string
+  permission_profile: "read_only" | "read_write" | "migration"
+  cidrs: string[]
+  expires_at?: string
+  status: "pending" | "active" | "rotating" | "disabled" | "expired" | "revoking" | "revoked" | "failed"
+  current_generation: number
+  client_connection_limit: number
+  last_used_at?: string
+  last_error_code?: string
+  last_error_message?: string
+  credentials?: DatabaseExternalCredentialDTO[]
+  created_at: string
+  updated_at: string
+}
+
+export type DatabaseGatewayOperationDTO = {
+  id: string
+  engine: string
+  route_id?: string
+  connection_id?: string
+  credential_id?: string
+  operation_type: "provision_gateway" | "teardown_gateway" | "create_connection" | "update_connection" | "disable_connection" | "enable_connection" | "rotate_connection" | "revoke_connection" | "retire_credential" | "expire_connection" | "reconcile_route"
+  status: "queued" | "running" | "success" | "failed"
+  progress_step: string
+  progress_percent: number
+  requested_grace_period_hours: number
+  error_code?: string
+  error_message?: string
+  attempt_count: number
+  created_at: string
+  updated_at: string
+}
+
+export type DatabaseExternalAccessDTO = {
+  feature_enabled: boolean
+  adapter_available: boolean
+  engine: string
+  client_ip?: string
+  external_access: {
+    instance: DatabaseInstanceDTO
+    gateway?: DatabaseGatewayEndpointDTO
+    route?: DatabaseGatewayRouteDTO
+    connections: DatabaseExternalConnectionDTO[]
+  }
+}
+
+export type DatabaseExternalCredentialRevealDTO = {
+  username: string
+  password: string
+  database_alias: string
+  hostname: string
+  port: number
+  sslmode: "verify-full"
+  url: string
+  generation: number
+}
+
 export type DatabaseCredentialMetadataDTO = {
   database_instance_id: string
   database_name: string
@@ -585,6 +698,24 @@ export const api = {
   }>(`/api/applications/${encodeURIComponent(applicationID)}/database-services`, { method: "POST", body: JSON.stringify(input) }),
   databaseOperation: (operationID: string, signal?: AbortSignal) =>
     apiRequest<{ operation: DatabaseOperationDTO }>(`/api/database-operations/${encodeURIComponent(operationID)}`, { signal }),
+  databaseGateway: (engine: string, signal?: AbortSignal) =>
+    apiRequest<{ engine: string; feature_enabled: boolean; adapter_available: boolean; gateway?: DatabaseGatewayEndpointDTO; reserved_hostname?: string; unavailable_reason?: string; expected_ipv4?: string; expected_ipv6?: string }>(`/api/database-gateways/${encodeURIComponent(engine)}`, { signal }),
+  provisionDatabaseGateway: (engine: string) =>
+    apiRequest<{ status: "queued"; operation: DatabaseGatewayOperationDTO }>(`/api/database-gateways/${encodeURIComponent(engine)}`, { method: "POST" }),
+  teardownDatabaseGateway: (engine: string, confirmation: string) =>
+    apiRequest<{ status: "queued"; operation: DatabaseGatewayOperationDTO }>(`/api/database-gateways/${encodeURIComponent(engine)}`, { method: "DELETE", body: JSON.stringify({ confirmation }) }),
+  databaseGatewayOperation: (operationID: string, signal?: AbortSignal) =>
+    apiRequest<{ operation: DatabaseGatewayOperationDTO }>(`/api/database-gateway-operations/${encodeURIComponent(operationID)}`, { signal }),
+  databaseExternalAccess: (instanceID: string, signal?: AbortSignal) =>
+    apiRequest<DatabaseExternalAccessDTO>(`/api/database-instances/${encodeURIComponent(instanceID)}/external-access`, { signal }),
+  createDatabaseExternalConnection: (instanceID: string, input: { name: string; profile: DatabaseExternalConnectionDTO["permission_profile"]; cidrs: string[]; expires_at?: string; confirm_open_access: boolean }) =>
+    apiRequest<{ status: "queued"; connection: DatabaseExternalConnectionDTO; operation: DatabaseGatewayOperationDTO }>(`/api/database-instances/${encodeURIComponent(instanceID)}/external-connections`, { method: "POST", body: JSON.stringify(input) }),
+  updateDatabaseExternalConnection: (connectionID: string, input: { name: string; profile: DatabaseExternalConnectionDTO["permission_profile"]; cidrs: string[]; expires_at?: string; confirm_open_access: boolean }) =>
+    apiRequest<{ status: "queued"; connection: DatabaseExternalConnectionDTO; operation: DatabaseGatewayOperationDTO }>(`/api/database-external-connections/${encodeURIComponent(connectionID)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  databaseExternalConnectionAction: (connectionID: string, action: "disable" | "enable" | "rotate" | "revoke", input: { grace_period_hours?: number; confirmation?: string } = {}) =>
+    apiRequest<{ status: "queued"; operation: DatabaseGatewayOperationDTO }>(`/api/database-external-connections/${encodeURIComponent(connectionID)}/${action}`, { method: "POST", body: JSON.stringify(input) }),
+  revealDatabaseExternalCredentials: (connectionID: string) =>
+    apiRequest<DatabaseExternalCredentialRevealDTO>(`/api/database-external-connections/${encodeURIComponent(connectionID)}/credentials`, { method: "POST", cache: "no-store" }),
 
   service: async (id: string, signal?: AbortSignal) => {
     const payload = await apiRequest<{
@@ -784,6 +915,9 @@ export const queryKeys = {
   databaseEngines: ["database-engines"] as const,
   backupDestinations: ["backup-destinations"] as const,
   databaseOperation: (id: string) => ["database-operations", id] as const,
+  databaseGateway: (engine: string) => ["database-gateways", engine] as const,
+  databaseGatewayOperation: (id: string) => ["database-gateway-operations", id] as const,
+  databaseExternalAccess: (instanceID: string) => ["database-external-access", instanceID] as const,
   application: (id: string) => ["applications", id] as const,
   serviceMetrics: (serviceID: string, environmentID: string, points = 120) => ["service-metrics", serviceID, environmentID, points] as const,
   observabilitySummary: ["observability-summary"] as const,

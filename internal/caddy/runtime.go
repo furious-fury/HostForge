@@ -23,6 +23,9 @@ type SyncOptions struct {
 	GeneratedPath string
 	RootConfig    string
 	Routes        []Route
+	// CertificateDomains are HTTPS certificate-only sites. They never proxy
+	// database protocol traffic; Caddy is used solely as the ACME issuer.
+	CertificateDomains []string
 }
 
 // SyncResult describes the generated output path and whether caddy was reloaded.
@@ -43,7 +46,7 @@ func Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 	if bin == "" {
 		bin = "caddy"
 	}
-	content := RenderConfig(opts.Routes)
+	content := RenderConfigWithCertificateDomains(opts.Routes, opts.CertificateDomains)
 	if err := writeAtomic(opts.GeneratedPath, []byte(content)); err != nil {
 		return SyncResult{}, err
 	}
@@ -145,6 +148,12 @@ func ValidateRootCapture(ctx context.Context, caddyBin, rootConfig string) (stdo
 
 // RenderConfig converts routes into caddyfile server blocks.
 func RenderConfig(routes []Route) string {
+	return RenderConfigWithCertificateDomains(routes, nil)
+}
+
+// RenderConfigWithCertificateDomains includes isolated HTTPS sites whose only
+// purpose is ACME certificate issuance for non-HTTP HostForge gateways.
+func RenderConfigWithCertificateDomains(routes []Route, certificateDomains []string) string {
 	filtered := make([]Route, 0, len(routes))
 	for _, route := range routes {
 		if route.HostPort <= 0 || strings.TrimSpace(route.Domain) == "" {
@@ -162,6 +171,26 @@ func RenderConfig(routes []Route) string {
 	for _, route := range filtered {
 		fmt.Fprintf(&b, "%s {\n", route.Domain)
 		fmt.Fprintf(&b, "    reverse_proxy 127.0.0.1:%d\n", route.HostPort)
+		b.WriteString("}\n\n")
+	}
+	seen := map[string]struct{}{}
+	for _, route := range filtered {
+		seen[strings.ToLower(route.Domain)] = struct{}{}
+	}
+	sort.Strings(certificateDomains)
+	for _, domain := range certificateDomains {
+		domain = strings.ToLower(strings.Trim(strings.TrimSpace(domain), "."))
+		if domain == "" {
+			continue
+		}
+		if _, duplicate := seen[domain]; duplicate {
+			continue
+		}
+		seen[domain] = struct{}{}
+		fmt.Fprintf(&b, "https://%s {\n", domain)
+		b.WriteString("    tls\n")
+		b.WriteString("    respond /hostforge-certificate-probe 204\n")
+		b.WriteString("    respond 404\n")
 		b.WriteString("}\n\n")
 	}
 	return b.String()

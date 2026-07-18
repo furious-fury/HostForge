@@ -380,7 +380,7 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 					writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"status": "error", "error": "database_delete_confirmation_mismatch"})
 					return
 				}
-				result, err := platformservices.DeleteDatabaseServiceAndRuntime(r.Context(), s.log, s.store, service.ID, "operator")
+				result, err := platformservices.DeleteDatabaseServiceAndRuntime(r.Context(), s.log, s.cfg, s.store, s.envSealer, service.ID, "operator")
 				if err != nil {
 					writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": publicAPIError(err, "delete_database_service_failed")})
 					return

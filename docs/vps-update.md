@@ -40,8 +40,9 @@ The helper:
 2. Refuses to continue when any other tracked VPS changes exist.
 3. Pulls `main` with `--ff-only`, records the previous commit, and builds before restarting.
 4. Reads the management token from `/etc/hostforge/hostforge.env` without printing it and waits for the local authenticated API.
-5. Uses the platform domain saved during onboarding unless `HF_SERVER_URL` explicitly overrides it, then waits for the public HTTPS origin.
-6. Runs the authenticated v2 API smoke, including array contracts, legacy-route absence, logout, and post-logout `401`.
+5. Verifies the authenticated PostgreSQL gateway status reports the same enabled state configured in `/etc/hostforge/hostforge.env`; an omitted flag is checked as the disabled default.
+6. Uses the platform domain saved during onboarding unless `HF_SERVER_URL` explicitly overrides it, then waits for the public HTTPS origin.
+7. Runs the authenticated v2 API smoke, including array contracts, legacy-route absence, logout, and post-logout `401`.
 
 `install.sh --with-systemd` keeps the existing `/etc/hostforge/hostforge.env` file. Do not run `bootstrap-ubuntu.sh` for routine updates; it is only for first-time VPS provisioning.
 

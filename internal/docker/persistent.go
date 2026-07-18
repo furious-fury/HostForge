@@ -3,8 +3,10 @@ package docker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,6 +25,8 @@ const (
 	EnvironmentIDLabel = "dev.hostforge.environment-id"
 	ServiceIDLabel     = "dev.hostforge.service-id"
 	InstanceIDLabel    = "dev.hostforge.database-instance-id"
+	GatewayEngineLabel = "dev.hostforge.database-gateway-engine"
+	GatewayRouteLabel  = "dev.hostforge.database-gateway-route-id"
 )
 
 func EnvironmentNetworkName(environmentID string) string {
@@ -252,6 +256,237 @@ func RunManagedContainer(ctx context.Context, cli *client.Client, opts ManagedCo
 	return resp.ID, nil
 }
 
+func EnsureDatabaseGatewayIngressNetwork(ctx context.Context, cli *client.Client, engine, name string) (string, error) {
+	engine, name = strings.ToLower(strings.TrimSpace(engine)), strings.TrimSpace(name)
+	if engine == "" || name == "" {
+		return "", fmt.Errorf("gateway engine and ingress network name required")
+	}
+	return ensureOwnedGatewayNetwork(ctx, cli, name, "database-gateway-ingress", map[string]string{GatewayEngineLabel: engine})
+}
+
+func EnsureDatabaseGatewayLinkNetwork(ctx context.Context, cli *client.Client, engine, routeID, instanceID, name string) (string, error) {
+	engine, routeID, instanceID, name = strings.ToLower(strings.TrimSpace(engine)), strings.TrimSpace(routeID), strings.TrimSpace(instanceID), strings.TrimSpace(name)
+	if engine == "" || routeID == "" || instanceID == "" || name == "" {
+		return "", fmt.Errorf("gateway engine, route, instance, and link network name required")
+	}
+	return ensureOwnedGatewayNetwork(ctx, cli, name, "database-gateway-link", map[string]string{GatewayEngineLabel: engine, GatewayRouteLabel: routeID, InstanceIDLabel: instanceID})
+}
+
+func ensureOwnedGatewayNetwork(ctx context.Context, cli *client.Client, name, resourceType string, labels map[string]string) (string, error) {
+	inspected, err := cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+	if err == nil {
+		if inspected.Network.Labels[ManagedLabel] != "true" || inspected.Network.Labels[ResourceTypeLabel] != resourceType {
+			return "", fmt.Errorf("network %s exists without matching HostForge gateway ownership", name)
+		}
+		for key, value := range labels {
+			if inspected.Network.Labels[key] != value {
+				return "", fmt.Errorf("network %s gateway ownership label %s does not match", name, key)
+			}
+		}
+		return inspected.Network.ID, nil
+	}
+	if !errdefs.IsNotFound(err) {
+		return "", fmt.Errorf("inspect gateway network %s: %w", name, err)
+	}
+	owned := map[string]string{ManagedLabel: "true", ResourceTypeLabel: resourceType}
+	for key, value := range labels {
+		owned[key] = value
+	}
+	created, err := cli.NetworkCreate(ctx, name, client.NetworkCreateOptions{Driver: "bridge", Labels: owned})
+	if err != nil {
+		return "", fmt.Errorf("create gateway network %s: %w", name, err)
+	}
+	return created.ID, nil
+}
+
+// ValidateDatabaseGatewayNetworkMembership fails closed if an owned gateway
+// network contains anything beyond the explicitly reconciled containers.
+func ValidateDatabaseGatewayNetworkMembership(ctx context.Context, cli *client.Client, name, resourceType string, allowedContainerIDs ...string) error {
+	inspected, err := cli.NetworkInspect(ctx, strings.TrimSpace(name), client.NetworkInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect gateway network membership: %w", err)
+	}
+	if inspected.Network.Labels[ManagedLabel] != "true" || inspected.Network.Labels[ResourceTypeLabel] != strings.TrimSpace(resourceType) {
+		return fmt.Errorf("refusing to validate a network without matching HostForge gateway ownership")
+	}
+	allowed := []string{}
+	for _, containerID := range allowedContainerIDs {
+		if containerID = strings.TrimSpace(containerID); containerID != "" {
+			allowed = append(allowed, containerID)
+		}
+	}
+	for attachedID := range inspected.Network.Containers {
+		matched := false
+		for _, allowedID := range allowed {
+			if attachedID == allowedID || strings.HasPrefix(attachedID, allowedID) || strings.HasPrefix(allowedID, attachedID) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("gateway network %s contains foreign container %s", name, shortID(attachedID))
+		}
+	}
+	return nil
+}
+
+type ManagedDatabaseGatewayOptions struct {
+	Engine         string
+	ImageRef       string
+	ContainerName  string
+	IngressNetwork string
+	ConfigDir      string
+	HostPort       int
+}
+
+// RunManagedDatabaseGateway is the sole persistent-resource path allowed to
+// publish a database protocol port. Private database containers continue using
+// RunManagedContainer, whose no-publication invariant remains unchanged.
+func RunManagedDatabaseGateway(ctx context.Context, cli *client.Client, opts ManagedDatabaseGatewayOptions) (string, error) {
+	engine := strings.ToLower(strings.TrimSpace(opts.Engine))
+	imageRef, containerName := strings.TrimSpace(opts.ImageRef), strings.TrimSpace(opts.ContainerName)
+	ingressNetwork, configDir := strings.TrimSpace(opts.IngressNetwork), strings.TrimSpace(opts.ConfigDir)
+	if engine == "" || imageRef == "" || containerName == "" || ingressNetwork == "" || configDir == "" || opts.HostPort != 5432 {
+		return "", fmt.Errorf("complete PostgreSQL gateway container configuration required")
+	}
+	if !strings.Contains(imageRef, "@sha256:") {
+		return "", fmt.Errorf("gateway image must be digest pinned")
+	}
+	postgresPort := network.MustParsePort("5432/tcp")
+	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{
+			Image: imageRef,
+			Cmd:   []string{"pgbouncer", "/etc/hostforge-gateway/current/pgbouncer.ini"},
+			Labels: map[string]string{
+				ManagedLabel:       "true",
+				ResourceTypeLabel:  "database-gateway-container",
+				GatewayEngineLabel: engine,
+			},
+			ExposedPorts: network.PortSet{postgresPort: struct{}{}},
+		},
+		HostConfig: &container.HostConfig{
+			RestartPolicy:  container.RestartPolicy{Name: "unless-stopped"},
+			ReadonlyRootfs: true,
+			CapDrop:        []string{"ALL"},
+			SecurityOpt:    []string{"no-new-privileges"},
+			Tmpfs: map[string]string{
+				"/run/pgbouncer": "rw,noexec,nosuid,nodev,size=16m,mode=0770",
+				"/tmp":           "rw,noexec,nosuid,nodev,size=16m",
+			},
+			Mounts:       []mount.Mount{{Type: mount.TypeBind, Source: filepath.Clean(configDir), Target: "/etc/hostforge-gateway", ReadOnly: true}},
+			PortBindings: network.PortMap{postgresPort: []network.PortBinding{{HostPort: "5432"}}},
+		},
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+			ingressNetwork: {Aliases: []string{"hostforge-postgresql-gateway"}},
+		}},
+		Name: containerName,
+	})
+	if err != nil {
+		return "", fmt.Errorf("create managed database gateway: %w", err)
+	}
+	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
+		_, _ = cli.ContainerRemove(ctx, created.ID, client.ContainerRemoveOptions{Force: true})
+		return "", fmt.Errorf("start managed database gateway: %w", err)
+	}
+	return created.ID, nil
+}
+
+func ConnectDatabaseGatewayLink(ctx context.Context, cli *client.Client, networkName, containerID string, aliases []string) error {
+	networkName, containerID = strings.TrimSpace(networkName), strings.TrimSpace(containerID)
+	if networkName == "" || containerID == "" {
+		return fmt.Errorf("gateway link network and container required")
+	}
+	inspected, err := cli.NetworkInspect(ctx, networkName, client.NetworkInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect gateway link network: %w", err)
+	}
+	if inspected.Network.Labels[ManagedLabel] != "true" || inspected.Network.Labels[ResourceTypeLabel] != "database-gateway-link" {
+		return fmt.Errorf("refusing to connect a non-gateway-link network")
+	}
+	for attachedID, attached := range inspected.Network.Containers {
+		if attached.Name == containerID || attachedID == containerID || strings.HasPrefix(attachedID, containerID) || strings.HasPrefix(containerID, attachedID) {
+			return nil
+		}
+	}
+	if _, err := cli.NetworkConnect(ctx, inspected.Network.ID, client.NetworkConnectOptions{Container: containerID, EndpointConfig: &network.EndpointSettings{Aliases: aliases}}); err != nil {
+		return fmt.Errorf("connect database gateway link: %w", err)
+	}
+	return nil
+}
+
+func DisconnectDatabaseGatewayLink(ctx context.Context, cli *client.Client, networkName, containerID string) error {
+	inspected, err := cli.NetworkInspect(ctx, strings.TrimSpace(networkName), client.NetworkInspectOptions{})
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if inspected.Network.Labels[ManagedLabel] != "true" || inspected.Network.Labels[ResourceTypeLabel] != "database-gateway-link" {
+		return fmt.Errorf("refusing to disconnect a non-gateway-link network")
+	}
+	if _, err := cli.NetworkDisconnect(ctx, inspected.Network.ID, client.NetworkDisconnectOptions{Container: strings.TrimSpace(containerID), Force: true}); err != nil && !errdefs.IsNotFound(err) {
+		return fmt.Errorf("disconnect database gateway link: %w", err)
+	}
+	return nil
+}
+
+func RemoveDatabaseGatewayLinkNetworkIfEmpty(ctx context.Context, cli *client.Client, networkName, routeID string) (bool, error) {
+	inspected, err := cli.NetworkInspect(ctx, strings.TrimSpace(networkName), client.NetworkInspectOptions{})
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			// An already-absent link is the successful end state. Reporting it as
+			// removed keeps route cleanup idempotent after a worker retry.
+			return true, nil
+		}
+		return false, err
+	}
+	if inspected.Network.Labels[ManagedLabel] != "true" || inspected.Network.Labels[ResourceTypeLabel] != "database-gateway-link" || inspected.Network.Labels[GatewayRouteLabel] != strings.TrimSpace(routeID) {
+		return false, fmt.Errorf("refusing to remove network without matching gateway route ownership")
+	}
+	if len(inspected.Network.Containers) > 0 {
+		return false, nil
+	}
+	if _, err := cli.NetworkRemove(ctx, inspected.Network.ID, client.NetworkRemoveOptions{}); err != nil && !errdefs.IsNotFound(err) {
+		return false, err
+	}
+	return true, nil
+}
+
+func RemoveManagedDatabaseGateway(ctx context.Context, cli *client.Client, containerID, engine string) error {
+	inspection, err := InspectManagedContainer(ctx, cli, containerID)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if inspection.Labels[ResourceTypeLabel] != "database-gateway-container" || inspection.Labels[GatewayEngineLabel] != strings.ToLower(strings.TrimSpace(engine)) {
+		return fmt.Errorf("refusing to remove container without matching gateway ownership")
+	}
+	return StopAndRemoveWithTimeout(ctx, cli, inspection.ID, 15)
+}
+
+func RemoveDatabaseGatewayIngressNetworkIfEmpty(ctx context.Context, cli *client.Client, networkName, engine string) (bool, error) {
+	inspected, err := cli.NetworkInspect(ctx, strings.TrimSpace(networkName), client.NetworkInspectOptions{})
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if inspected.Network.Labels[ManagedLabel] != "true" || inspected.Network.Labels[ResourceTypeLabel] != "database-gateway-ingress" || inspected.Network.Labels[GatewayEngineLabel] != strings.ToLower(strings.TrimSpace(engine)) {
+		return false, fmt.Errorf("refusing to remove network without matching gateway ownership")
+	}
+	if len(inspected.Network.Containers) > 0 {
+		return false, nil
+	}
+	if _, err := cli.NetworkRemove(ctx, inspected.Network.ID, client.NetworkRemoveOptions{}); err != nil && !errdefs.IsNotFound(err) {
+		return false, err
+	}
+	return true, nil
+}
+
 type ManagedContainerInspection struct {
 	ID             string
 	Running        bool
@@ -343,6 +578,40 @@ func ExecExitCode(ctx context.Context, cli *client.Client, containerID string, c
 		case <-ticker.C:
 		}
 	}
+}
+
+// ExecOutput runs a bounded administrative command and returns demultiplexed
+// stdout. Callers are responsible for redacting command-specific secrets from
+// returned errors; stderr is never included on success.
+func ExecOutput(ctx context.Context, cli *client.Client, containerID string, command []string, env []string) (string, error) {
+	if strings.TrimSpace(containerID) == "" || len(command) == 0 {
+		return "", fmt.Errorf("container and command required")
+	}
+	exec, err := cli.ExecCreate(ctx, containerID, client.ExecCreateOptions{Cmd: command, Env: env, AttachStdout: true, AttachStderr: true})
+	if err != nil {
+		return "", fmt.Errorf("create container exec: %w", err)
+	}
+	attached, err := cli.ExecAttach(ctx, exec.ID, client.ExecAttachOptions{})
+	if err != nil {
+		return "", fmt.Errorf("attach container exec: %w", err)
+	}
+	defer attached.Close()
+	var stdout, stderr bytes.Buffer
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, attached.Reader); err != nil {
+		return "", fmt.Errorf("read container exec output: %w", err)
+	}
+	state, err := cli.ExecInspect(ctx, exec.ID, client.ExecInspectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("inspect container exec: %w", err)
+	}
+	if state.ExitCode != 0 {
+		message := strings.TrimSpace(stderr.String())
+		if message == "" {
+			message = fmt.Sprintf("container exec exited with code %d", state.ExitCode)
+		}
+		return "", errors.New(message)
+	}
+	return stdout.String(), nil
 }
 
 type ManagedJobOptions struct {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -202,7 +203,7 @@ func TestMaterializeBuildSecretsUsesPrivateFilesAndCleansUp(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != 0o600 {
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 			t.Fatalf("secret mode=%o", info.Mode().Perm())
 		}
 		if filepath.Dir(filepath.Dir(parts[1])) != root {
@@ -211,7 +212,7 @@ func TestMaterializeBuildSecretsUsesPrivateFilesAndCleansUp(t *testing.T) {
 		paths = append(paths, parts[1])
 	}
 	directory := filepath.Dir(paths[0])
-	if info, err := os.Stat(directory); err != nil || info.Mode().Perm() != 0o700 {
+	if info, err := os.Stat(directory); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
 		t.Fatalf("secret directory mode: info=%v err=%v", info, err)
 	}
 	cleanup()

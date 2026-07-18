@@ -73,6 +73,23 @@ func (s *Store) UpdatePlatformDomain(ctx context.Context, currentDomain, nextDom
 		return err
 	}
 	defer tx.Rollback()
+	// Acquire SQLite's write reservation before inspecting gateway state. Every
+	// gateway mutation also writes SQLite, so none can commit between this guard
+	// and the platform-domain update.
+	lockResult, err := tx.ExecContext(ctx, `UPDATE onboarding_state SET updated_at=updated_at WHERE id=1 AND platform_domain=?`, current)
+	if err != nil {
+		return fmt.Errorf("lock platform domain: %w", err)
+	}
+	locked, err := lockResult.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if locked != 1 {
+		return ErrPlatformDomainChanged
+	}
+	if err := checkDatabaseGatewayDomainChangeAllowed(ctx, tx); err != nil {
+		return err
+	}
 	var mismatched int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM domains WHERE kind='platform' AND domain_name NOT LIKE ?`, "%."+current).Scan(&mismatched); err != nil {
 		return err
@@ -80,21 +97,28 @@ func (s *Store) UpdatePlatformDomain(ctx context.Context, currentDomain, nextDom
 	if mismatched > 0 {
 		return fmt.Errorf("managed platform domains do not match current suffix")
 	}
+	stamp := time.Now().UTC().Format(time.RFC3339)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE domains
 		SET domain_name=substr(domain_name,1,length(domain_name)-length(?)) || ?,
 		    ssl_status='PENDING',last_cert_message='',cert_checked_at='',updated_at=?
 		WHERE kind='platform'`,
-		current, next, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		current, next, stamp); err != nil {
 		return fmt.Errorf("move managed platform domains: %w", err)
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE onboarding_state SET platform_domain=?,updated_at=? WHERE id=1 AND platform_domain=?`, next, time.Now().UTC().Format(time.RFC3339), current)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE database_gateway_endpoints
+		SET hostname=substr(hostname,1,length(hostname)-length(?)) || ?,updated_at=?
+		WHERE hostname=? OR hostname LIKE ?`, current, next, stamp, current, "%."+current); err != nil {
+		return fmt.Errorf("move absent database gateway endpoints: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE onboarding_state SET platform_domain=?,updated_at=? WHERE id=1 AND platform_domain=?`, next, stamp, current)
 	if err != nil {
 		return fmt.Errorf("update platform domain: %w", err)
 	}
 	changed, _ := result.RowsAffected()
 	if changed != 1 {
-		return fmt.Errorf("platform domain changed concurrently")
+		return ErrPlatformDomainChanged
 	}
 	return tx.Commit()
 }

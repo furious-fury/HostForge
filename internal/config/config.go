@@ -93,6 +93,19 @@ type Config struct {
 	DatabaseOperationConcurrency int
 	// DatabaseTransferMaxPerHour bounds queued backup and restore operations.
 	DatabaseTransferMaxPerHour int
+	// DatabaseGatewaysEnabled gates the public database gateway feature. It is
+	// intentionally false by default for the first staging rollout.
+	DatabaseGatewaysEnabled bool
+	// PostgreSQLGatewayImage is a digest-pinned PgBouncer image supplied by the
+	// operator. PostgreSQLGatewayVersion must be at least 1.25.2.
+	PostgreSQLGatewayImage   string
+	PostgreSQLGatewayVersion string
+	// DatabaseGatewayOperationConcurrency bounds the separate durable gateway queue.
+	DatabaseGatewayOperationConcurrency int
+	// PostgreSQLGatewayCertificateFile and PostgreSQLGatewayKeyFile optionally
+	// point at the Caddy-issued SAN/key pair to synchronize into private generations.
+	PostgreSQLGatewayCertificateFile string
+	PostgreSQLGatewayKeyFile         string
 	// DNSServerIPv4 is an explicit public IPv4 for DNS A record suggestions (overrides auto-detect).
 	DNSServerIPv4 string
 	// DNSServerIPv6 is an explicit public IPv6 for AAAA suggestions (overrides auto-detect).
@@ -208,6 +221,18 @@ const (
 	DatabaseOperationConcurrencyEnv = "HOSTFORGE_DATABASE_OPERATION_CONCURRENCY"
 	// DatabaseTransferMaxPerHourEnv rate-limits backup and restore queue admission.
 	DatabaseTransferMaxPerHourEnv = "HOSTFORGE_DATABASE_TRANSFER_MAX_PER_HOUR"
+	// DatabaseGatewaysEnabledEnv gates all public database gateway mutations.
+	DatabaseGatewaysEnabledEnv = "HOSTFORGE_DATABASE_GATEWAYS_ENABLED"
+	// PostgreSQLGatewayImageEnv is the required digest-pinned PgBouncer image.
+	PostgreSQLGatewayImageEnv = "HOSTFORGE_POSTGRES_GATEWAY_IMAGE"
+	// PostgreSQLGatewayVersionEnv declares the version in the pinned image.
+	PostgreSQLGatewayVersionEnv = "HOSTFORGE_POSTGRES_GATEWAY_VERSION"
+	// DatabaseGatewayOperationConcurrencyEnv bounds gateway workers.
+	DatabaseGatewayOperationConcurrencyEnv = "HOSTFORGE_DATABASE_GATEWAY_OPERATION_CONCURRENCY"
+	// PostgreSQLGatewayCertificateFileEnv and PostgreSQLGatewayKeyFileEnv identify
+	// the Caddy-issued TLS material used only for the PostgreSQL gateway.
+	PostgreSQLGatewayCertificateFileEnv = "HOSTFORGE_POSTGRES_GATEWAY_CERT_FILE"
+	PostgreSQLGatewayKeyFileEnv         = "HOSTFORGE_POSTGRES_GATEWAY_KEY_FILE"
 	// DNSServerIPv4Env sets a fixed IPv4 for DNS guidance (skips auto-detect when set).
 	DNSServerIPv4Env = "HOSTFORGE_DNS_SERVER_IPV4"
 	// DNSServerIPv6Env sets a fixed IPv6 for DNS guidance (optional).
@@ -405,6 +430,21 @@ func Load(dataDirFlag string) (*Config, error) {
 	if databaseTransferMaxPerHour < 1 || databaseTransferMaxPerHour > 10000 {
 		return nil, fmt.Errorf("%s must be between 1 and 10000", DatabaseTransferMaxPerHourEnv)
 	}
+	databaseGatewaysEnabled, err := envBool(DatabaseGatewaysEnabledEnv, false)
+	if err != nil {
+		return nil, err
+	}
+	databaseGatewayOperationConcurrency, err := envInt(DatabaseGatewayOperationConcurrencyEnv, 1)
+	if err != nil {
+		return nil, err
+	}
+	if databaseGatewayOperationConcurrency < 1 || databaseGatewayOperationConcurrency > 4 {
+		return nil, fmt.Errorf("%s must be between 1 and 4", DatabaseGatewayOperationConcurrencyEnv)
+	}
+	postgresqlGatewayImage := strings.TrimSpace(os.Getenv(PostgreSQLGatewayImageEnv))
+	postgresqlGatewayVersion := strings.TrimSpace(os.Getenv(PostgreSQLGatewayVersionEnv))
+	postgresqlGatewayCertificateFile := expandUserPath(strings.TrimSpace(os.Getenv(PostgreSQLGatewayCertificateFileEnv)))
+	postgresqlGatewayKeyFile := expandUserPath(strings.TrimSpace(os.Getenv(PostgreSQLGatewayKeyFileEnv)))
 	dnsServerIPv4 := strings.TrimSpace(os.Getenv(DNSServerIPv4Env))
 	dnsServerIPv6 := strings.TrimSpace(os.Getenv(DNSServerIPv6Env))
 	dnsDetectURL := strings.TrimSpace(os.Getenv(DNSDetectURLEnv))
@@ -441,60 +481,66 @@ func Load(dataDirFlag string) (*Config, error) {
 		return nil, err
 	}
 	return &Config{
-		DataDir:                      abs,
-		ListenAddr:                   listen,
-		HostPort:                     hostPort,
-		PortStart:                    portStart,
-		PortEnd:                      portEnd,
-		ContainerPort:                containerPort,
-		CaddyBin:                     caddyBin,
-		CaddyGeneratedPath:           caddyGeneratedPath,
-		CaddyControlPlanePath:        caddyControlPlanePath,
-		CaddyRootConfig:              caddyRootConfig,
-		SyncCaddy:                    syncCaddy,
-		PlatformDomainBase:           strings.Trim(strings.ToLower(strings.TrimSpace(os.Getenv(PlatformDomainBaseEnv))), "."),
-		HealthPath:                   healthPath,
-		HealthTimeoutMS:              healthTimeoutMS,
-		HealthRetries:                healthRetries,
-		HealthIntervalMS:             healthIntervalMS,
-		HealthExpectedMin:            healthExpectedMin,
-		HealthExpectedMax:            healthExpectedMax,
-		WebhookBasePath:              webhookBasePath,
-		WebhookMaxBodyBytes:          webhookMaxBodyBytes,
-		WebhookAsync:                 webhookAsync,
-		WebhookSecret:                webhookSecret,
-		APIToken:                     apiToken,
-		SessionSecret:                sessionSecret,
-		SessionCookieName:            sessionCookieName,
-		SessionTTLMinutes:            sessionTTLMinutes,
-		SessionCookieSecure:          sessionCookieSecure,
-		WebhookRateLimitPerMinute:    webhookRateLimitPerMinute,
-		LogsDirPath:                  logsDirPath,
-		RailpackEnabled:              railpackEnabled,
-		RailpackBin:                  railpackBin,
-		RailpackVersion:              railpackVersion,
-		RailpackFrontendImage:        railpackFrontendImage,
-		BuildKitBin:                  buildKitBin,
-		BuildKitAddress:              buildKitAddress,
-		RailpackArtifactsDir:         railpackArtifactsDir,
-		RailpackBuildConcurrency:     railpackBuildConcurrency,
-		RailpackMinFreeDiskBytes:     railpackMinFreeDiskBytes,
-		DatabaseMinFreeDiskBytes:     databaseMinFreeDiskBytes,
-		DatabaseOperationConcurrency: databaseOperationConcurrency,
-		DatabaseTransferMaxPerHour:   databaseTransferMaxPerHour,
-		DNSServerIPv4:                dnsServerIPv4,
-		DNSServerIPv6:                dnsServerIPv6,
-		DNSDetectURL:                 dnsDetectURL,
-		DNSDetectIPv6URL:             dnsDetectIPv6URL,
-		DNSDetectTimeoutMS:           dnsDetectTimeoutMS,
-		DomainSyncAfterMutate:        domainSyncAfterMutate,
-		CaddyCertPollIntervalSec:     caddyCertPollIntervalSec,
-		CaddyAdminURL:                caddyAdminURL,
-		CaddyStorageRoot:             caddyStorageRoot,
-		BootstrapEnabled:             bootstrapEnabled,
-		BootstrapPublicIP:            strings.TrimSpace(os.Getenv(BootstrapPublicIPEnv)),
-		BootstrapHTTPSPort:           bootstrapPort,
-		BootstrapExpiresAt:           strings.TrimSpace(os.Getenv(BootstrapExpiresAtEnv)),
+		DataDir:                             abs,
+		ListenAddr:                          listen,
+		HostPort:                            hostPort,
+		PortStart:                           portStart,
+		PortEnd:                             portEnd,
+		ContainerPort:                       containerPort,
+		CaddyBin:                            caddyBin,
+		CaddyGeneratedPath:                  caddyGeneratedPath,
+		CaddyControlPlanePath:               caddyControlPlanePath,
+		CaddyRootConfig:                     caddyRootConfig,
+		SyncCaddy:                           syncCaddy,
+		PlatformDomainBase:                  strings.Trim(strings.ToLower(strings.TrimSpace(os.Getenv(PlatformDomainBaseEnv))), "."),
+		HealthPath:                          healthPath,
+		HealthTimeoutMS:                     healthTimeoutMS,
+		HealthRetries:                       healthRetries,
+		HealthIntervalMS:                    healthIntervalMS,
+		HealthExpectedMin:                   healthExpectedMin,
+		HealthExpectedMax:                   healthExpectedMax,
+		WebhookBasePath:                     webhookBasePath,
+		WebhookMaxBodyBytes:                 webhookMaxBodyBytes,
+		WebhookAsync:                        webhookAsync,
+		WebhookSecret:                       webhookSecret,
+		APIToken:                            apiToken,
+		SessionSecret:                       sessionSecret,
+		SessionCookieName:                   sessionCookieName,
+		SessionTTLMinutes:                   sessionTTLMinutes,
+		SessionCookieSecure:                 sessionCookieSecure,
+		WebhookRateLimitPerMinute:           webhookRateLimitPerMinute,
+		LogsDirPath:                         logsDirPath,
+		RailpackEnabled:                     railpackEnabled,
+		RailpackBin:                         railpackBin,
+		RailpackVersion:                     railpackVersion,
+		RailpackFrontendImage:               railpackFrontendImage,
+		BuildKitBin:                         buildKitBin,
+		BuildKitAddress:                     buildKitAddress,
+		RailpackArtifactsDir:                railpackArtifactsDir,
+		RailpackBuildConcurrency:            railpackBuildConcurrency,
+		RailpackMinFreeDiskBytes:            railpackMinFreeDiskBytes,
+		DatabaseMinFreeDiskBytes:            databaseMinFreeDiskBytes,
+		DatabaseOperationConcurrency:        databaseOperationConcurrency,
+		DatabaseTransferMaxPerHour:          databaseTransferMaxPerHour,
+		DatabaseGatewaysEnabled:             databaseGatewaysEnabled,
+		PostgreSQLGatewayImage:              postgresqlGatewayImage,
+		PostgreSQLGatewayVersion:            postgresqlGatewayVersion,
+		DatabaseGatewayOperationConcurrency: databaseGatewayOperationConcurrency,
+		PostgreSQLGatewayCertificateFile:    postgresqlGatewayCertificateFile,
+		PostgreSQLGatewayKeyFile:            postgresqlGatewayKeyFile,
+		DNSServerIPv4:                       dnsServerIPv4,
+		DNSServerIPv6:                       dnsServerIPv6,
+		DNSDetectURL:                        dnsDetectURL,
+		DNSDetectIPv6URL:                    dnsDetectIPv6URL,
+		DNSDetectTimeoutMS:                  dnsDetectTimeoutMS,
+		DomainSyncAfterMutate:               domainSyncAfterMutate,
+		CaddyCertPollIntervalSec:            caddyCertPollIntervalSec,
+		CaddyAdminURL:                       caddyAdminURL,
+		CaddyStorageRoot:                    caddyStorageRoot,
+		BootstrapEnabled:                    bootstrapEnabled,
+		BootstrapPublicIP:                   strings.TrimSpace(os.Getenv(BootstrapPublicIPEnv)),
+		BootstrapHTTPSPort:                  bootstrapPort,
+		BootstrapExpiresAt:                  strings.TrimSpace(os.Getenv(BootstrapExpiresAtEnv)),
 	}, nil
 }
 
