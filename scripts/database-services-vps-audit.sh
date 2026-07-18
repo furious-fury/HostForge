@@ -6,6 +6,15 @@ DEFAULT_MIN_FREE_BYTES=5368709120
 MANAGED_LABEL="dev.hostforge.managed=true"
 RESOURCE_LABEL="dev.hostforge.resource-type"
 failures=0
+expected_gateway_state="${HF_EXPECT_DATABASE_GATEWAY_STATE:-any}"
+
+case "${expected_gateway_state}" in
+  any|absent|active) ;;
+  *)
+    echo "error: HF_EXPECT_DATABASE_GATEWAY_STATE must be any, absent, or active" >&2
+    exit 1
+    ;;
+esac
 
 for tool in docker df awk sort; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
@@ -27,16 +36,36 @@ if (( ${#gateways[@]} > 1 )); then
   echo "FAIL: more than one managed database gateway container exists" >&2
   failures=$((failures + 1))
 fi
+if [[ "${expected_gateway_state}" == "absent" && ${#gateways[@]} -ne 0 ]]; then
+  echo "FAIL: the rollout expects no managed database gateway container" >&2
+  failures=$((failures + 1))
+fi
+if [[ "${expected_gateway_state}" == "active" && ${#gateways[@]} -ne 1 ]]; then
+  echo "FAIL: the rollout expects exactly one managed database gateway container" >&2
+  failures=$((failures + 1))
+fi
 for gateway_id in "${gateways[@]}"; do
-  gateway_inspection="$(docker inspect --format '{{.Name}}|{{json .HostConfig.PortBindings}}|{{.HostConfig.ReadonlyRootfs}}|{{json .HostConfig.CapDrop}}|{{json .HostConfig.SecurityOpt}}|{{json .Mounts}}' "${gateway_id}")"
-  IFS='|' read -r gateway_name gateway_ports gateway_readonly gateway_caps gateway_security gateway_mounts <<<"${gateway_inspection}"
+  gateway_inspection="$(docker inspect --format '{{.Name}}|{{json .HostConfig.PortBindings}}|{{len .HostConfig.PortBindings}}|{{.HostConfig.ReadonlyRootfs}}|{{json .HostConfig.CapDrop}}|{{json .HostConfig.SecurityOpt}}|{{json .Mounts}}|{{.HostConfig.RestartPolicy.Name}}|{{.Config.Image}}|{{.State.Running}}' "${gateway_id}")"
+  IFS='|' read -r gateway_name gateway_ports gateway_port_count gateway_readonly gateway_caps gateway_security gateway_mounts gateway_restart gateway_image gateway_running <<<"${gateway_inspection}"
   gateway_name="${gateway_name#/}"
-  if [[ "${gateway_ports}" != *'5432/tcp'* ]] || [[ "${gateway_ports}" == *'3306/tcp'* || "${gateway_ports}" == *'6379/tcp'* || "${gateway_ports}" == *'27017/tcp'* ]]; then
+  if [[ "${gateway_port_count}" != "1" || "${gateway_ports}" != *'5432/tcp'* ]]; then
     echo "FAIL: ${gateway_name} does not publish exactly the PostgreSQL gateway port: ${gateway_ports}" >&2
     failures=$((failures + 1))
   fi
   if [[ "${gateway_readonly}" != "true" || "${gateway_caps}" != *'ALL'* || "${gateway_security}" != *'no-new-privileges'* ]]; then
     echo "FAIL: ${gateway_name} is missing required container hardening" >&2
+    failures=$((failures + 1))
+  fi
+  if [[ "${gateway_restart}" != "unless-stopped" ]]; then
+    echo "FAIL: ${gateway_name} restart policy is ${gateway_restart:-unset}, expected unless-stopped" >&2
+    failures=$((failures + 1))
+  fi
+  if [[ "${gateway_image}" != *@sha256:* ]]; then
+    echo "FAIL: ${gateway_name} image is not digest-pinned: ${gateway_image}" >&2
+    failures=$((failures + 1))
+  fi
+  if [[ "${expected_gateway_state}" == "active" && "${gateway_running}" != "true" ]]; then
+    echo "FAIL: ${gateway_name} exists but is not running" >&2
     failures=$((failures + 1))
   fi
   if [[ "${gateway_mounts,,}" == *'docker.sock'* ]]; then
@@ -153,6 +182,7 @@ fi
 
 echo
 echo "Standard database listeners (diagnostic only)"
+postgres_listener=0
 if command -v ss >/dev/null 2>&1; then
   listeners="$(ss -lntH | awk '$4 ~ /:(3306|5432|6379|27017)$/ {print}' || true)"
   if [[ -n "${listeners}" ]]; then
@@ -163,6 +193,7 @@ if command -v ss >/dev/null 2>&1; then
       failures=$((failures + 1))
     fi
     if printf '%s\n' "${listeners}" | awk '$4 ~ /:5432$/ {found=1} END {exit !found}'; then
+      postgres_listener=1
       if (( ${#gateways[@]} != 1 )); then
         echo "FAIL: TCP/5432 is listening without exactly one owned gateway container" >&2
         failures=$((failures + 1))
@@ -174,7 +205,20 @@ if command -v ss >/dev/null 2>&1; then
     echo "No standard database TCP listeners are bound on the host."
   fi
 else
-  echo "ss is unavailable; skipped host-listener diagnostics."
+  if [[ "${expected_gateway_state}" == "any" ]]; then
+    echo "ss is unavailable; skipped host-listener diagnostics."
+  else
+    echo "FAIL: ss is required when a gateway rollout state is expected" >&2
+    failures=$((failures + 1))
+  fi
+fi
+if [[ "${expected_gateway_state}" == "absent" && "${postgres_listener}" -ne 0 ]]; then
+  echo "FAIL: the rollout expects TCP/5432 to have no listener" >&2
+  failures=$((failures + 1))
+fi
+if [[ "${expected_gateway_state}" == "active" && "${postgres_listener}" -ne 1 ]]; then
+  echo "FAIL: the rollout expects the owned gateway to listen on TCP/5432" >&2
+  failures=$((failures + 1))
 fi
 
 echo
