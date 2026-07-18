@@ -43,6 +43,28 @@ func TestPostgreSQLGatewayProbeUsesLoopbackWithHostnameVerification(t *testing.T
 	}
 }
 
+func TestPostgreSQLGatewayRuntimeVersionsMatchSecureImageContract(t *testing.T) {
+	if err := ValidatePostgreSQLGatewayRuntimeVersions("PgBouncer 1.25.2\nlibevent 2.1.12", "psql (PostgreSQL) 16.14 - Percona Distribution", "1.25.2"); err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		pgBouncer string
+		psql      string
+		declared  string
+	}{
+		"missing psql":        {"PgBouncer 1.25.2", "", "1.25.2"},
+		"old psql":            {"PgBouncer 1.25.2", "psql (PostgreSQL) 15.12", "1.25.2"},
+		"old PgBouncer":       {"PgBouncer 1.25.1", "psql (PostgreSQL) 16.14", "1.25.1"},
+		"mismatched declared": {"PgBouncer 1.25.2", "psql (PostgreSQL) 16.14", "1.26.0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidatePostgreSQLGatewayRuntimeVersions(test.pgBouncer, test.psql, test.declared); err == nil {
+				t.Fatal("incompatible gateway runtime was accepted")
+			}
+		})
+	}
+}
+
 func TestPostgreSQLGatewayRendererEnforcesBackendAndClientLimits(t *testing.T) {
 	adapter := NewPostgreSQLGatewayAdapter(nil)
 	generation, err := adapter.Render(context.Background(), GatewayRenderRequest{

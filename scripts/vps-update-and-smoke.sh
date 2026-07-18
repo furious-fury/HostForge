@@ -222,7 +222,7 @@ HF_TOKEN="${api_token}" \
   HF_SERVER_URL="${HF_SERVER_URL}" \
   ./scripts/v2-staging-api-smoke.sh
 echo "Running managed database and gateway isolation audit..."
-./scripts/database-services-vps-audit.sh
+bash ./scripts/database-services-vps-audit.sh
 
 unset api_token
 

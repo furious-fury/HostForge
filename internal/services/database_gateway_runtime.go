@@ -75,6 +75,60 @@ func postgreSQLGatewayProbeEnvironment(password string) []string {
 	}
 }
 
+func ValidatePostgreSQLGatewayContainerImage(ctx context.Context, client *mobyclient.Client, containerID, declaredVersion string) error {
+	if client == nil || strings.TrimSpace(containerID) == "" {
+		return errors.New("PostgreSQL gateway container is unavailable for image validation")
+	}
+	pgBouncerOutput, err := docker.ExecOutput(ctx, client, containerID, []string{"pgbouncer", "--version"}, nil)
+	if err != nil {
+		return fmt.Errorf("PgBouncer binary preflight failed: %w", err)
+	}
+	psqlOutput, err := docker.ExecOutput(ctx, client, containerID, []string{"psql", "--version"}, nil)
+	if err != nil {
+		return fmt.Errorf("psql binary preflight failed: %w", err)
+	}
+	return ValidatePostgreSQLGatewayRuntimeVersions(pgBouncerOutput, psqlOutput, declaredVersion)
+}
+
+func ValidatePostgreSQLGatewayRuntimeVersions(pgBouncerOutput, psqlOutput, declaredVersion string) error {
+	actualVersion := ""
+	for _, line := range strings.Split(pgBouncerOutput, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "pgbouncer") {
+			actualVersion = strings.TrimPrefix(fields[1], "v")
+			break
+		}
+	}
+	if actualVersion == "" {
+		return errors.New("PgBouncer binary did not report a version")
+	}
+	if err := ValidatePgBouncerImage("runtime@sha256:verified", actualVersion); err != nil {
+		return err
+	}
+	declaredVersion = strings.TrimPrefix(strings.TrimSpace(declaredVersion), "v")
+	if actualVersion != declaredVersion {
+		return fmt.Errorf("PgBouncer binary version %s does not match declared version %s", actualVersion, declaredVersion)
+	}
+	psqlMajor := 0
+	for _, line := range strings.Split(psqlOutput, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 3 || !strings.EqualFold(fields[0], "psql") {
+			continue
+		}
+		version := strings.TrimPrefix(fields[2], "v")
+		majorText := strings.SplitN(version, ".", 2)[0]
+		major, err := strconv.Atoi(majorText)
+		if err == nil {
+			psqlMajor = major
+			break
+		}
+	}
+	if psqlMajor < 16 {
+		return errors.New("PostgreSQL psql 16 or newer is required for the gateway TLS probe")
+	}
+	return nil
+}
+
 func (runtime *DockerPostgreSQLGatewayRuntime) TerminatePgBouncer(ctx context.Context, request GatewayTerminationRequest) error {
 	if len(request.RoleNames) == 0 && request.RouteAlias == "" {
 		return nil
