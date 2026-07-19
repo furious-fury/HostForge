@@ -484,6 +484,9 @@ func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repo
 	fail := func(code string, err error) {
 		err = safeDatabaseOperationError(err)
 		_, _ = store.UpdateDatabaseOperation(ctx, operation.ID, "failed", "failed", operation.ProgressPercent, code, err.Error())
+		if operation.OperationType == "provision" && operation.DatabaseInstanceID != "" {
+			_ = store.FailQueuedInitialDatabaseExternalConnections(context.WithoutCancel(ctx), operation.DatabaseInstanceID, code, err.Error())
+		}
 		if operation.DatabaseInstanceID != "" {
 			state := repository.UpdateDatabaseInstanceStateInput{Status: "failed", HealthMessage: code}
 			if operation.OperationType == "rotate_credentials" || operation.OperationType == "backup" || operation.OperationType == "restore" || operation.OperationType == "upgrade" {

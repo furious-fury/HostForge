@@ -129,6 +129,12 @@ func TestDatabaseGatewayOperationsLeaseRequeueAndExpiryClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.ClaimNextDatabaseGatewayOperation(ctx, "worker-too-early", time.Minute); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("initial public connection raced database provisioning: %v", err)
+	}
+	if _, err := store.UpdateDatabaseInstanceState(ctx, instance.ID, UpdateDatabaseInstanceStateInput{DesiredState: "running", Status: "healthy", HealthCheckedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
 	claimed, err := store.ClaimNextDatabaseGatewayOperation(ctx, "worker-a", time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -394,5 +400,29 @@ func TestFailedExternalConnectionRevocationCanBeRetriedWithoutDuplicates(t *test
 	}
 	if retry.OperationType != "revoke_connection" || retry.Status != "queued" {
 		t.Fatalf("unexpected retry operation: %+v", retry)
+	}
+}
+
+func TestInitialExternalConnectionFailsWhenDatabaseProvisioningFails(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	instance := createGatewayTestInstanceNamed(t, store, "initial-failure")
+	if _, err := store.EnsureDatabaseGatewayEndpoint(ctx, "postgresql", "postgres.apps.example.test", "pgbouncer:test", "1.25.2"); err != nil {
+		t.Fatal(err)
+	}
+	connection, operation, err := store.CreateDatabaseExternalConnection(ctx, instance.ID, CreateExternalConnectionInput{Name: "Initial access", PermissionProfile: "read_write", CIDRs: []string{"198.51.100.9/32"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FailQueuedInitialDatabaseExternalConnections(ctx, instance.ID, "database_health_failed", "database did not become healthy"); err != nil {
+		t.Fatal(err)
+	}
+	failedOperation, err := store.GetDatabaseGatewayOperation(ctx, operation.ID)
+	if err != nil || failedOperation.Status != "failed" || failedOperation.ErrorCode != "database_health_failed" {
+		t.Fatalf("dependent operation was not failed: operation=%+v err=%v", failedOperation, err)
+	}
+	failedConnection, err := store.GetDatabaseExternalConnection(ctx, connection.ID)
+	if err != nil || failedConnection.Status != "failed" || failedConnection.LastErrorCode != "database_health_failed" {
+		t.Fatalf("initial connection was not failed: connection=%+v err=%v", failedConnection, err)
 	}
 }

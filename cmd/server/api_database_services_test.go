@@ -15,6 +15,10 @@ import (
 
 func TestCreatePostgreSQLServiceQueuesIsolatedProvisioning(t *testing.T) {
 	s := newAPITestServer(t)
+	configureGatewayAPIServer(t, s)
+	if _, err := s.store.EnsureDatabaseGatewayEndpointForPlatformDomain(context.Background(), "postgresql", "postgres.apps.example.test", s.cfg.PostgreSQLGatewayImage, s.cfg.PostgreSQLGatewayVersion, "apps.example.test"); err != nil {
+		t.Fatal(err)
+	}
 	app, err := s.store.CreateApplication(context.Background(), "Database API", "")
 	if err != nil {
 		t.Fatal(err)
@@ -32,8 +36,9 @@ func TestCreatePostgreSQLServiceQueuesIsolatedProvisioning(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder := httptest.NewRecorder()
-	s.handleApplications(recorder, httptest.NewRequest(http.MethodPost,
-		"/api/applications/"+app.ID+"/database-services", strings.NewReader(string(body))))
+	request := httptest.NewRequest(http.MethodPost, "/api/applications/"+app.ID+"/database-services", strings.NewReader(string(body)))
+	request.Header.Set("X-Forwarded-For", "198.51.100.42")
+	s.handleApplications(recorder, request)
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -46,6 +51,25 @@ func TestCreatePostgreSQLServiceQueuesIsolatedProvisioning(t *testing.T) {
 	operations := payload["operations"].([]any)
 	if len(instances) != 2 || len(operations) != 2 {
 		t.Fatalf("instances=%d operations=%d", len(instances), len(operations))
+	}
+	initialConnections := payload["initial_external_connections"].([]any)
+	if len(initialConnections) != 2 {
+		t.Fatalf("initial public connections=%d payload=%+v", len(initialConnections), payload)
+	}
+	for _, raw := range initialConnections {
+		initial := raw.(map[string]any)
+		connection := initial["connection"].(map[string]any)
+		if connection["permission_profile"] != "read_write" || connection["status"] != "pending" {
+			t.Fatalf("unexpected initial public connection: %+v", connection)
+		}
+		cidrs := connection["cidrs"].([]any)
+		if len(cidrs) != 1 || cidrs[0] != "198.51.100.42/32" {
+			t.Fatalf("initial public connection was not source restricted: %+v", connection)
+		}
+		gatewayOperation := initial["operation"].(map[string]any)
+		if gatewayOperation["operation_type"] != "create_connection" || gatewayOperation["status"] != "queued" {
+			t.Fatalf("unexpected initial gateway operation: %+v", gatewayOperation)
+		}
 	}
 	operationID := operations[0].(map[string]any)["id"].(string)
 	operationRecorder := httptest.NewRecorder()

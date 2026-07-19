@@ -190,15 +190,40 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		initialPublicAccess := []map[string]any{}
+		initialPublicAccessErrors := []map[string]string{}
+		if strings.EqualFold(strings.TrimSpace(req.Engine), "postgresql") && s.cfg.DatabaseGatewaysEnabled {
+			clientCIDR := requestCIDR(r)
+			for _, instance := range created.Instances {
+				environment, environmentErr := s.store.GetEnvironment(r.Context(), instance.EnvironmentID)
+				if environmentErr != nil || clientCIDR == "" {
+					initialPublicAccessErrors = append(initialPublicAccessErrors, map[string]string{"environment_id": instance.EnvironmentID, "error": "initial_public_access_source_ip_unavailable"})
+					continue
+				}
+				connection, operation, connectionErr := s.store.CreateDatabaseExternalConnection(r.Context(), instance.ID, repository.CreateExternalConnectionInput{Name: environment.Name + " public access", PermissionProfile: "read_write", CIDRs: []string{clientCIDR}, Actor: "operator:database-create"})
+				if connectionErr != nil {
+					initialPublicAccessErrors = append(initialPublicAccessErrors, map[string]string{"environment_id": instance.EnvironmentID, "environment_name": environment.Name, "error": publicAPIError(connectionErr, "initial_public_access_queue_failed")})
+					continue
+				}
+				initialPublicAccess = append(initialPublicAccess, map[string]any{"environment_id": instance.EnvironmentID, "environment_name": environment.Name, "connection": connection, "operation": operation})
+			}
+		}
 		_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{
 			ApplicationID: app.ID, ServiceID: created.Service.ID, EventType: "database",
 			Status: "queued", Actor: "operator", Message: "Database provisioning queued",
 			Detail: created.Database.Engine + " " + created.Database.DefaultVersion,
 		})
-		writeJSON(w, http.StatusAccepted, map[string]any{
+		payload := map[string]any{
 			"status": "queued", "service": created.Service, "database": created.Database,
 			"instances": created.Instances, "bindings": created.Bindings, "operations": created.Operations,
-		})
+		}
+		if len(initialPublicAccess) > 0 {
+			payload["initial_external_connections"] = initialPublicAccess
+		}
+		if len(initialPublicAccessErrors) > 0 {
+			payload["initial_external_connection_errors"] = initialPublicAccessErrors
+		}
+		writeJSON(w, http.StatusAccepted, payload)
 		return
 	}
 	if len(parts) == 3 && parts[1] == "environments" && r.Method == http.MethodPatch {

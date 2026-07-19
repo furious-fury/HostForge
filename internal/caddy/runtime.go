@@ -188,7 +188,6 @@ func RenderConfigWithCertificateDomains(routes []Route, certificateDomains []str
 		}
 		seen[domain] = struct{}{}
 		fmt.Fprintf(&b, "https://%s {\n", domain)
-		b.WriteString("    tls\n")
 		b.WriteString("    respond /hostforge-certificate-probe 204\n")
 		b.WriteString("    respond 404\n")
 		b.WriteString("}\n\n")

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -157,12 +156,8 @@ func (s *server) handleDatabaseInstanceExternalAccess(w http.ResponseWriter, r *
 		"engine":            databaseService.Engine,
 		"external_access":   access,
 	}
-	if clientIP := net.ParseIP(requestIP(r)); clientIP != nil && !clientIP.IsLoopback() && !clientIP.IsUnspecified() {
-		if clientIP.To4() != nil {
-			response["client_ip"] = clientIP.String() + "/32"
-		} else {
-			response["client_ip"] = clientIP.String() + "/128"
-		}
+	if clientCIDR := requestCIDR(r); clientCIDR != "" {
+		response["client_ip"] = clientCIDR
 	}
 	writeJSON(w, http.StatusOK, response)
 }

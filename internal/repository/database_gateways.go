@@ -1101,7 +1101,20 @@ func (s *Store) ClaimNextDatabaseGatewayOperation(ctx context.Context, leaseOwne
 	nowTime := time.Now().UTC()
 	now := nowTime.Format(time.RFC3339Nano)
 	var operationID string
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM database_gateway_operations WHERE status='queued' OR (status='running' AND (lease_expires_at='' OR lease_expires_at<=?)) ORDER BY created_at,id LIMIT 1`, now).Scan(&operationID); err != nil {
+	if err := tx.QueryRowContext(ctx, `
+		SELECT op.id FROM database_gateway_operations op
+		WHERE (op.status='queued' OR (op.status='running' AND (op.lease_expires_at='' OR op.lease_expires_at<=?)))
+		  AND (
+		    op.operation_type<>'create_connection'
+		    OR EXISTS(
+		      SELECT 1 FROM database_external_connections c
+		      JOIN database_gateway_routes r ON r.id=c.route_id
+		      JOIN database_instances i ON i.id=r.database_instance_id
+		      WHERE c.id=op.connection_id AND i.desired_state='running'
+		        AND i.status='healthy' AND i.deleted_at=''
+		    )
+		  )
+		ORDER BY op.created_at,op.id LIMIT 1`, now).Scan(&operationID); err != nil {
 		return DatabaseGatewayOperation{}, err
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE database_gateway_operations SET status='running',progress_step='starting',progress_percent=1,started_at=CASE WHEN started_at='' THEN ? ELSE started_at END,lease_owner=?,lease_expires_at=?,attempt_count=attempt_count+1,updated_at=? WHERE id=? AND (status='queued' OR (status='running' AND (lease_expires_at='' OR lease_expires_at<=?)))`, now, leaseOwner, nowTime.Add(leaseDuration).Format(time.RFC3339Nano), now, operationID, now)
@@ -1115,6 +1128,27 @@ func (s *Store) ClaimNextDatabaseGatewayOperation(ctx context.Context, leaseOwne
 		return DatabaseGatewayOperation{}, err
 	}
 	return s.GetDatabaseGatewayOperation(ctx, operationID)
+}
+
+func (s *Store) FailQueuedInitialDatabaseExternalConnections(ctx context.Context, instanceID, errorCode, errorMessage string) error {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return ErrDatabaseInstanceNotFound
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	connectionIDs := `SELECT c.id FROM database_external_connections c JOIN database_gateway_routes r ON r.id=c.route_id WHERE r.database_instance_id=? AND c.status='pending'`
+	if _, err := tx.ExecContext(ctx, `UPDATE database_gateway_operations SET status='failed',progress_step='database_provision_failed',error_code=?,error_message=?,completed_at=?,lease_owner='',lease_expires_at='',updated_at=? WHERE operation_type='create_connection' AND status='queued' AND connection_id IN (`+connectionIDs+`)`, strings.TrimSpace(errorCode), strings.TrimSpace(errorMessage), now, now, instanceID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE database_external_connections SET status='failed',last_error_code=?,last_error_message=?,updated_at=? WHERE id IN (`+connectionIDs+`)`, strings.TrimSpace(errorCode), strings.TrimSpace(errorMessage), now, instanceID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) RenewDatabaseGatewayOperationLease(ctx context.Context, operationID, leaseOwner string, leaseDuration time.Duration) error {

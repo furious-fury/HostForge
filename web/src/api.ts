@@ -95,7 +95,7 @@ export type DatabaseEngineDTO = {
   internal_port: number
   connection_variable: string
   minimum_memory_bytes: number
-  public_access_available: false
+  public_access_available: boolean
 }
 
 export type DatabaseResourcePresetDTO = {
@@ -211,6 +211,13 @@ export type DatabaseExternalConnectionDTO = {
   credentials?: DatabaseExternalCredentialDTO[]
   created_at: string
   updated_at: string
+}
+
+export type InitialDatabaseExternalConnectionDTO = {
+  environment_id: string
+  environment_name: string
+  connection: DatabaseExternalConnectionDTO
+  operation: DatabaseGatewayOperationDTO
 }
 
 export type DatabaseGatewayOperationDTO = {
@@ -672,7 +679,7 @@ export const api = {
         memory_reserve_bytes: number
         memory_available_bytes: number
       }
-      networking: { scope: "hostforge_environment"; public_access_available: false }
+      networking: { scope: "hostforge_environment"; public_access_available: boolean }
     }>("/api/database-engines", { signal }),
   createDatabaseService: (
     applicationID: string,
@@ -695,6 +702,8 @@ export const api = {
     instances: DatabaseInstanceDTO[]
     bindings: Array<{ id: string; database_instance_id: string; environment_id: string; consumer_service_id: string; variable_key: string; replace_existing: boolean }>
     operations: DatabaseOperationDTO[]
+    initial_external_connections?: InitialDatabaseExternalConnectionDTO[]
+    initial_external_connection_errors?: Array<{ environment_id: string; environment_name?: string; error: string }>
   }>(`/api/applications/${encodeURIComponent(applicationID)}/database-services`, { method: "POST", body: JSON.stringify(input) }),
   databaseOperation: (operationID: string, signal?: AbortSignal) =>
     apiRequest<{ operation: DatabaseOperationDTO }>(`/api/database-operations/${encodeURIComponent(operationID)}`, { signal }),

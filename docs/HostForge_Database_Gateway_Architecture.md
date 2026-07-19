@@ -13,7 +13,7 @@ The following decisions are part of the v1 contract:
 - Public access is configured per `database_instance`, preserving Production/Staging isolation.
 - One HostForge-managed PostgreSQL gateway is provisioned lazily at `postgres.<platform-domain>:5432`.
 - SQLite is the source of truth. PgBouncer containers, networks, roles, and generated files are derived state.
-- Public access is off by default and always requires TLS, SCRAM credentials, at least one CIDR, a fixed permission profile, and connection limits.
+- The gateway feature flag is off by default. When enabled, PostgreSQL database creation automatically queues one isolated read/write external connection per selected environment, restricted to the creator's exact public IP; all access still requires TLS, SCRAM credentials, at least one CIDR, a fixed permission profile, and connection limits.
 - Credential secrets are encrypted at rest and may be deliberately re-displayed through a no-store endpoint.
 - Rotation creates a new credential generation before retiring the old one. The default grace period is 24 hours and the allowed range is 0–168 hours.
 - PgBouncer uses session pooling. HA, transaction pooling, custom public hostnames, arbitrary grants, client certificates, and non-PostgreSQL public adapters are outside v1.
@@ -298,6 +298,7 @@ An expiry claimant periodically queues `expire_connection` for active connection
 All endpoints require existing HostForge management authentication.
 
 - `GET /api/database-gateways/{engine}` returns feature/adapter availability, endpoint/TLS/config state, DNS guidance, and sanitized errors.
+- `POST /api/applications/{id}/database-services` automatically queues initial PostgreSQL external connections when the gateway feature is enabled and returns their durable operations without secret material.
 - `POST /api/database-gateways/{engine}` lazily provisions the gateway and returns `202` with an operation.
 - `DELETE /api/database-gateways/{engine}` requires typed confirmation, rejects active connections, and returns `202`.
 - `GET /api/database-gateway-operations/{id}` returns durable progress.
@@ -332,11 +333,12 @@ Database Settings contains a distinct **Internal application connections** secti
 
 For PostgreSQL, the public section shows:
 
-- a gateway setup/status card with the reserved hostname, A/AAAA guidance, TLS fingerprint/expiry, container health, and desired/rendered/applied generation
+- an automatic gateway status card with the reserved hostname, A/AAAA guidance, TLS fingerprint/expiry, container health, and desired/rendered/applied generation; there is no separate setup action
 - environment-grouped instance cards so Production and Staging cannot be confused
 - a create dialog with connection name, permission profile, canonical CIDR chips, current-IP shortcut, optional expiry, and warnings
 - connection cards with status, profile, CIDRs, current generation, grace countdown, approximate last use, and reveal/copy/rotate/disable/enable/revoke actions
 - polling while gateway operations are queued/running and final success/error toasts
+- a database-creation progress dialog that waits for the private instance and gateway route, then automatically reveals every environment's initial URL, username, password, and alias with no-store handling
 
 Migration access and open CIDRs display prominent warnings. Open-network creation requires typing `ALLOW PUBLIC ACCESS`. Connection revocation and global gateway teardown require typed confirmation.
 

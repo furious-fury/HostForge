@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -76,5 +77,28 @@ func TestLoadDatabaseGatewayTLSMaterialFindsOnlyReservedCaddyPair(t *testing.T) 
 	}
 	if !strings.Contains(material.CertificatePath, hostname) || !strings.Contains(material.PrivateKeyPath, hostname) {
 		t.Fatalf("unexpected Caddy pair: %+v", material)
+	}
+}
+
+func TestWaitForDatabaseGatewayTLSMaterialAllowsAsynchronousCaddyIssuance(t *testing.T) {
+	hostname := "postgres.apps.example.test"
+	certificate, privateKey := gatewayTestCertificate(t, hostname, time.Now().UTC().Add(30*24*time.Hour))
+	directory := t.TempDir()
+	certificatePath, keyPath := filepath.Join(directory, "gateway.crt"), filepath.Join(directory, "gateway.key")
+	writeDone := make(chan error, 1)
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		if err := os.WriteFile(certificatePath, certificate, 0o600); err != nil {
+			writeDone <- err
+			return
+		}
+		writeDone <- os.WriteFile(keyPath, privateKey, 0o600)
+	}()
+	material, err := waitForDatabaseGatewayTLSMaterial(context.Background(), hostname, certificatePath, keyPath, "", time.Second, 10*time.Millisecond)
+	if writeErr := <-writeDone; writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if err != nil || material.Fingerprint == "" {
+		t.Fatalf("asynchronous certificate was not observed: material=%+v err=%v", material, err)
 	}
 }

@@ -65,8 +65,11 @@ func TestRenderPermanentControlPlaneConfigIsManagedSnippet(t *testing.T) {
 
 func TestRenderConfigCertificateOnlyDomainDoesNotProxyDatabaseTraffic(t *testing.T) {
 	config := RenderConfigWithCertificateDomains(nil, []string{"postgres.apps.example.test"})
-	if !strings.Contains(config, "https://postgres.apps.example.test") || !strings.Contains(config, "tls") || !strings.Contains(config, "respond /hostforge-certificate-probe 204") {
+	if !strings.Contains(config, "https://postgres.apps.example.test") || !strings.Contains(config, "respond /hostforge-certificate-probe 204") {
 		t.Fatalf("certificate-only site missing:\n%s", config)
+	}
+	if strings.Contains(config, "\n    tls\n") {
+		t.Fatalf("certificate-only site must rely on automatic HTTPS for broad Caddy compatibility:\n%s", config)
 	}
 	if strings.Contains(config, "reverse_proxy") || strings.Contains(config, ":5432") {
 		t.Fatalf("Caddy was incorrectly placed in the PostgreSQL data path:\n%s", config)
