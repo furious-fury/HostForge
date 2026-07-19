@@ -25,6 +25,7 @@ import { ApplicationTabs } from "@/components/application-tabs"
 import { ServiceTabs } from "@/components/service-tabs"
 import { DatabaseServiceTabs } from "@/components/database-service-tabs"
 import { DatabaseIdentity } from "@/components/database-identity"
+import { InitialDatabaseCredentials } from "@/initial-database-credentials"
 import { StackIdentity } from "@/components/stack-identity"
 import { StatusBadge } from "@/components/status-badge"
 import { ConfirmationAction } from "@/components/confirmation-action"
@@ -354,7 +355,7 @@ function DatabaseServiceWizard({ applicationID, applicationName, environments, s
     }),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) })
-      navigate(`/applications/${applicationID}/services/${result.service.id}`)
+      navigate(`/applications/${applicationID}/services/${result.service.id}`, { state: { initialExternalConnections: result.initial_external_connections || [], initialExternalConnectionErrors: result.initial_external_connection_errors || [] } })
     },
   })
   const setConnectionConflict = useCallback((serviceID: string, conflict: boolean) => {
@@ -388,7 +389,7 @@ function DatabaseServiceWizard({ applicationID, applicationName, environments, s
 	  {destinations.length ? <div className="grid gap-4 p-5 sm:grid-cols-[minmax(0,1fr)_auto]"><Field label="Backup destination"><AppSelect options={destinations.map((item) => item.name)} value={backupDestination?.name || ""} onValueChange={(name) => setBackupDestinationID(destinations.find((item) => item.name === name)?.id || "")} disabled={!backupEnabled} className="h-10 w-full bg-background text-xs" /></Field><label className="flex items-center gap-3 self-end rounded-lg border bg-background px-4 py-2.5"><span className="text-xs font-semibold">Daily at 02:00 UTC</span><Switch checked={backupEnabled} onCheckedChange={setBackupEnabled} aria-label="Enable daily database backups" /></label></div> : <div className="p-5"><p className="text-xs font-semibold">No backup destination connected</p><p className="mt-1 text-[11px] text-muted-foreground">You can create the database now, then connect Cloudflare R2 or generic S3 and enable backups from its detail page.</p><Button asChild className="mt-3" size="sm" variant="outline"><Link to="/settings">Connect backup storage</Link></Button></div>}
 	</Panel>
     <Panel title="Review" subtitle="Host allocation and persistent resources created by this request"><div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4"><RuntimeValue label="Instances" value={String(selectedEnvironmentIDs.length)} /><RuntimeValue label="Persistent volumes" value={String(selectedEnvironmentIDs.length)} /><RuntimeValue label="Total CPU limit" value={`${(effectiveCPUMillis * selectedEnvironmentIDs.length / 1000).toFixed(1)} vCPU`} /><RuntimeValue label="Total memory limit" value={formatMemory(effectiveMemoryBytes * selectedEnvironmentIDs.length)} /></div><div className="border-t px-5 py-4 text-[11px] leading-5 text-muted-foreground">{consumerServiceIDs.length ? `${consumerServiceIDs.length} application service${consumerServiceIDs.length === 1 ? "" : "s"} will receive ${variableKey || engine.connection_variable} independently in each selected environment.` : "No application binding will be created yet."} {backupEnabled && backupDestination ? `Daily encrypted backups will use ${backupDestination.name}.` : "Remote backups can be configured later, but this database is not protected from VPS loss until then."}</div></Panel>
-    <section className="rounded-xl border border-dashed bg-muted/20 p-5"><div className="flex items-start gap-3"><HardDrivesIcon className="mt-0.5 text-muted-foreground" size={19} /><div><h2 className="text-xs font-semibold">Private by default</h2><p className="mt-1 text-[11px] leading-5 text-muted-foreground">{applicationName} will receive {selectedEnvironmentIDs.length} isolated {engine.name} instance{selectedEnvironmentIDs.length === 1 ? "" : "s"}. No database port is published to the internet. Data volumes are retained for seven days after deletion.</p></div></div></section>
+    <section className="rounded-xl border border-dashed bg-muted/20 p-5"><div className="flex items-start gap-3"><HardDrivesIcon className="mt-0.5 text-muted-foreground" size={19} /><div><h2 className="text-xs font-semibold">{engine.public_access_available ? "Public credentials included" : "Private by default"}</h2>{engine.public_access_available ? <p className="mt-1 text-[11px] leading-5 text-muted-foreground">HostForge will provision one isolated read/write PostgreSQL URL per selected environment, restrict it to your current public IP, and show every credential when setup completes. Data volumes are retained for seven days after deletion.</p> : <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{applicationName} will receive {selectedEnvironmentIDs.length} isolated {engine.name} instance{selectedEnvironmentIDs.length === 1 ? "" : "s"}. No database port is published to the internet. Data volumes are retained for seven days after deletion.</p>}</div></div></section>
     {createMutation.isError && <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">{databaseCreationError(createMutation.error, databaseName)}</div>}
     <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onBack}>Change service type</Button><Button type="button" onClick={() => createMutation.mutate()} disabled={!databaseName.trim() || nameConflict || !selectedVersion || !selectedEnvironmentIDs.length || !preset || !customResourcesValid || backupEnabled && !backupDestination || conflictingServiceIDs.some((id) => consumerServiceIDs.includes(id) && !replacementServiceIDs.includes(id)) || createMutation.isPending}><DatabaseIcon />{createMutation.isPending ? "Queuing database..." : "Create database"}</Button></div>
   </div>
@@ -594,6 +595,10 @@ function DatabaseServiceOverview({ service, data, environments }: {
 }) {
   const queryClient = useQueryClient()
   const location = useLocation()
+  const navigate = useNavigate()
+  const initialCredentialState = location.state as { initialExternalConnections?: import("@/api").InitialDatabaseExternalConnectionDTO[]; initialExternalConnectionErrors?: Array<{ environment_id: string; environment_name?: string; error: string }> } | null
+  const initialExternalConnections = initialCredentialState?.initialExternalConnections || []
+  const initialExternalConnectionErrors = initialCredentialState?.initialExternalConnectionErrors || []
   const [currentTime] = useState(() => Date.now())
   const database = data.database
   const instances = data.database_instances || []
@@ -617,6 +622,7 @@ function DatabaseServiceOverview({ service, data, environments }: {
   const view = location.hash === "#connections" ? "connections" : location.hash === "#backups" ? "backups" : location.hash === "#metrics" ? "metrics" : location.hash === "#logs" ? "logs" : "overview"
   const activeTab = view === "connections" ? "Data & connections" : view === "backups" ? "Backups" : view === "metrics" ? "Metrics" : view === "logs" ? "Logs" : "Overview"
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
+    {(initialExternalConnections.length > 0 || initialExternalConnectionErrors.length > 0) && <InitialDatabaseCredentials entries={initialExternalConnections} errors={initialExternalConnectionErrors} onDone={() => navigate(location.pathname + location.search + location.hash, { replace: true, state: null })} />}
     <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end"><div className="flex items-start gap-4"><DatabaseIdentity engine={database?.engine} label={service.stack_label} showLabel={false} iconClassName="size-12 rounded-xl bg-accent/10" imageClassName="size-8" /><div><p className="mb-1"><StatusPill status={overall} /></p><h1 className="text-3xl font-semibold tracking-[-0.035em]">{service.name}</h1><p className="mt-2 text-xs text-muted-foreground">{database?.engine || "database"} {database?.default_version} · private environment networking</p></div></div><div className="flex items-center gap-2 xl:ml-auto"><StatusBadge tone="neutral">HostForge private network</StatusBadge>{canRestore && <Button size="sm" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>{restoreMutation.isPending ? "Queuing restore…" : "Restore database"}</Button>}</div></div>
     {restoreMutation.isError && <div className="mb-5 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">The retained database could not be restored. Its retention window may have expired.</div>}
     <DatabaseServiceTabs active={activeTab} serviceID={service.id} applicationID={service.application_id} />

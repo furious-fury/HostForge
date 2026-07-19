@@ -109,7 +109,7 @@ describe("database external access", () => {
 
     expect(await screen.findByText("Production reporting")).toBeInTheDocument()
     expect(screen.getByText(/gateway feature flag is disabled/i)).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /set up gateway/i })).toBeDisabled()
+    expect(screen.getByText(/provisioned with first database/i)).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /add external connection/i })).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /reveal/i })).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /rotate/i })).not.toBeInTheDocument()

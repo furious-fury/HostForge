@@ -80,13 +80,20 @@ func (s *server) handleDatabaseEngines(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
 		return
 	}
+	gatewayEnabled := s.cfg != nil && s.cfg.DatabaseGatewaysEnabled
+	engines := databases.Catalog()
+	for index := range engines {
+		if engines[index].ID == "postgresql" {
+			engines[index].PublicAccessAvailable = gatewayEnabled
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"engines":           databases.Catalog(),
+		"engines":           engines,
 		"resource_presets":  databases.ResourcePresets(),
 		"resource_capacity": s.managedDatabaseCapacity(r.Context()),
 		"networking": map[string]any{
 			"scope":                   "hostforge_environment",
-			"public_access_available": false,
+			"public_access_available": gatewayEnabled,
 		},
 	})
 }

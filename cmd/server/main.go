@@ -893,3 +893,14 @@ func requestIP(r *http.Request) string {
 	}
 	return strings.TrimSpace(r.RemoteAddr)
 }
+
+func requestCIDR(r *http.Request) string {
+	clientIP := net.ParseIP(requestIP(r))
+	if clientIP == nil || clientIP.IsLoopback() || clientIP.IsUnspecified() {
+		return ""
+	}
+	if clientIP.To4() != nil {
+		return clientIP.String() + "/32"
+	}
+	return clientIP.String() + "/128"
+}

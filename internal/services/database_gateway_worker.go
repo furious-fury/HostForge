@@ -258,6 +258,34 @@ func processDatabaseGatewayOperation(ctx context.Context, log *slog.Logger, cfg 
 	}
 }
 
+func waitForDatabaseGatewayTLSMaterial(ctx context.Context, hostname, certificatePath, privateKeyPath, caddyStorageRoot string, timeout, pollInterval time.Duration) (DatabaseGatewayTLSMaterial, error) {
+	if timeout <= 0 {
+		timeout = 90 * time.Second
+	}
+	if pollInterval <= 0 {
+		pollInterval = time.Second
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		material, err := LoadDatabaseGatewayTLSMaterial(hostname, certificatePath, privateKeyPath, caddyStorageRoot, time.Now().UTC())
+		if err == nil {
+			return material, nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return DatabaseGatewayTLSMaterial{}, ctx.Err()
+		case <-deadline.C:
+			return DatabaseGatewayTLSMaterial{}, ErrCode("database_gateway_tls_unavailable", fmt.Errorf("gateway certificate did not become available before timeout: %w", lastErr))
+		case <-ticker.C:
+		}
+	}
+}
+
 func ensurePostgreSQLGatewayDataPlane(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, includeConnections, excludeCredentials map[string]bool) error {
 	endpoint, err := store.GetDatabaseGatewayEndpoint(ctx, "postgresql")
 	if err != nil {
@@ -283,7 +311,7 @@ func ensurePostgreSQLGatewayDataPlane(ctx context.Context, log *slog.Logger, cfg
 	if err := SyncCaddyRoutes(ctx, log, cfg, store); err != nil {
 		return ErrCode("database_gateway_tls_unavailable", err)
 	}
-	tlsMaterial, err := LoadDatabaseGatewayTLSMaterial(endpoint.Hostname, cfg.PostgreSQLGatewayCertificateFile, cfg.PostgreSQLGatewayKeyFile, cfg.CaddyStorageRoot, time.Now().UTC())
+	tlsMaterial, err := waitForDatabaseGatewayTLSMaterial(ctx, endpoint.Hostname, cfg.PostgreSQLGatewayCertificateFile, cfg.PostgreSQLGatewayKeyFile, cfg.CaddyStorageRoot, 90*time.Second, time.Second)
 	if err != nil {
 		return err
 	}
