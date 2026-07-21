@@ -159,6 +159,24 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 				ReplaceExisting: connection.ReplaceExisting,
 			})
 		}
+		automaticPublicAccess := strings.EqualFold(strings.TrimSpace(req.Engine), "postgresql") && s.cfg.DatabaseGatewaysEnabled
+		clientCIDR := ""
+		if automaticPublicAccess {
+			// Keep endpoint creation and the initial grants on the same side of a
+			// platform-domain transition. A later data-plane failure still retains
+			// the healthy private database for an explicit retry.
+			s.databaseGatewayDomainMu.RLock()
+			defer s.databaseGatewayDomainMu.RUnlock()
+			clientCIDR = requestCIDR(r)
+			if clientCIDR == "" {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"status": "error", "error": "initial_public_access_source_ip_unavailable"})
+				return
+			}
+			if _, err := s.ensurePostgreSQLGatewayEndpoint(r); err != nil {
+				writeDatabaseGatewayError(w, err)
+				return
+			}
+		}
 		created, err := platformservices.PrepareManagedDatabase(r.Context(), s.store, s.envSealer, platformservices.CreateManagedDatabaseInput{
 			ApplicationID: app.ID, Name: req.Name, Engine: req.Engine, Version: req.Version,
 			EnvironmentIDs: req.EnvironmentIDs, ResourcePreset: req.ResourcePreset,
@@ -192,11 +210,10 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 		}
 		initialPublicAccess := []map[string]any{}
 		initialPublicAccessErrors := []map[string]string{}
-		if strings.EqualFold(strings.TrimSpace(req.Engine), "postgresql") && s.cfg.DatabaseGatewaysEnabled {
-			clientCIDR := requestCIDR(r)
+		if automaticPublicAccess {
 			for _, instance := range created.Instances {
 				environment, environmentErr := s.store.GetEnvironment(r.Context(), instance.EnvironmentID)
-				if environmentErr != nil || clientCIDR == "" {
+				if environmentErr != nil {
 					initialPublicAccessErrors = append(initialPublicAccessErrors, map[string]string{"environment_id": instance.EnvironmentID, "error": "initial_public_access_source_ip_unavailable"})
 					continue
 				}

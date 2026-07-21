@@ -878,20 +878,25 @@ func parseQueryInt(r *http.Request, key string, def int) int {
 }
 
 func requestIP(r *http.Request) string {
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+	directIP := strings.TrimSpace(r.RemoteAddr)
+	if host, _, err := net.SplitHostPort(directIP); err == nil {
+		directIP = strings.TrimSpace(host)
+	}
+	peer := net.ParseIP(directIP)
+	// Trust forwarding metadata only from the loopback proxy in front of the
+	// management API. Direct clients cannot choose the CIDR used for automatic
+	// database access by supplying X-Forwarded-For themselves.
+	if peer != nil && peer.IsLoopback() {
+		forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
 		parts := strings.Split(forwarded, ",")
 		for _, candidate := range parts {
 			trimmed := strings.TrimSpace(candidate)
-			if trimmed != "" {
-				return trimmed
+			if parsed := net.ParseIP(trimmed); parsed != nil && !parsed.IsLoopback() && !parsed.IsUnspecified() {
+				return parsed.String()
 			}
 		}
 	}
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err == nil && strings.TrimSpace(host) != "" {
-		return strings.TrimSpace(host)
-	}
-	return strings.TrimSpace(r.RemoteAddr)
+	return directIP
 }
 
 func requestCIDR(r *http.Request) string {

@@ -158,6 +158,21 @@ describe("database external access", () => {
     expect(screen.getByText(/hours remaining/)).toBeInTheDocument()
   })
 
+  it("labels recovery from a failed initial connection as a retry", async () => {
+    vi.spyOn(api, "databaseGateway").mockResolvedValue({ engine: "postgresql", feature_enabled: true, adapter_available: true, reserved_hostname: "postgres.apps.example.test" })
+    vi.spyOn(api, "databaseExternalAccess").mockResolvedValue(externalAccess(instances[0], [{
+      ...activeConnection,
+      status: "failed",
+      current_generation: 0,
+      last_error_code: "database_gateway_tls_unavailable",
+    }]))
+
+    renderGateway("postgresql", [instances[0]])
+
+    expect(await screen.findByRole("button", { name: "Retry public access" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /^Enable$/ })).not.toBeInTheDocument()
+  })
+
   it("requires the typed warning before an open CIDR can be submitted", async () => {
     const user = userEvent.setup()
     vi.spyOn(api, "databaseGateway").mockResolvedValue({ engine: "postgresql", feature_enabled: true, adapter_available: true, reserved_hostname: "postgres.apps.example.test" })
