@@ -54,24 +54,30 @@ const profileOptions = [
   { value: "migration", label: "Migration (owner-equivalent)" },
 ] as const
 
+const gatewayErrorMessages: Record<string, string> = {
+  database_gateways_disabled: "Database gateways are disabled on this HostForge installation.",
+  external_access_engine_unsupported: "A public gateway adapter is not available for this database engine yet.",
+  database_gateway_platform_domain_required: "Configure the HostForge platform domain before creating the gateway.",
+  database_gateway_dns_mismatch: "The reserved PostgreSQL hostname does not point to this server yet.",
+  database_gateway_port_occupied: "TCP port 5432 is already occupied by another process.",
+  database_gateway_tls_unavailable: "A valid TLS certificate for the reserved hostname is not available yet.",
+  invalid_external_access_cidr: "Enter at least one valid IPv4 or IPv6 CIDR.",
+  external_access_open_confirmation_required: "Confirm the open-network warning before allowing access from every address.",
+  invalid_external_access_profile: "Choose one of the fixed permission profiles.",
+  invalid_external_access_expiry: "The expiry must be a future date and time.",
+  invalid_external_connection_state: "This action is not available in the connection's current state.",
+  external_connection_credentials_unavailable: "Credentials are not available until the connection becomes active.",
+  database_gateway_has_active_connections: "Revoke every external connection before tearing down the gateway.",
+}
+
+function gatewayErrorMessage(code?: string) {
+  if (!code) return "The server could not complete this action."
+  return gatewayErrorMessages[code] || code.replaceAll("_", " ")
+}
+
 function mutationMessage(error: unknown) {
   if (!(error instanceof APIError)) return "The server could not complete this action."
-  const messages: Record<string, string> = {
-    database_gateways_disabled: "Database gateways are disabled on this HostForge installation.",
-    external_access_engine_unsupported: "A public gateway adapter is not available for this database engine yet.",
-    database_gateway_platform_domain_required: "Configure the HostForge platform domain before creating the gateway.",
-    database_gateway_dns_mismatch: "The reserved PostgreSQL hostname does not point to this server yet.",
-    database_gateway_port_occupied: "TCP port 5432 is already occupied by another process.",
-    database_gateway_tls_unavailable: "A valid TLS certificate for the reserved hostname is not available yet.",
-    invalid_external_access_cidr: "Enter at least one valid IPv4 or IPv6 CIDR.",
-    external_access_open_confirmation_required: "Confirm the open-network warning before allowing access from every address.",
-    invalid_external_access_profile: "Choose one of the fixed permission profiles.",
-    invalid_external_access_expiry: "The expiry must be a future date and time.",
-    invalid_external_connection_state: "This action is not available in the connection's current state.",
-    external_connection_credentials_unavailable: "Credentials are not available until the connection becomes active.",
-    database_gateway_has_active_connections: "Revoke every external connection before tearing down the gateway.",
-  }
-  return messages[error.code] || error.message.replaceAll("_", " ")
+  return gatewayErrorMessages[error.code] || error.message.replaceAll("_", " ")
 }
 
 function operationLabel(operation: DatabaseGatewayOperationDTO) {
@@ -107,7 +113,7 @@ function OperationWatcher({ id, onFinished }: { id: string; onFinished: () => vo
 function formatDate(value?: string) {
   if (!value) return "Never"
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString()
+  return Number.isNaN(date.getTime()) ? "Unknown" : date.getUTCFullYear() <= 1 ? "Never" : date.toLocaleString()
 }
 
 function graceCountdown(value?: string) {
@@ -228,7 +234,7 @@ function ConnectionCard({ connection, instanceID, currentIP, disabled, onQueued 
   const graceCredential = connection.credentials?.find((credential) => credential.state === "grace")
   return <article className="overflow-hidden rounded-xl border bg-background">
     <header className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-start"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted"><KeyIcon size={17} /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h4 className="text-xs font-semibold">{connection.name}</h4><StatusBadge tone={connectionTone(connection.status)} dot>{connection.status}</StatusBadge>{connection.permission_profile === "migration" && <StatusBadge tone="warning">Owner-equivalent</StatusBadge>}</div><p className="mt-1 text-[10px] text-muted-foreground">Generation {connection.current_generation} · {connection.client_connection_limit} client connections maximum</p></div></header>
-    <div className="grid gap-3 p-4 text-[10px] sm:grid-cols-2"><div><span className="font-semibold text-muted-foreground">Permission</span><p className="mt-1 capitalize">{connection.permission_profile.replaceAll("_", " ")}</p></div><div><span className="font-semibold text-muted-foreground">Approximate last use</span><p className="mt-1">{formatDate(connection.last_used_at)}</p></div><div><span className="font-semibold text-muted-foreground">Expires</span><p className="mt-1">{formatDate(connection.expires_at)}</p></div><div><span className="font-semibold text-muted-foreground">Allowed networks</span><div className="mt-1 flex flex-wrap gap-1">{connection.cidrs.map((cidr) => <span key={cidr} className="rounded border bg-muted px-1.5 py-0.5 font-mono">{cidr}</span>)}</div></div>{graceCredential && <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 sm:col-span-2"><strong>Previous generation grace:</strong> ends {formatDate(graceCredential.grace_deadline)}</div>}{connection.last_error_code && <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-destructive sm:col-span-2">{connection.last_error_code.replaceAll("_", " ")}</div>}</div>
+    <div className="grid gap-3 p-4 text-[10px] sm:grid-cols-2"><div><span className="font-semibold text-muted-foreground">Permission</span><p className="mt-1 capitalize">{connection.permission_profile.replaceAll("_", " ")}</p></div><div><span className="font-semibold text-muted-foreground">Approximate last use</span><p className="mt-1">{formatDate(connection.last_used_at)}</p></div><div><span className="font-semibold text-muted-foreground">Expires</span><p className="mt-1">{formatDate(connection.expires_at)}</p></div><div><span className="font-semibold text-muted-foreground">Allowed networks</span><div className="mt-1 flex flex-wrap gap-1">{connection.cidrs.map((cidr) => <span key={cidr} className="rounded border bg-muted px-1.5 py-0.5 font-mono">{cidr}</span>)}</div></div>{graceCredential && <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 sm:col-span-2"><strong>Previous generation grace:</strong> ends {formatDate(graceCredential.grace_deadline)}</div>}{connection.last_error_code && <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-destructive sm:col-span-2">{gatewayErrorMessage(connection.last_error_code)}</div>}</div>
     {graceCredential && <p className="border-t border-amber-500/20 bg-amber-500/5 px-4 py-2 text-[10px] text-amber-800 dark:text-amber-300"><strong>Grace countdown:</strong> {graceCountdown(graceCredential.grace_deadline)}</p>}
     {!disabled && connection.status !== "revoked" && <footer className="flex flex-wrap items-center justify-end gap-2 border-t bg-muted/20 px-4 py-3"><CredentialDialog connection={connection} /><ConnectionForm instanceID={instanceID} currentIP={currentIP} connection={connection} onQueued={onQueued} />{connection.status === "active" || connection.status === "rotating" ? <Button size="sm" variant="outline" disabled={action.isPending} onClick={() => action.mutate({ kind: "disable" })}><PauseIcon size={14} /> Disable</Button> : connection.status === "disabled" || connection.status === "expired" || connection.status === "failed" ? <Button size="sm" variant="outline" disabled={action.isPending} onClick={() => action.mutate({ kind: "enable" })}><CheckCircleIcon size={14} /> {connection.status === "failed" ? "Retry public access" : "Enable"}</Button> : null}<RotateAction connection={connection} onQueued={onQueued} /><ConfirmationAction title={`Revoke ${connection.name} permanently?`} description="New access is denied immediately. HostForge terminates only this connection's sessions, removes its grants and roles, and erases the encrypted credential material." confirmLabel="Revoke permanently" confirmationText="REVOKE EXTERNAL CONNECTION" destructive onConfirm={() => action.mutate({ kind: "revoke", input: { confirmation: "REVOKE EXTERNAL CONNECTION" } })} trigger={<Button size="sm" variant="destructive" disabled={action.isPending}><TrashIcon size={14} /> Revoke</Button>} /></footer>}
     {action.isError && <p role="alert" className="border-t px-4 py-3 text-[10px] text-destructive">{mutationMessage(action.error)}</p>}

@@ -26,6 +26,7 @@ import { ServiceTabs } from "@/components/service-tabs"
 import { DatabaseServiceTabs } from "@/components/database-service-tabs"
 import { DatabaseIdentity } from "@/components/database-identity"
 import { InitialDatabaseCredentials } from "@/initial-database-credentials"
+import { initialDatabaseCredentialProgress, type InitialDatabaseCredentialProgress } from "@/initial-database-credential-progress"
 import { StackIdentity } from "@/components/stack-identity"
 import { StatusBadge } from "@/components/status-badge"
 import { ConfirmationAction } from "@/components/confirmation-action"
@@ -37,6 +38,19 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/toast-provider"
 import "@/services.css"
+
+function initialCredentialStorageKey(serviceID: string) {
+  return `hostforge:initial-database-credentials:${serviceID}`
+}
+
+function toInitialCredentialProgress(entries: import("@/api").InitialDatabaseExternalConnectionDTO[]): InitialDatabaseCredentialProgress[] {
+  return entries.map((entry) => ({
+    environmentId: entry.environment_id,
+    environmentName: entry.environment_name,
+    connectionId: entry.connection.id,
+    operationId: entry.operation.id,
+  }))
+}
 
 function StatusPill({ status }: { status: string }) {
   const tone = status === "Running" || status === "Healthy" || status === "Live" ? "success" : status === "Deploying" || status === "Building" || status === "Provisioning" || status === "Queued" || status === "Starting" ? "info" : status === "Failed" ? "error" : "neutral"
@@ -355,7 +369,9 @@ function DatabaseServiceWizard({ applicationID, applicationName, environments, s
     }),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) })
-      navigate(`/applications/${applicationID}/services/${result.service.id}`, { state: { initialExternalConnections: result.initial_external_connections || [], initialExternalConnectionErrors: result.initial_external_connection_errors || [] } })
+      const initialExternalConnections = toInitialCredentialProgress(result.initial_external_connections || [])
+      if (initialExternalConnections.length > 0) sessionStorage.setItem(initialCredentialStorageKey(result.service.id), JSON.stringify(initialExternalConnections))
+      navigate(`/applications/${applicationID}/services/${result.service.id}`, { state: { initialExternalConnections, initialExternalConnectionErrors: result.initial_external_connection_errors || [] } })
     },
   })
   const setConnectionConflict = useCallback((serviceID: string, conflict: boolean) => {
@@ -596,8 +612,16 @@ function DatabaseServiceOverview({ service, data, environments }: {
   const queryClient = useQueryClient()
   const location = useLocation()
   const navigate = useNavigate()
-  const initialCredentialState = location.state as { initialExternalConnections?: import("@/api").InitialDatabaseExternalConnectionDTO[]; initialExternalConnectionErrors?: Array<{ environment_id: string; environment_name?: string; error: string }> } | null
-  const initialExternalConnections = initialCredentialState?.initialExternalConnections || []
+  const initialCredentialState = location.state as { initialExternalConnections?: InitialDatabaseCredentialProgress[]; initialExternalConnectionErrors?: Array<{ environment_id: string; environment_name?: string; error: string }> } | null
+  const [initialExternalConnections] = useState(() => {
+    const routed = initialDatabaseCredentialProgress(initialCredentialState?.initialExternalConnections)
+    if (routed.length > 0) return routed
+    try {
+      return initialDatabaseCredentialProgress(JSON.parse(sessionStorage.getItem(initialCredentialStorageKey(service.id)) || "[]"))
+    } catch {
+      return []
+    }
+  })
   const initialExternalConnectionErrors = initialCredentialState?.initialExternalConnectionErrors || []
   const [currentTime] = useState(() => Date.now())
   const database = data.database
@@ -622,7 +646,7 @@ function DatabaseServiceOverview({ service, data, environments }: {
   const view = location.hash === "#connections" ? "connections" : location.hash === "#backups" ? "backups" : location.hash === "#metrics" ? "metrics" : location.hash === "#logs" ? "logs" : "overview"
   const activeTab = view === "connections" ? "Data & connections" : view === "backups" ? "Backups" : view === "metrics" ? "Metrics" : view === "logs" ? "Logs" : "Overview"
   return <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8 lg:py-9">
-    {(initialExternalConnections.length > 0 || initialExternalConnectionErrors.length > 0) && <InitialDatabaseCredentials entries={initialExternalConnections} errors={initialExternalConnectionErrors} onDone={() => navigate(location.pathname + location.search + location.hash, { replace: true, state: null })} />}
+    {(initialExternalConnections.length > 0 || initialExternalConnectionErrors.length > 0) && <InitialDatabaseCredentials entries={initialExternalConnections} errors={initialExternalConnectionErrors} onDone={() => { sessionStorage.removeItem(initialCredentialStorageKey(service.id)); navigate(location.pathname + location.search + location.hash, { replace: true, state: null }) }} />}
     <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end"><div className="flex items-start gap-4"><DatabaseIdentity engine={database?.engine} label={service.stack_label} showLabel={false} iconClassName="size-12 rounded-xl bg-accent/10" imageClassName="size-8" /><div><p className="mb-1"><StatusPill status={overall} /></p><h1 className="text-3xl font-semibold tracking-[-0.035em]">{service.name}</h1><p className="mt-2 text-xs text-muted-foreground">{database?.engine || "database"} {database?.default_version} · private environment networking</p></div></div><div className="flex items-center gap-2 xl:ml-auto"><StatusBadge tone="neutral">HostForge private network</StatusBadge>{canRestore && <Button size="sm" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>{restoreMutation.isPending ? "Queuing restore…" : "Restore database"}</Button>}</div></div>
     {restoreMutation.isError && <div className="mb-5 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">The retained database could not be restored. Its retention window may have expired.</div>}
     <DatabaseServiceTabs active={activeTab} serviceID={service.id} applicationID={service.application_id} />

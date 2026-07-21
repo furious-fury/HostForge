@@ -6,9 +6,9 @@ import {
   api,
   queryKeys,
   type DatabaseExternalCredentialRevealDTO,
-  type InitialDatabaseExternalConnectionDTO,
 } from "@/api"
 import { Button } from "@/components/ui/button"
+import type { InitialDatabaseCredentialProgress } from "@/initial-database-credential-progress"
 import {
   Dialog,
   DialogContent,
@@ -29,7 +29,7 @@ export function InitialDatabaseCredentials({
   errors = [],
   onDone,
 }: {
-  entries: InitialDatabaseExternalConnectionDTO[]
+  entries: InitialDatabaseCredentialProgress[]
   errors?: Array<{ environment_id: string; environment_name?: string; error: string }>
   onDone: () => void
 }) {
@@ -39,9 +39,8 @@ export function InitialDatabaseCredentials({
   const [revealError, setRevealError] = useState("")
   const operationQueries = useQueries({
     queries: entries.map((entry) => ({
-      queryKey: queryKeys.databaseGatewayOperation(entry.operation.id),
-      queryFn: ({ signal }: { signal: AbortSignal }) => api.databaseGatewayOperation(entry.operation.id, signal),
-      initialData: { operation: entry.operation },
+      queryKey: queryKeys.databaseGatewayOperation(entry.operationId),
+      queryFn: ({ signal }: { signal: AbortSignal }) => api.databaseGatewayOperation(entry.operationId, signal),
       refetchInterval: (query: { state: { data?: { operation?: { status?: string } } } }) => {
         const status = query.state.data?.operation?.status
         return status === "success" || status === "failed" ? false : 1500
@@ -56,8 +55,8 @@ export function InitialDatabaseCredentials({
     if (!allSuccessful || requested.current) return
     requested.current = true
     void Promise.all(entries.map(async (entry) => ({
-      environmentName: entry.environment_name,
-      credential: await api.revealDatabaseExternalCredentials(entry.connection.id),
+      environmentName: entry.environmentName,
+      credential: await api.revealDatabaseExternalCredentials(entry.connectionId),
     }))).then(setCredentials).catch((error: unknown) => {
       setRevealError(error instanceof Error ? error.message : "Credentials could not be revealed.")
     })
@@ -85,8 +84,8 @@ export function InitialDatabaseCredentials({
       {!terminal && <div className="space-y-3">
         {entries.map((entry, index) => {
           const operation = operations[index]
-          return <div key={entry.connection.id} className="rounded-lg border p-3">
-            <div className="flex items-center justify-between gap-3 text-xs"><span className="font-semibold">{entry.environment_name}</span><span className="text-muted-foreground">{operation?.progress_percent || 0}%</span></div>
+          return <div key={entry.connectionId} className="rounded-lg border p-3">
+            <div className="flex items-center justify-between gap-3 text-xs"><span className="font-semibold">{entry.environmentName}</span><span className="text-muted-foreground">{operation?.progress_percent || 0}%</span></div>
             <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"><span className="block h-full rounded-full bg-accent transition-all" style={{ width: `${Math.max(3, operation?.progress_percent || 0)}%` }} /></div>
             <p className="mt-2 text-[10px] capitalize text-muted-foreground">{(operation?.progress_step || "waiting for database").replaceAll("_", " ")}</p>
           </div>
