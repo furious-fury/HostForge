@@ -130,6 +130,7 @@ describe("database external access", () => {
     expect(await screen.findByText("hf_stage")).toBeInTheDocument()
     expect(screen.getByText("Production")).toBeInTheDocument()
     expect(screen.getByText("Staging")).toBeInTheDocument()
+    expect(screen.getByText(/record already covers this hostname/i)).toBeInTheDocument()
     expect(screen.getAllByRole("button", { name: /add external connection/i })).toHaveLength(2)
   })
 

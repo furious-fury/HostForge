@@ -8,6 +8,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${REPO_ROOT}/scripts/lib/env-file.sh"
 PREFIX="/usr/local"
 DATA_DIR="/var/lib/hostforge"
 WITH_SYSTEMD=0
@@ -264,7 +265,14 @@ if getent group caddy >/dev/null 2>&1; then
   echo "Adding hostforge to caddy group for managed route snippets..."
   usermod -aG caddy hostforge
   bash "${REPO_ROOT}/scripts/migrate-caddy-layout.sh"
-  CADDY_CERTIFICATE_ROOT="/var/lib/caddy/.local/share/caddy/certificates"
+  CADDY_STORAGE_ROOT="$(hostforge_read_env_value "${ENV_FILE}" HOSTFORGE_CADDY_STORAGE_ROOT)"
+  if [[ -z "${CADDY_STORAGE_ROOT}" ]]; then
+    CADDY_STORAGE_ROOT="/var/lib/caddy/.local/share/caddy"
+  elif [[ "${CADDY_STORAGE_ROOT}" != /* ]]; then
+    echo "error: HOSTFORGE_CADDY_STORAGE_ROOT must be an absolute path so installer ACLs can be scoped safely." >&2
+    exit 1
+  fi
+  CADDY_CERTIFICATE_ROOT="${CADDY_STORAGE_ROOT}/certificates"
   if ! getent passwd caddy >/dev/null 2>&1; then
     echo "error: the caddy group exists but the caddy service account is unavailable." >&2
     exit 1
@@ -278,8 +286,21 @@ if getent group caddy >/dev/null 2>&1; then
       exit 1
     fi
     echo "Granting hostforge narrow read-only traversal of Caddy certificate storage..."
+    current_path="${CADDY_STORAGE_ROOT}"
+    while [[ "${current_path}" != "/var/lib" && "${current_path}" != "/" ]]; do
+      setfacl -m u:hostforge:--x "${current_path}"
+      current_path="$(dirname "${current_path}")"
+    done
     setfacl -R -m u:hostforge:rX "${CADDY_CERTIFICATE_ROOT}"
     setfacl -d -m u:hostforge:rX "${CADDY_CERTIFICATE_ROOT}"
+    if ! runuser -u hostforge -- test -r "${CADDY_CERTIFICATE_ROOT}" || ! runuser -u hostforge -- test -x "${CADDY_CERTIFICATE_ROOT}"; then
+      echo "error: HostForge cannot read and traverse ${CADDY_CERTIFICATE_ROOT} after ACL setup." >&2
+      exit 1
+    fi
+    hostforge_ensure_env_default "${ENV_FILE}" HOSTFORGE_CADDY_STORAGE_ROOT "${CADDY_STORAGE_ROOT}"
+    chown root:hostforge "${ENV_FILE}"
+    chmod 0640 "${ENV_FILE}"
+    echo "Caddy certificate discovery root is configured at ${CADDY_STORAGE_ROOT}."
   fi
 fi
 
