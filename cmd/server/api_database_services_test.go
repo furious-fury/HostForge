@@ -16,9 +16,6 @@ import (
 func TestCreatePostgreSQLServiceQueuesIsolatedProvisioning(t *testing.T) {
 	s := newAPITestServer(t)
 	configureGatewayAPIServer(t, s)
-	if _, err := s.store.EnsureDatabaseGatewayEndpointForPlatformDomain(context.Background(), "postgresql", "postgres.apps.example.test", s.cfg.PostgreSQLGatewayImage, s.cfg.PostgreSQLGatewayVersion, "apps.example.test"); err != nil {
-		t.Fatal(err)
-	}
 	app, err := s.store.CreateApplication(context.Background(), "Database API", "")
 	if err != nil {
 		t.Fatal(err)
@@ -37,6 +34,7 @@ func TestCreatePostgreSQLServiceQueuesIsolatedProvisioning(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/applications/"+app.ID+"/database-services", strings.NewReader(string(body)))
+	request.RemoteAddr = "127.0.0.1:49152"
 	request.Header.Set("X-Forwarded-For", "198.51.100.42")
 	s.handleApplications(recorder, request)
 	if recorder.Code != http.StatusAccepted {
@@ -55,6 +53,10 @@ func TestCreatePostgreSQLServiceQueuesIsolatedProvisioning(t *testing.T) {
 	initialConnections := payload["initial_external_connections"].([]any)
 	if len(initialConnections) != 2 {
 		t.Fatalf("initial public connections=%d payload=%+v", len(initialConnections), payload)
+	}
+	endpoint, err := s.store.GetDatabaseGatewayEndpoint(context.Background(), "postgresql")
+	if err != nil || endpoint.Hostname != "postgres.apps.example.test" {
+		t.Fatalf("fresh database creation did not lazily create the gateway endpoint: endpoint=%+v err=%v", endpoint, err)
 	}
 	for _, raw := range initialConnections {
 		initial := raw.(map[string]any)
@@ -104,6 +106,40 @@ func TestCreatePostgreSQLServiceQueuesIsolatedProvisioning(t *testing.T) {
 		if strings.Contains(detailBody, forbidden) {
 			t.Fatalf("database service detail exposed %q: %s", forbidden, detailBody)
 		}
+	}
+}
+
+func TestCreatePostgreSQLServiceRequiresTrustedPublicSourceBeforeCreatingDatabase(t *testing.T) {
+	s := newAPITestServer(t)
+	configureGatewayAPIServer(t, s)
+	app, _ := s.store.CreateApplication(context.Background(), "Gateway source preflight", "")
+	environments, _ := s.store.ListApplicationEnvironments(context.Background(), app.ID)
+	body := `{"name":"primary","engine":"postgresql","version":"18","environment_ids":["` + environments[0].ID + `"],"resource_preset":"development","connections":[]}`
+
+	missingSource := httptest.NewRequest(http.MethodPost, "/api/applications/"+app.ID+"/database-services", strings.NewReader(body))
+	missingSource.RemoteAddr = "127.0.0.1:49152"
+	recorder := httptest.NewRecorder()
+	s.handleApplications(recorder, missingSource)
+	assertAPIError(t, recorder, http.StatusUnprocessableEntity, "initial_public_access_source_ip_unavailable")
+
+	// The same name remains available, proving preflight failed before database
+	// desired state was committed.
+	retry := httptest.NewRequest(http.MethodPost, "/api/applications/"+app.ID+"/database-services", strings.NewReader(body))
+	retry.RemoteAddr = "127.0.0.1:49153"
+	retry.Header.Set("X-Forwarded-For", "198.51.100.42")
+	retryRecorder := httptest.NewRecorder()
+	s.handleApplications(retryRecorder, retry)
+	if retryRecorder.Code != http.StatusAccepted {
+		t.Fatalf("trusted retry status=%d body=%s", retryRecorder.Code, retryRecorder.Body.String())
+	}
+}
+
+func TestRequestCIDRDoesNotTrustForwardingHeaderFromDirectClient(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "203.0.113.9:49152"
+	request.Header.Set("X-Forwarded-For", "198.51.100.42")
+	if got := requestCIDR(request); got != "203.0.113.9/32" {
+		t.Fatalf("request CIDR=%q want direct peer CIDR", got)
 	}
 }
 

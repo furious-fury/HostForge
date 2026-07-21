@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 
-import { api, type InitialDatabaseExternalConnectionDTO } from "@/api"
+import { api, type DatabaseGatewayOperationDTO } from "@/api"
+import { initialDatabaseCredentialProgress, type InitialDatabaseCredentialProgress } from "@/initial-database-credential-progress"
 import { InitialDatabaseCredentials } from "@/initial-database-credentials"
 import { ToastProvider } from "@/toast-provider"
 
@@ -12,22 +13,13 @@ afterEach(() => {
 
 it("waits for initial public access and automatically reveals no-store credentials", async () => {
   const timestamp = "2026-07-19T00:00:00Z"
-  const entry: InitialDatabaseExternalConnectionDTO = {
-    environment_id: "environment-production",
-    environment_name: "Production",
-    connection: {
-      id: "connection-production",
-      route_id: "route-production",
-      name: "Production public access",
-      permission_profile: "read_write",
-      cidrs: ["198.51.100.42/32"],
-      status: "pending",
-      current_generation: 0,
-      client_connection_limit: 20,
-      created_at: timestamp,
-      updated_at: timestamp,
-    },
-    operation: {
+  const entry: InitialDatabaseCredentialProgress = {
+    environmentId: "environment-production",
+    environmentName: "Production",
+    connectionId: "connection-production",
+    operationId: "operation-production",
+  }
+  const operation: DatabaseGatewayOperationDTO = {
       id: "operation-production",
       engine: "postgresql",
       route_id: "route-production",
@@ -40,10 +32,9 @@ it("waits for initial public access and automatically reveals no-store credentia
       attempt_count: 0,
       created_at: timestamp,
       updated_at: timestamp,
-    },
   }
   vi.spyOn(api, "databaseGatewayOperation").mockResolvedValue({
-    operation: { ...entry.operation, status: "success", progress_step: "ready", progress_percent: 100 },
+    operation: { ...operation, status: "success", progress_step: "ready", progress_percent: 100 },
   })
   const reveal = vi.spyOn(api, "revealDatabaseExternalCredentials").mockResolvedValue({
     username: "hfc_credential",
@@ -71,4 +62,21 @@ it("waits for initial public access and automatically reveals no-store credentia
   expect(screen.getByText("secret-password")).toBeInTheDocument()
   expect(screen.getByText(/postgresql:\/\/hfc_credential/)).toBeInTheDocument()
   expect(reveal).toHaveBeenCalledWith("connection-production")
+})
+
+it("accepts only non-secret identifiers from persisted provisioning progress", () => {
+  expect(initialDatabaseCredentialProgress([{
+    environmentId: "environment-production",
+    environmentName: "Production",
+    connectionId: "connection-production",
+    operationId: "operation-production",
+    password: "must-not-be-used",
+    url: "postgresql://must-not-be-used",
+  }])).toEqual([{
+    environmentId: "environment-production",
+    environmentName: "Production",
+    connectionId: "connection-production",
+    operationId: "operation-production",
+  }])
+  expect(initialDatabaseCredentialProgress([{ environmentName: "Production" }])).toEqual([])
 })
