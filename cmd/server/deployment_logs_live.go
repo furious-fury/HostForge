@@ -148,7 +148,8 @@ func (s *server) handleDeploymentLogsLive(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	conn, err := logUpgrader.Upgrade(w, r, nil)
+	upgrader := websocket.Upgrader{CheckOrigin: s.checkWSOrigin}
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		reqLog.Warn("deployment log ws upgrade failed", "deployment_id", deploymentID, "remote_ip", remoteIP, "err", err)
 		return

@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -22,7 +23,6 @@ import (
 
 	"github.com/furious-fury/HostForge/internal/auth"
 	"github.com/furious-fury/HostForge/internal/bootstrap"
-	"github.com/gorilla/websocket"
 
 	"github.com/furious-fury/HostForge/internal/config"
 	"github.com/furious-fury/HostForge/internal/crypto/envcrypt"
@@ -790,8 +790,41 @@ func (s *server) handleDeploymentLogsTail(w http.ResponseWriter, r *http.Request
 	_, _ = w.Write(content)
 }
 
-var logUpgrader = websocket.Upgrader{
-	CheckOrigin: func(_ *http.Request) bool { return true },
+// checkWSOrigin rejects a cross-origin WebSocket upgrade unless the Origin is
+// the configured platform domain (or a subdomain of it) or loopback. An
+// absent Origin header is allowed: browsers always send Origin on a
+// cross-origin upgrade, so its absence means a non-browser client (curl,
+// internal tooling), not a spoofed browser request.
+func (s *server) checkWSOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return false
+	}
+	if reqHost := strings.ToLower(strings.TrimSpace(r.Host)); reqHost != "" {
+		if h, _, splitErr := net.SplitHostPort(reqHost); splitErr == nil {
+			reqHost = h
+		}
+		if host == reqHost {
+			return true
+		}
+	}
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	if base := strings.TrimSpace(s.cfg.PlatformDomainBase); base != "" {
+		if host == base || strings.HasSuffix(host, "."+base) {
+			return true
+		}
+	}
+	return false
 }
 
 func errorsIsNoRows(err error) bool {
