@@ -15,11 +15,16 @@ import (
 // OpenSQLite opens the SQLite database at dbPath, pings it, and runs ApplyMigrations.
 // The DSN uses WAL and a busy timeout to reduce "database is locked" under concurrent readers.
 // MaxOpenConns(1) matches SQLite’s typical single-writer usage on the control plane.
+//
+// Every pragma must use the `_pragma=name(value)` form. The driver is
+// modernc.org/sqlite, which recognises only that syntax; the `_busy_timeout=`
+// and `_journal_mode=` query parameters are mattn/go-sqlite3 spellings and are
+// silently discarded here.
 func OpenSQLite(ctx context.Context, dbPath string) (*sql.DB, error) {
 	if err := backupBeforeApplicationModelMigration(dbPath); err != nil {
 		return nil, err
 	}
-	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_journal_mode=WAL&_pragma=foreign_keys(1)", dbPath)
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
