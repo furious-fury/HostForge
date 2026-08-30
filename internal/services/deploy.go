@@ -27,6 +27,7 @@ import (
 	"github.com/furious-fury/HostForge/internal/redact"
 	"github.com/furious-fury/HostForge/internal/repository"
 	"github.com/furious-fury/HostForge/internal/reqctx"
+	mobyclient "github.com/moby/moby/client"
 )
 
 // DeployJob contains persisted and computed data for a deployment execution.
@@ -75,7 +76,7 @@ func recordDeployObs(ctx context.Context, log *slog.Logger, job DeployJob, step,
 
 // ExecuteDeploy runs clone/build/run/health/cutover for a prepared deployment.
 // authResolver is required for private GitHub repositories.
-func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob, sealer *envcrypt.Sealer, authResolver GitAuthResolver) (result DeployResult, err error) {
+func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, authResolver GitAuthResolver) (result DeployResult, err error) {
 	deployStart := time.Now()
 	log = log.With("service_id", job.serviceID(), "environment_id", job.environmentID(), "deployment_id", job.Deployment.ID)
 	defer func() {
@@ -120,14 +121,6 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		}
 		log.Error("deploy failed", "deployment_id", job.Deployment.ID, "public_code", code, "error", stepErr)
 	}
-
-	dockerClient, err := docker.NewClient(ctx)
-	if err != nil {
-		e := ErrCode("docker_unavailable", err)
-		markFailed(e)
-		return DeployResult{}, e
-	}
-	defer dockerClient.Close()
 
 	if err := os.MkdirAll(filepath.Dir(job.LogsPath), 0o755); err != nil {
 		e := ErrCode("deploy_mkdir_logs_failed", err)
@@ -213,10 +206,10 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	detectedStackKind := ""
 	{
 		log.Info("deploy step", "step", "railpack_build_start", "dir", job.BuildDirectory, "image", job.ImageRef)
-		railpackBuilder, err := newRailpackAdapter(cfg)
+		railpackBuilder, err := newRailpackAdapter(cfg, dockerClient)
 		var dockerfileBuilder builder.Builder
 		if err == nil {
-			dockerfileBuilder, err = newDockerfileBuilder(cfg)
+			dockerfileBuilder, err = newDockerfileBuilder(cfg, dockerClient)
 		}
 		var buildResult builder.Result
 		if err == nil {
@@ -504,7 +497,7 @@ func ValidateRuntimeConfig(cfg *config.Config) error {
 	return nil
 }
 
-func newRailpackAdapter(cfg *config.Config) (*railpack.Adapter, error) {
+func newRailpackAdapter(cfg *config.Config, dockerClient *mobyclient.Client) (*railpack.Adapter, error) {
 	planner, err := railpack.NewPlanner(cfg.RailpackBin, cfg.RailpackVersion)
 	if err != nil {
 		return nil, err
@@ -514,7 +507,7 @@ func newRailpackAdapter(cfg *config.Config) (*railpack.Adapter, error) {
 		Address:         cfg.BuildKitAddress,
 		FrontendImage:   cfg.RailpackFrontendImage,
 		RailpackVersion: cfg.RailpackVersion,
-	})
+	}, dockerClient)
 	if err != nil {
 		return nil, err
 	}
@@ -525,13 +518,13 @@ func newRailpackAdapter(cfg *config.Config) (*railpack.Adapter, error) {
 	})
 }
 
-func newDockerfileBuilder(cfg *config.Config) (builder.Builder, error) {
+func newDockerfileBuilder(cfg *config.Config, dockerClient *mobyclient.Client) (builder.Builder, error) {
 	executor, err := railpack.NewBuildKitExecutor(railpack.BuildKitConfig{
 		Binary:          cfg.BuildKitBin,
 		Address:         cfg.BuildKitAddress,
 		FrontendImage:   cfg.RailpackFrontendImage,
 		RailpackVersion: cfg.RailpackVersion,
-	})
+	}, dockerClient)
 	if err != nil {
 		return nil, err
 	}

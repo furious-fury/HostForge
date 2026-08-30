@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/furious-fury/HostForge/internal/builder"
-	hfdocker "github.com/furious-fury/HostForge/internal/docker"
 	"github.com/moby/moby/client"
 )
 
@@ -30,14 +29,12 @@ type imageStore interface {
 	LoadAndVerify(context.Context, io.Reader, string) (string, error)
 }
 
-type dockerImageStore struct{}
+type dockerImageStore struct {
+	client *client.Client
+}
 
-func (dockerImageStore) LoadAndVerify(ctx context.Context, imageTar io.Reader, imageRef string) (string, error) {
-	cli, err := hfdocker.NewClient(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer cli.Close()
+func (s dockerImageStore) LoadAndVerify(ctx context.Context, imageTar io.Reader, imageRef string) (string, error) {
+	cli := s.client
 	response, err := cli.ImageLoad(ctx, imageTar, client.ImageLoadWithQuiet(true))
 	if err != nil {
 		return "", fmt.Errorf("load BuildKit image: %w", err)
@@ -68,7 +65,9 @@ type BuildKitExecutor struct {
 
 // NewBuildKitExecutor creates a direct BuildKit executor. FrontendImage must
 // be digest-pinned; mutable tags are forbidden in the production path.
-func NewBuildKitExecutor(config BuildKitConfig) (*BuildKitExecutor, error) {
+// dockerClient is the shared Docker client used to load and verify the built
+// image; it must not be nil.
+func NewBuildKitExecutor(config BuildKitConfig, dockerClient *client.Client) (*BuildKitExecutor, error) {
 	binary := strings.TrimSpace(config.Binary)
 	if binary == "" {
 		binary = "buildctl"
@@ -91,7 +90,7 @@ func NewBuildKitExecutor(config BuildKitConfig) (*BuildKitExecutor, error) {
 		frontendImage:   frontend,
 		railpackVersion: version,
 		runner:          execRunner{},
-		images:          dockerImageStore{},
+		images:          dockerImageStore{client: dockerClient},
 	}, nil
 }
 

@@ -68,6 +68,14 @@ type Config struct {
 	SessionCookieSecure bool
 	// WebhookRateLimitPerMinute is a basic per-IP webhook request ceiling.
 	WebhookRateLimitPerMinute int
+	// LoginRateLimitPerMinute is a basic per-IP /auth/session POST ceiling.
+	// Lower than the webhook limit: login attempts are the more directly
+	// attack-relevant surface (credential stuffing / brute force).
+	LoginRateLimitPerMinute int
+	// ShutdownTimeoutSeconds bounds both the HTTP drain and the in-flight
+	// deploy drain on SIGTERM/SIGINT. The systemd unit's TimeoutStopSec must
+	// exceed this or systemd SIGKILLs through the sequence.
+	ShutdownTimeoutSeconds int
 	// LogsDirPath overrides where build logs are written (default: <data-dir>/logs).
 	LogsDirPath string
 	// RailpackEnabled enables the required Railpack/BuildKit deployment path.
@@ -195,6 +203,10 @@ const (
 	SessionCookieSecureEnv = "HOSTFORGE_SESSION_COOKIE_SECURE"
 	// WebhookRateLimitPerMinuteEnv sets a simple per-IP webhook rate cap.
 	WebhookRateLimitPerMinuteEnv = "HOSTFORGE_WEBHOOK_RATE_LIMIT_PER_MINUTE"
+	// LoginRateLimitPerMinuteEnv sets a simple per-IP /auth/session rate cap.
+	LoginRateLimitPerMinuteEnv = "HOSTFORGE_LOGIN_RATE_LIMIT_PER_MINUTE"
+	// ShutdownTimeoutSecondsEnv bounds graceful shutdown drain time.
+	ShutdownTimeoutSecondsEnv = "HOSTFORGE_SHUTDOWN_TIMEOUT_SECONDS"
 	// LogsDirEnv overrides the default logs directory under data dir.
 	LogsDirEnv = "HOSTFORGE_LOGS_DIR"
 	// RailpackEnabledEnv enables the required Railpack/BuildKit deployment path.
@@ -381,6 +393,14 @@ func Load(dataDirFlag string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	loginRateLimitPerMinute, err := envInt(LoginRateLimitPerMinuteEnv, 20)
+	if err != nil {
+		return nil, err
+	}
+	shutdownTimeoutSeconds, err := envInt(ShutdownTimeoutSecondsEnv, 30)
+	if err != nil {
+		return nil, err
+	}
 	logsDirPath := strings.TrimSpace(os.Getenv(LogsDirEnv))
 	railpackEnabled, err := envBool(RailpackEnabledEnv, true)
 	if err != nil {
@@ -509,6 +529,8 @@ func Load(dataDirFlag string) (*Config, error) {
 		SessionTTLMinutes:                   sessionTTLMinutes,
 		SessionCookieSecure:                 sessionCookieSecure,
 		WebhookRateLimitPerMinute:           webhookRateLimitPerMinute,
+		LoginRateLimitPerMinute:             loginRateLimitPerMinute,
+		ShutdownTimeoutSeconds:              shutdownTimeoutSeconds,
 		LogsDirPath:                         logsDirPath,
 		RailpackEnabled:                     railpackEnabled,
 		RailpackBin:                         railpackBin,

@@ -13,6 +13,7 @@ import (
 	"github.com/furious-fury/HostForge/internal/databases"
 	"github.com/furious-fury/HostForge/internal/docker"
 	"github.com/furious-fury/HostForge/internal/repository"
+	mobyclient "github.com/moby/moby/client"
 )
 
 const DatabaseVolumeRetention = 7 * 24 * time.Hour
@@ -24,7 +25,7 @@ type DeleteDatabaseRuntimeResult struct {
 
 // DeleteDatabaseServiceAndRuntime removes only the database containers and then
 // starts the retained-volume window. Named volumes are deliberately untouched.
-func DeleteDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, serviceID, actor string) (DeleteDatabaseRuntimeResult, error) {
+func DeleteDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, serviceID, actor string) (DeleteDatabaseRuntimeResult, error) {
 	service, err := store.GetService(ctx, serviceID)
 	if err != nil {
 		return DeleteDatabaseRuntimeResult{}, err
@@ -57,11 +58,7 @@ func DeleteDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg 
 		}
 	}
 	if needsDocker || hasGatewayRoute {
-		client, err := docker.NewClient(ctx)
-		if err != nil {
-			return DeleteDatabaseRuntimeResult{}, ErrCode("docker_unavailable", err)
-		}
-		defer client.Close()
+		client := dockerClient
 		if hasGatewayRoute {
 			if cfg == nil || sealer == nil {
 				return DeleteDatabaseRuntimeResult{}, ErrCode("database_gateway_revocation_unavailable", errors.New("gateway configuration and encryption key are required to revoke external access"))
@@ -110,12 +107,12 @@ func DeleteDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg 
 	return result, nil
 }
 
-func StartDatabasePurgeLoop(ctx context.Context, log *slog.Logger, store *repository.Store) {
+func StartDatabasePurgeLoop(ctx context.Context, log *slog.Logger, store *repository.Store, dockerClient *mobyclient.Client) {
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
-			purgeDueDatabaseServices(ctx, log, store, time.Now().UTC())
+			purgeDueDatabaseServices(ctx, log, store, dockerClient, time.Now().UTC())
 			select {
 			case <-ctx.Done():
 				return
@@ -125,7 +122,7 @@ func StartDatabasePurgeLoop(ctx context.Context, log *slog.Logger, store *reposi
 	}()
 }
 
-func purgeDueDatabaseServices(ctx context.Context, log *slog.Logger, store *repository.Store, at time.Time) {
+func purgeDueDatabaseServices(ctx context.Context, log *slog.Logger, store *repository.Store, dockerClient *mobyclient.Client, at time.Time) {
 	due, err := store.ListDatabaseInstancesDueForPurge(ctx, at, 100)
 	if err != nil {
 		if log != nil {
@@ -138,13 +135,13 @@ func purgeDueDatabaseServices(ctx context.Context, log *slog.Logger, store *repo
 		serviceIDs[instance.ServiceID] = struct{}{}
 	}
 	for serviceID := range serviceIDs {
-		if err := PurgeDatabaseServiceAndRuntime(ctx, log, store, serviceID, at, "system"); err != nil && log != nil {
+		if err := PurgeDatabaseServiceAndRuntime(ctx, log, store, dockerClient, serviceID, at, "system"); err != nil && log != nil {
 			log.Error("purge retained database failed", "service_id", serviceID, "error", err)
 		}
 	}
 }
 
-func PurgeDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, store *repository.Store, serviceID string, at time.Time, actor string) error {
+func PurgeDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, store *repository.Store, dockerClient *mobyclient.Client, serviceID string, at time.Time, actor string) error {
 	service, err := store.GetService(ctx, serviceID)
 	if err != nil {
 		return ErrCode("database_service_not_found", err)
@@ -164,11 +161,7 @@ func PurgeDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, store
 	if err := store.EnsureDatabaseServicePurgeReady(ctx, serviceID); err != nil {
 		return ErrCode("database_purge_operation_active", err)
 	}
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		return ErrCode("docker_unavailable", err)
-	}
-	defer client.Close()
+	client := dockerClient
 	for _, instance := range instances {
 		if err := docker.RemoveManagedDatabaseVolume(ctx, client, instance.VolumeName, instance.ID); err != nil {
 			return ErrCode("database_volume_purge_failed", err)

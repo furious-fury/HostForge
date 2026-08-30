@@ -20,7 +20,7 @@ import (
 	mobyclient "github.com/moby/moby/client"
 )
 
-func StartDatabaseGatewayOperationLoop(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer) {
+func StartDatabaseGatewayOperationLoop(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client) {
 	if cfg == nil || !cfg.DatabaseGatewaysEnabled {
 		return
 	}
@@ -48,9 +48,9 @@ func StartDatabaseGatewayOperationLoop(ctx context.Context, log *slog.Logger, cf
 	}
 	for index := 0; index < workers; index++ {
 		workerID := fmt.Sprintf("hostforge-gateway-%d-%d", os.Getpid(), index)
-		go runDatabaseGatewayWorker(ctx, log, cfg, store, sealer, workerID)
+		go runDatabaseGatewayWorker(ctx, log, cfg, store, sealer, dockerClient, workerID)
 	}
-	go runDatabaseGatewayClaims(ctx, log, cfg, store)
+	go runDatabaseGatewayClaims(ctx, log, cfg, store, dockerClient)
 }
 
 func queueDatabaseGatewayStartupReconciliation(ctx context.Context, store *repository.Store) error {
@@ -78,7 +78,7 @@ func queueDatabaseGatewayStartupReconciliation(ctx context.Context, store *repos
 	return err
 }
 
-func runDatabaseGatewayClaims(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store) {
+func runDatabaseGatewayClaims(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, dockerClient *mobyclient.Client) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	var lastCertificateExpiryWarning time.Time
@@ -100,7 +100,7 @@ func runDatabaseGatewayClaims(ctx context.Context, log *slog.Logger, cfg *config
 			}
 			lastCertificateExpiryWarning = now
 		}
-		if err := reconcileDatabaseGatewayUsage(ctx, store, now); err != nil && log != nil {
+		if err := reconcileDatabaseGatewayUsage(ctx, store, dockerClient, now); err != nil && log != nil {
 			log.Warn("reconcile database gateway usage metadata failed", "error", safeDatabaseOperationError(err))
 		}
 		select {
@@ -143,7 +143,7 @@ func reconcileDatabaseGatewayCertificate(ctx context.Context, cfg *config.Config
 	return err
 }
 
-func reconcileDatabaseGatewayUsage(ctx context.Context, store *repository.Store, now time.Time) error {
+func reconcileDatabaseGatewayUsage(ctx context.Context, store *repository.Store, dockerClient *mobyclient.Client, now time.Time) error {
 	if store == nil {
 		return nil
 	}
@@ -154,12 +154,7 @@ func reconcileDatabaseGatewayUsage(ctx context.Context, store *repository.Store,
 	if err != nil {
 		return err
 	}
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	runtime := &DockerPostgreSQLGatewayRuntime{Client: client, GatewayContainerID: endpoint.DockerContainerID}
+	runtime := &DockerPostgreSQLGatewayRuntime{Client: dockerClient, GatewayContainerID: endpoint.DockerContainerID}
 	roles, err := runtime.ActivePgBouncerRoles(ctx)
 	if err != nil {
 		return err
@@ -167,7 +162,7 @@ func reconcileDatabaseGatewayUsage(ctx context.Context, store *repository.Store,
 	return store.TouchDatabaseExternalCredentialUsage(ctx, roles, now)
 }
 
-func runDatabaseGatewayWorker(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, workerID string) {
+func runDatabaseGatewayWorker(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, workerID string) {
 	const leaseDuration = 2 * time.Minute
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -205,13 +200,13 @@ func runDatabaseGatewayWorker(ctx context.Context, log *slog.Logger, cfg *config
 				}
 			}
 		}()
-		processDatabaseGatewayOperation(operationCtx, log, cfg, store, sealer, operation)
+		processDatabaseGatewayOperation(operationCtx, log, cfg, store, sealer, dockerClient, operation)
 		cancel()
 		<-leaseDone
 	}
 }
 
-func processDatabaseGatewayOperation(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, operation repository.DatabaseGatewayOperation) {
+func processDatabaseGatewayOperation(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, operation repository.DatabaseGatewayOperation) {
 	fail := func(code string, failure error) {
 		failure = safeDatabaseOperationError(failure)
 		_, _ = store.UpdateDatabaseGatewayOperation(context.WithoutCancel(ctx), operation.ID, "failed", "failed", operation.ProgressPercent, code, failure.Error())
@@ -225,12 +220,7 @@ func processDatabaseGatewayOperation(ctx context.Context, log *slog.Logger, cfg 
 			log.Error("database gateway operation failed", "operation_id", operation.ID, "type", operation.OperationType, "error_code", code, "error", failure)
 		}
 	}
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		fail("database_gateway_docker_unavailable", err)
-		return
-	}
-	defer client.Close()
+	client := dockerClient
 	complete := func() {
 		if _, err := store.UpdateDatabaseGatewayOperation(ctx, operation.ID, "success", "ready", 100, "", ""); err != nil && log != nil {
 			log.Error("complete database gateway operation failed", "operation_id", operation.ID, "error", err)

@@ -324,7 +324,7 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: item.ID, EventType: "application", Status: "updated", Actor: "operator", Message: "Application updated", Detail: item.Name})
 			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "application": item})
 		case http.MethodDelete:
-			result, err := platformservices.DeleteApplicationAndRuntime(r.Context(), s.log, s.cfg, s.store, app.ID)
+			result, err := platformservices.DeleteApplicationAndRuntime(r.Context(), s.log, s.cfg, s.store, s.dockerClient, app.ID)
 			if err != nil {
 				writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": publicAPIError(err, "delete_application_failed")})
 				return

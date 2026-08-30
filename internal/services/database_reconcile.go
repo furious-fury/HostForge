@@ -11,9 +11,10 @@ import (
 	"github.com/furious-fury/HostForge/internal/databases"
 	"github.com/furious-fury/HostForge/internal/docker"
 	"github.com/furious-fury/HostForge/internal/repository"
+	mobyclient "github.com/moby/moby/client"
 )
 
-func StartDatabaseReconciliationLoop(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer) {
+func StartDatabaseReconciliationLoop(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client) {
 	if count, err := store.RequeueExpiredDatabaseOperations(ctx, time.Now().UTC()); err != nil {
 		if log != nil {
 			log.Error("recover interrupted database operations failed", "error", err)
@@ -25,7 +26,7 @@ func StartDatabaseReconciliationLoop(ctx context.Context, log *slog.Logger, stor
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
-			reconcileDatabaseInstances(ctx, log, store, sealer)
+			reconcileDatabaseInstances(ctx, log, store, sealer, dockerClient)
 			select {
 			case <-ctx.Done():
 				return
@@ -35,7 +36,7 @@ func StartDatabaseReconciliationLoop(ctx context.Context, log *slog.Logger, stor
 	}()
 }
 
-func reconcileDatabaseInstances(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer) {
+func reconcileDatabaseInstances(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client) {
 	instances, err := store.ListAllDatabaseInstances(ctx)
 	if err != nil {
 		if log != nil {
@@ -46,14 +47,7 @@ func reconcileDatabaseInstances(ctx context.Context, log *slog.Logger, store *re
 	if len(instances) == 0 {
 		return
 	}
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		if log != nil {
-			log.Warn("database reconciliation skipped; Docker unavailable", "error", err)
-		}
-		return
-	}
-	defer client.Close()
+	client := dockerClient
 	volumeUsage, volumeUsageErr := docker.ManagedVolumeUsage(ctx, client)
 	if volumeUsageErr != nil && log != nil {
 		log.Warn("database volume usage sampling unavailable", "error", volumeUsageErr)

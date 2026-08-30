@@ -14,19 +14,22 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/furious-fury/HostForge/internal/auth"
 	"github.com/furious-fury/HostForge/internal/bootstrap"
-	"github.com/gorilla/websocket"
 
 	"github.com/furious-fury/HostForge/internal/config"
 	"github.com/furious-fury/HostForge/internal/crypto/envcrypt"
 	"github.com/furious-fury/HostForge/internal/database"
+	"github.com/furious-fury/HostForge/internal/docker"
 	"github.com/furious-fury/HostForge/internal/hostmetrics"
 	"github.com/furious-fury/HostForge/internal/logging"
 	logsapi "github.com/furious-fury/HostForge/internal/logs"
@@ -36,6 +39,7 @@ import (
 	"github.com/furious-fury/HostForge/internal/repository"
 	"github.com/furious-fury/HostForge/internal/reqctx"
 	"github.com/furious-fury/HostForge/internal/services"
+	"github.com/moby/moby/client"
 )
 
 // serverStartedAt is used for uptime in /api/settings.
@@ -117,8 +121,20 @@ func runServer(log *slog.Logger, args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %s must be set\n", config.WebhookSecretEnv)
 		return 2
 	}
+	if strings.TrimSpace(os.Getenv(config.EnvEncryptionKeyEnv)) == "" {
+		fmt.Fprintf(os.Stderr, "error: %s is required\n", config.EnvEncryptionKeyEnv)
+		return 2
+	}
 	if cfg.WebhookRateLimitPerMinute <= 0 {
 		fmt.Fprintln(os.Stderr, "error: webhook rate limit per minute must be > 0")
+		return 2
+	}
+	if cfg.LoginRateLimitPerMinute <= 0 {
+		fmt.Fprintln(os.Stderr, "error: login rate limit per minute must be > 0")
+		return 2
+	}
+	if cfg.ShutdownTimeoutSeconds <= 0 {
+		fmt.Fprintln(os.Stderr, "error: shutdown timeout seconds must be > 0")
 		return 2
 	}
 	if cfg.WebhookMaxBodyBytes <= 0 {
@@ -149,6 +165,16 @@ func runServer(log *slog.Logger, args []string) int {
 	}
 	defer db.Close()
 
+	// One Docker client is shared by every deploy, provisioning, and metrics path
+	// instead of each constructing and closing its own (ADR-0002 §8.2). Deferred
+	// after db.Close() so it closes first on shutdown (defers run LIFO).
+	dockerClient, err := docker.NewClient(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: docker: %v\n", err)
+		return 1
+	}
+	defer dockerClient.Close()
+
 	store := repository.New(db)
 	if created, err := store.EnsureActivePlatformServiceDomains(ctx); err != nil {
 		log.Warn("backfill platform share domains failed", "error", err)
@@ -159,37 +185,58 @@ func runServer(log *slog.Logger, args []string) int {
 			log.Info("backfilled platform share domains", "created", created)
 		}
 	}
-	services.StartCaddyCertPollLoop(log, cfg, store, obs.WithStore(context.Background(), store))
-	startServiceMetricSampler(context.Background(), log, store)
+	// shutdownCtx is cancelled on SIGINT/SIGTERM. Every background loop below
+	// takes it directly and stops on its own the moment it's cancelled — the
+	// same context that tells us a signal arrived is what tells the loops to
+	// stop, so there is no separate "now cancel the loops" step later. The
+	// HTTP listener does not use this ctx directly (http.Server has no such
+	// parameter); it's drained explicitly via Shutdown() below instead.
+	shutdownCtx, stopSignalNotify := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignalNotify()
+
+	services.StartCaddyCertPollLoop(shutdownCtx, log, cfg, store, obs.WithStore(context.Background(), store))
+	startServiceMetricSampler(shutdownCtx, log, store, dockerClient)
 	webhookLimiter := newFixedWindowLimiter(cfg.WebhookRateLimitPerMinute, time.Minute)
+	loginLimiter := newFixedWindowLimiter(cfg.LoginRateLimitPerMinute, time.Minute)
 
 	hostReader := hostmetrics.DefaultReader(hostmetrics.ParseReaderOptionsFromEnv())
 	hostSampler := hostmetrics.NewSampler(hostmetrics.IntervalFromEnv(5000), hostmetrics.CapacityFromEnv(360), hostReader)
-	hostSampler.Start(context.Background())
+	hostSampler.Start(shutdownCtx)
 
-	var envSealer *envcrypt.Sealer
-	if k := strings.TrimSpace(os.Getenv(config.EnvEncryptionKeyEnv)); k != "" {
-		sealer, err := envcrypt.NewFromBase64Key(k)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s: %v\n", config.EnvEncryptionKeyEnv, err)
-			return 1
-		}
-		envSealer = sealer
+	// HOSTFORGE_ENV_ENCRYPTION_KEY presence was already checked above; construct
+	// the sealer and confirm it's the same key that sealed this database's
+	// existing secrets before anything else runs (ADR-0002 §20.4). A mismatched
+	// key is not recoverable — every secret it sealed is permanently unreadable
+	// with any other key — so this must be a startup failure, not a degraded
+	// feature.
+	envSealer, err := envcrypt.NewFromBase64Key(strings.TrimSpace(os.Getenv(config.EnvEncryptionKeyEnv)))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %s: %v\n", config.EnvEncryptionKeyEnv, err)
+		return 1
 	}
-	services.StartDatabaseReconciliationLoop(context.Background(), log, store, envSealer)
-	services.StartDatabaseOperationLoop(context.Background(), log, store, envSealer, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg.DatabaseOperationConcurrency, cfg)
-	services.StartDatabasePurgeLoop(context.Background(), log, store)
-	services.StartDatabaseBackupScheduleLoop(context.Background(), log, store, cfg.DatabaseTransferMaxPerHour)
-	services.StartDatabaseBackupRetentionLoop(context.Background(), log, store, envSealer)
-	services.StartDatabaseGatewayOperationLoop(context.Background(), log, cfg, store, envSealer)
+	if err := envcrypt.VerifyOrInitCanary(envSealer,
+		func() ([]byte, bool, error) { return store.GetEncryptionCanary(ctx) },
+		func(sealed []byte) error { return store.SetEncryptionCanary(ctx, sealed) },
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	services.StartDatabaseReconciliationLoop(shutdownCtx, log, store, envSealer, dockerClient)
+	services.StartDatabaseOperationLoop(shutdownCtx, log, store, envSealer, dockerClient, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg.DatabaseOperationConcurrency, cfg)
+	services.StartDatabasePurgeLoop(shutdownCtx, log, store, dockerClient)
+	services.StartDatabaseBackupScheduleLoop(shutdownCtx, log, store, cfg.DatabaseTransferMaxPerHour)
+	services.StartDatabaseBackupRetentionLoop(shutdownCtx, log, store, envSealer)
+	services.StartDatabaseGatewayOperationLoop(shutdownCtx, log, cfg, store, envSealer, dockerClient)
 
 	handler := &server{
 		log:            log,
 		cfg:            cfg,
 		store:          store,
 		webhookLimiter: webhookLimiter,
+		loginLimiter:   loginLimiter,
 		hostSampler:    hostSampler,
 		envSealer:      envSealer,
+		dockerClient:   dockerClient,
 	}
 
 	mux := http.NewServeMux()
@@ -231,11 +278,53 @@ func runServer(log *slog.Logger, args []string) int {
 		WriteTimeout:      0,
 		IdleTimeout:       60 * time.Second,
 	}
-	log.Info("hostforge server listening", "listen", cfg.ListenAddr, "webhook_path", cfg.WebhookBasePath, "webhook_async", cfg.WebhookAsync)
-	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		fmt.Fprintf(os.Stderr, "error: server: %v\n", err)
-		return 1
+	serveErr := make(chan error, 1)
+	go func() {
+		log.Info("hostforge server listening", "listen", cfg.ListenAddr, "webhook_path", cfg.WebhookBasePath, "webhook_async", cfg.WebhookAsync)
+		serveErr <- httpServer.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serveErr:
+		if err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "error: server: %v\n", err)
+			return 1
+		}
+		return 0
+	case <-shutdownCtx.Done():
+		log.Info("shutdown: signal received")
 	}
+
+	// Bounds both drains below. Background loops above already stopped (or are
+	// stopping) on their own, since they share shutdownCtx directly.
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeoutSeconds)*time.Second)
+	defer cancelDrain()
+
+	log.Info("shutdown: stopping http listener")
+	if err := httpServer.Shutdown(drainCtx); err != nil {
+		log.Warn("shutdown: http listener did not drain cleanly", "error", err)
+	}
+
+	// Deploys run in goroutines detached from the request that launched them
+	// (webhook and manual/redeploy/rollback handlers all do this), so
+	// httpServer.Shutdown above — which only waits on active request
+	// handlers — does not wait for them. Wait on them explicitly instead, so
+	// an in-flight build isn't killed mid-step by a restart.
+	log.Info("shutdown: draining in-flight deploys")
+	deploysDone := make(chan struct{})
+	go func() {
+		handler.deployWG.Wait()
+		close(deploysDone)
+	}()
+	select {
+	case <-deploysDone:
+		log.Info("shutdown: deploys drained")
+	case <-drainCtx.Done():
+		log.Warn("shutdown: deploy drain timed out; exiting with deploys still in flight")
+	}
+
+	// dockerClient and db close via their defers above, in that order.
+	log.Info("shutdown: complete")
 	return 0
 }
 
@@ -244,6 +333,7 @@ type server struct {
 	cfg                     *config.Config
 	store                   *repository.Store
 	webhookLimiter          *fixedWindowLimiter
+	loginLimiter            *fixedWindowLimiter
 	hostSampler             *hostmetrics.Sampler
 	hostSnapCache           hostSnapshotCache
 	envSealer               *envcrypt.Sealer
@@ -252,6 +342,8 @@ type server struct {
 	deploymentCancelMu      sync.Mutex
 	databaseGatewayDomainMu sync.RWMutex
 	deploymentCancels       map[string]context.CancelFunc
+	dockerClient            *client.Client
+	deployWG                sync.WaitGroup
 }
 
 type githubPushPayload struct {
@@ -433,10 +525,12 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithCancel(context.Background())
 		s.registerDeploymentCancel(job.Deployment.ID, cancel)
 		deployLog := log.With("service_id", match.ServiceID, "environment_id", match.EnvironmentID, "deployment_id", job.Deployment.ID, "repo_url", redact.RepoURLForLog(repoURL), "branch", branch)
+		s.deployWG.Add(1)
 		go func(job services.DeployJob, deployLog *slog.Logger) {
+			defer s.deployWG.Done()
 			defer s.unregisterDeploymentCancel(job.Deployment.ID)
 			bg := obs.WithStore(ctx, s.store)
-			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer, s.newGitAuthResolver(context.Background()))
+			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer, s.dockerClient, s.newGitAuthResolver(context.Background()))
 			if execErr != nil && !errors.Is(execErr, context.Canceled) {
 				deployLog.Error("async webhook deployment failed", "error", execErr)
 			}
@@ -467,6 +561,12 @@ func (s *server) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
+	remoteIP := requestIP(r)
+	if !s.loginLimiter.Allow(remoteIP, time.Now().UTC()) {
+		s.requestLog(r).Warn("login rejected", "reason", "rate_limited", "remote_ip", remoteIP)
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"status": "error", "error": "rate_limited"})
+		return
+	}
 	if !auth.BearerMatches(r.Header.Get("Authorization"), s.cfg.APIToken) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"status": "error", "error": "invalid_api_token"})
 		return
@@ -776,8 +876,41 @@ func (s *server) handleDeploymentLogsTail(w http.ResponseWriter, r *http.Request
 	_, _ = w.Write(content)
 }
 
-var logUpgrader = websocket.Upgrader{
-	CheckOrigin: func(_ *http.Request) bool { return true },
+// checkWSOrigin rejects a cross-origin WebSocket upgrade unless the Origin is
+// the configured platform domain (or a subdomain of it) or loopback. An
+// absent Origin header is allowed: browsers always send Origin on a
+// cross-origin upgrade, so its absence means a non-browser client (curl,
+// internal tooling), not a spoofed browser request.
+func (s *server) checkWSOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return false
+	}
+	if reqHost := strings.ToLower(strings.TrimSpace(r.Host)); reqHost != "" {
+		if h, _, splitErr := net.SplitHostPort(reqHost); splitErr == nil {
+			reqHost = h
+		}
+		if host == reqHost {
+			return true
+		}
+	}
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	if base := strings.TrimSpace(s.cfg.PlatformDomainBase); base != "" {
+		if host == base || strings.HasSuffix(host, "."+base) {
+			return true
+		}
+	}
+	return false
 }
 
 func errorsIsNoRows(err error) bool {
