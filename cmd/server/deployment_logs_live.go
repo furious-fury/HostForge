@@ -15,11 +15,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/furious-fury/HostForge/internal/deploylogs"
+	"github.com/furious-fury/HostForge/internal/docker"
+	logsapi "github.com/furious-fury/HostForge/internal/logs"
+	"github.com/furious-fury/HostForge/internal/models"
 	"github.com/gorilla/websocket"
-	"github.com/hostforge/hostforge/internal/deploylogs"
-	"github.com/hostforge/hostforge/internal/docker"
-	logsapi "github.com/hostforge/hostforge/internal/logs"
-	"github.com/hostforge/hostforge/internal/models"
 )
 
 const (

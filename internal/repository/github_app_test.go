@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hostforge/hostforge/internal/database"
+	"github.com/furious-fury/HostForge/internal/database"
 )
 
 func newTestStore(t *testing.T) *Store {

@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/hostforge/hostforge/internal/auth"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/auth"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 // verifyWebhookSignature accepts either the App-scoped webhook secret (sealed

@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/hostforge/hostforge/internal/validation"
+	"github.com/furious-fury/HostForge/internal/validation"
 )
 
 func printValidateUsage() {

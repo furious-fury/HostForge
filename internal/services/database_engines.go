@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/hostforge/hostforge/internal/docker"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/docker"
+	"github.com/furious-fury/HostForge/internal/repository"
 	mobyclient "github.com/moby/moby/client"
 )
 

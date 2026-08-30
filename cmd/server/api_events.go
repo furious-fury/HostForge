@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 func (s *server) handlePlatformEvents(w http.ResponseWriter, r *http.Request) {

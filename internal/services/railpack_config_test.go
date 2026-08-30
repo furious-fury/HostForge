@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hostforge/hostforge/internal/builder"
-	"github.com/hostforge/hostforge/internal/config"
+	"github.com/furious-fury/HostForge/internal/builder"
+	"github.com/furious-fury/HostForge/internal/config"
 )
 
 func validRailpackConfig() *config.Config {

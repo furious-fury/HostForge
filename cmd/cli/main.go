@@ -8,12 +8,12 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/hostforge/hostforge/internal/config"
-	"github.com/hostforge/hostforge/internal/database"
-	"github.com/hostforge/hostforge/internal/logging"
-	"github.com/hostforge/hostforge/internal/repository"
-	"github.com/hostforge/hostforge/internal/services"
-	"github.com/hostforge/hostforge/internal/version"
+	"github.com/furious-fury/HostForge/internal/config"
+	"github.com/furious-fury/HostForge/internal/database"
+	"github.com/furious-fury/HostForge/internal/logging"
+	"github.com/furious-fury/HostForge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/services"
+	"github.com/furious-fury/HostForge/internal/version"
 )
 
 func main() {

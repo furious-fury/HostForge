@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 func createGatewayAPIInstance(t *testing.T, server *server, engine string) repository.DatabaseInstance {

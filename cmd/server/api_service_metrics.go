@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/repository"
-	platformservices "github.com/hostforge/hostforge/internal/services"
+	"github.com/furious-fury/HostForge/internal/repository"
+	platformservices "github.com/furious-fury/HostForge/internal/services"
 )
 
 func (s *server) handleServiceMetricsV2(w http.ResponseWriter, r *http.Request, serviceID, environmentID string) {

@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hostforge/hostforge/internal/repository"
-	"github.com/hostforge/hostforge/internal/sysstatus"
+	"github.com/furious-fury/HostForge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/sysstatus"
 )
 
 func (s *server) handleObservabilityRoutes(w http.ResponseWriter, r *http.Request) {

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/config"
-	"github.com/hostforge/hostforge/internal/database"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/config"
+	"github.com/furious-fury/HostForge/internal/database"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 func TestRequireDatabaseGatewayAddressAvailableRejectsOccupiedPort(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	githubapp "github.com/hostforge/hostforge/internal/github/app"
-	"github.com/hostforge/hostforge/internal/repository"
+	githubapp "github.com/furious-fury/HostForge/internal/github/app"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 // isPublicWebhookURL reports whether a URL appears reachable over the public

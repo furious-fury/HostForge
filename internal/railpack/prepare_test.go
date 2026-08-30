@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hostforge/hostforge/internal/builder"
+	"github.com/furious-fury/HostForge/internal/builder"
 )
 
 type runCall struct {

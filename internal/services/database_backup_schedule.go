@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"time"
 
-	backupstorage "github.com/hostforge/hostforge/internal/backups"
-	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
-	"github.com/hostforge/hostforge/internal/repository"
+	backupstorage "github.com/furious-fury/HostForge/internal/backups"
+	"github.com/furious-fury/HostForge/internal/crypto/envcrypt"
+	"github.com/furious-fury/HostForge/internal/repository"
 	"github.com/robfig/cron/v3"
 )
 

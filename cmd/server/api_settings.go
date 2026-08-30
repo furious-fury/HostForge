@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/auth"
-	"github.com/hostforge/hostforge/internal/caddy"
-	"github.com/hostforge/hostforge/internal/config"
-	"github.com/hostforge/hostforge/internal/dnsops"
-	"github.com/hostforge/hostforge/internal/repository"
-	"github.com/hostforge/hostforge/internal/services"
-	"github.com/hostforge/hostforge/internal/sysstatus"
-	"github.com/hostforge/hostforge/internal/version"
+	"github.com/furious-fury/HostForge/internal/auth"
+	"github.com/furious-fury/HostForge/internal/caddy"
+	"github.com/furious-fury/HostForge/internal/config"
+	"github.com/furious-fury/HostForge/internal/dnsops"
+	"github.com/furious-fury/HostForge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/services"
+	"github.com/furious-fury/HostForge/internal/sysstatus"
+	"github.com/furious-fury/HostForge/internal/version"
 )
 
 func (s *server) handleSettingsRoutes(w http.ResponseWriter, r *http.Request) {

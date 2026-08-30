@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
-	"github.com/hostforge/hostforge/internal/databases"
-	"github.com/hostforge/hostforge/internal/docker"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/crypto/envcrypt"
+	"github.com/furious-fury/HostForge/internal/databases"
+	"github.com/furious-fury/HostForge/internal/docker"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 func StartDatabaseReconciliationLoop(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer) {

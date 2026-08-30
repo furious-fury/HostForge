@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/hostmetrics"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/hostmetrics"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 func TestManagedDatabaseCapacityReservesHostAndExistingAllocations(t *testing.T) {

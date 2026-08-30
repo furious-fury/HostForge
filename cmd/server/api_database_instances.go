@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/databases"
-	"github.com/hostforge/hostforge/internal/docker"
-	"github.com/hostforge/hostforge/internal/repository"
-	platformservices "github.com/hostforge/hostforge/internal/services"
+	"github.com/furious-fury/HostForge/internal/databases"
+	"github.com/furious-fury/HostForge/internal/docker"
+	"github.com/furious-fury/HostForge/internal/repository"
+	platformservices "github.com/furious-fury/HostForge/internal/services"
 )
 
 func (s *server) handleDatabaseInstances(w http.ResponseWriter, r *http.Request) {

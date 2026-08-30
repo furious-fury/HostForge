@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/config"
-	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
-	"github.com/hostforge/hostforge/internal/database"
-	githubapp "github.com/hostforge/hostforge/internal/github/app"
-	"github.com/hostforge/hostforge/internal/models"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/config"
+	"github.com/furious-fury/HostForge/internal/crypto/envcrypt"
+	"github.com/furious-fury/HostForge/internal/database"
+	githubapp "github.com/furious-fury/HostForge/internal/github/app"
+	"github.com/furious-fury/HostForge/internal/models"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 type fakeGitHubRepositoryLister struct {

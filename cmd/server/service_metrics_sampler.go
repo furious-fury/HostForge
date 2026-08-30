@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/docker"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/docker"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 const serviceMetricSampleInterval = 10 * time.Second

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/furious-fury/HostForge/internal/models"
+	"github.com/furious-fury/HostForge/internal/repository"
 	"github.com/gorilla/websocket"
-	"github.com/hostforge/hostforge/internal/models"
-	"github.com/hostforge/hostforge/internal/repository"
 )
 
 func newDeploymentLogTestEndpoint(t *testing.T) (*server, *httptest.Server) {

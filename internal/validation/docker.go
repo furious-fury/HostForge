@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hostforge/hostforge/internal/docker"
+	"github.com/furious-fury/HostForge/internal/docker"
 )
 
 // CheckDocker pings the Docker daemon using the same client path as deploy (DOCKER_HOST, etc.).

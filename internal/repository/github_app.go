@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/models"
+	"github.com/furious-fury/HostForge/internal/models"
 )
 
 // UpsertGitHubAppInput sets the singleton github_app row. All *CT fields must already be sealed.

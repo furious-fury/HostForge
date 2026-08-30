@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/hostforge/hostforge/internal/config"
-	"github.com/hostforge/hostforge/internal/docker"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/config"
+	"github.com/furious-fury/HostForge/internal/docker"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 type DeleteRuntimeResult struct {

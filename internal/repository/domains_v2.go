@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/models"
+	"github.com/furious-fury/HostForge/internal/models"
 )
 
 type ServiceDomain struct {
