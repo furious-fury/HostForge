@@ -33,8 +33,8 @@ type Client struct {
 	privateKey *rsa.PrivateKey
 	now        func() time.Time
 
-	mu             sync.Mutex
-	installTokens  map[int64]*cachedToken
+	mu            sync.Mutex
+	installTokens map[int64]*cachedToken
 }
 
 type cachedToken struct {

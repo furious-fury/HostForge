@@ -19,11 +19,11 @@ import (
 
 // Row is one line in the System panel.
 type Row struct {
-	ID         string `json:"id"`
-	Label      string `json:"label"`
-	Status     string `json:"status"`
-	Detail     string `json:"detail,omitempty"`
-	ErrorCode  string `json:"error_code,omitempty"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Status    string `json:"status"`
+	Detail    string `json:"detail,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
 }
 
 // Response is returned by GET /api/system/status.
