@@ -24,7 +24,7 @@ Options:
   --data-dir PATH   Server data directory used in systemd unit (default: /var/lib/hostforge)
   --with-systemd    Create hostforge user, data dirs, env example, systemd unit (requires root)
   --interactive     On first systemd install, prompt for the admin login secret and generate the remaining secrets
-  --skip-build      Do not run go build; use ./hostforge and ./hostforge-server in repo root
+  --skip-build      Do not run go build; use ./hostforge-server in repo root
   -h, --help        Show this help
 
 Examples:
@@ -78,8 +78,7 @@ mkdir -p "${BIN_DIR}" 2>/dev/null || true
 
 if [[ "${SKIP_BUILD}" -eq 0 ]]; then
 	mkdir -p "${TMP_BIN}"
-	echo "Building hostforge and hostforge-server..."
-	(cd "${REPO_ROOT}" && go build -o "${TMP_BIN}/hostforge" ./cmd/cli)
+	echo "Building hostforge-server..."
 	(cd "${REPO_ROOT}" && go build -o "${TMP_BIN}/hostforge-server" ./cmd/server)
 	if ! command -v npm >/dev/null 2>&1; then
 		echo "error: npm is required to build web/dist; install Node.js 20+ and rerun the installer." >&2
@@ -87,13 +86,11 @@ if [[ "${SKIP_BUILD}" -eq 0 ]]; then
 	fi
 	echo "Building HostForge web UI..."
 	(cd "${REPO_ROOT}/web" && npm ci && npm run build)
-	HF_CLI="${TMP_BIN}/hostforge"
   HF_SRV="${TMP_BIN}/hostforge-server"
 else
-  HF_CLI="${REPO_ROOT}/hostforge"
   HF_SRV="${REPO_ROOT}/hostforge-server"
-  if [[ ! -x "${HF_CLI}" || ! -x "${HF_SRV}" ]]; then
-    echo "error: --skip-build requires executable ${HF_CLI} and ${HF_SRV}" >&2
+  if [[ ! -x "${HF_SRV}" ]]; then
+    echo "error: --skip-build requires executable ${HF_SRV}" >&2
     exit 1
   fi
 fi
@@ -109,7 +106,6 @@ install_bin() {
 }
 
 echo "Installing binaries to ${BIN_DIR}/ ..."
-install_bin "${HF_CLI}" "hostforge"
 install_bin "${HF_SRV}" "hostforge-server"
 
 if [[ "${SKIP_BUILD}" -eq 0 ]]; then
@@ -120,7 +116,6 @@ if [[ "${WITH_SYSTEMD}" -eq 0 ]]; then
   cat <<EOF
 
 Installed:
-  ${BIN_DIR}/hostforge
   ${BIN_DIR}/hostforge-server
 
 Next steps:
