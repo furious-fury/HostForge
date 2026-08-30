@@ -34,7 +34,7 @@ entries.sort((a, b) => a.slug.localeCompare(b.slug));
 const llmsTxt = [
   `# HostForge`,
   ``,
-  `> Self-hosted PaaS: Git → Nixpacks → Docker on one machine, with API, UI, GitHub webhooks, and Caddy routing.`,
+  `> Self-hosted PaaS: Git → Railpack → Docker on one machine, with API, UI, GitHub webhooks, and Caddy routing.`,
   ``,
   `## Docs`,
   ``,

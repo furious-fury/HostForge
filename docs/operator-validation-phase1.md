@@ -1,14 +1,24 @@
 # Operator validation — Detailed backlog §1
 
+> **Stale.** The command examples below (`hostforge deploy`, `hostforge domain add`,
+> `hostforge deploy -sync-caddy`, and similar) describe a CLI surface that was never
+> actually built. `cmd/cli` only ever shipped `caddy sync`, `validate docker|preflight`,
+> and `version` — and as of this repository, `cmd/cli` has been removed entirely
+> (§24.8). Kept as a historical record of the intended operator-validation checks;
+> not something you can run as written. The equivalent checks today go through the
+> HTTP management API (`cmd/server`) or the browser UI, not a CLI.
+
 This runbook implements **[`task_list.md`](../task_list.md) → Detailed backlog → 1. Operator validation and exit criteria**: **1.1** (Docker), **1.2** (HTTPS + restarts), **1.3** (zero-downtime cutover), and includes a **Phase 8 production-proof template** for launch-gate validation.
 
 Use a **staging VPS** (or equivalent) for **1.2** and **1.3**. **1.1** can be run on any host with Docker Engine, Railpack, BuildKit, Git, and network access to the sample repo. The complete application/service acceptance gate is maintained in [`v2-staging-acceptance.md`](./v2-staging-acceptance.md).
 
 ### Automation (code in-repo)
 
-- **`hostforge validate docker`** — pings Docker Engine with the same client settings as `deploy` (`DOCKER_HOST`, etc.). Exit **0** if the daemon is reachable.
-- **`hostforge validate preflight`** — `validate docker` plus **`git`**, **`railpack`**, and **`buildctl`** on `PATH`.
-- **`scripts/operator-validation-phase1.sh`** — end-to-end **§1.1**: preflight, golden-path `deploy -host-port 0`, HTTP **200**, `unless-stopped`, survives `docker restart`, then `docker stop` + `docker rm` and confirms the port is closed. From repo root: `./scripts/operator-validation-phase1.sh` (optional: `HOSTFORGE_BIN=./hostforge`, `REPO_URL=…`, `KEEP_HF_DATA=1`).
+- ~~`hostforge validate docker`~~ / ~~`hostforge validate preflight`~~ — existed on the removed `cmd/cli`.
+- ~~`scripts/operator-validation-phase1.sh`~~ — deleted. It called `hostforge deploy`, a
+  subcommand that never existed on any version of `cmd/cli` (which only ever had `caddy
+  sync`, `validate`, and `version`); the script could not have run successfully even
+  before `cmd/cli` was removed.
 
 | Item | Description | Status |
 |------|-------------|--------|
@@ -21,7 +31,7 @@ Use a **staging VPS** (or equivalent) for **1.2** and **1.3**. **1.1** can be ru
 ## Prerequisites (all items)
 
 - **Go** 1.22+, **Railpack** and **BuildKit** on `PATH`, **Docker Engine** reachable (`docker info` OK).
-- Built CLI: `go build -o hostforge ./cmd/cli` from repo root.
+- `cmd/cli` no longer exists (see the stale-notice above) — the `hostforge` binary these steps assume cannot be built.
 - Optional isolated data dir: `export HF_DATA=/tmp/hostforge-operator-phase1` (use `HOSTFORGE_DATA_DIR` or `-data-dir`).
 
 ### Preflight

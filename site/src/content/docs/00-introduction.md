@@ -20,6 +20,5 @@ HostForge is a private, self-hosted application platform for one Linux server: *
 
 - **`hostforge-server`** (`cmd/server`) serves the REST API, browser UI, GitHub webhooks, live logs, metrics, and system diagnostics.
 - **Web UI** (`web/`) provides authenticated application, service, deployment, domain, variable, observability, onboarding, and settings workflows.
-- **`hostforge` CLI** (`cmd/cli`) is intentionally operator-only: validation, Caddy synchronization, and version output.
 
 Private repositories use GitHub App installation tokens only. PAT and SSH credential management are not supported.

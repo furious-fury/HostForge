@@ -1,6 +1,6 @@
 # Local development
 
-The product surface is `cmd/server` plus the browser UI. The CLI is limited to safe diagnostics, Caddy synchronization, and version output.
+The product surface is `cmd/server` plus the browser UI. There is no separate operator CLI.
 
 ## Prerequisites
 
