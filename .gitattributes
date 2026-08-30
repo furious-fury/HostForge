@@ -1,0 +1,11 @@
+# Normalise line endings so tooling behaves identically on Windows checkouts
+# and on Linux CI runners.
+#
+# Without this, `core.autocrlf=true` gives Windows working trees CRLF, which
+# makes `gofmt -l` report files that are correctly formatted in the repository,
+# and would let a CRLF shell script reach the VPS where it fails to execute.
+*.go    text eol=lf
+*.sh    text eol=lf
+*.sql   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf

@@ -6,20 +6,20 @@ import "time"
 
 // MemSample is memory usage at a point in time.
 type MemSample struct {
-	TotalBytes          int64   `json:"total_bytes"`
-	UsedBytes           int64   `json:"used_bytes"`
-	AvailableBytes      int64   `json:"available_bytes"`
-	BuffersCachedBytes  int64   `json:"buffers_cached_bytes"`
-	SwapTotalBytes      int64   `json:"swap_total_bytes"`
-	SwapUsedBytes       int64   `json:"swap_used_bytes"`
-	UsedPct             float64 `json:"used_pct"`
+	TotalBytes         int64   `json:"total_bytes"`
+	UsedBytes          int64   `json:"used_bytes"`
+	AvailableBytes     int64   `json:"available_bytes"`
+	BuffersCachedBytes int64   `json:"buffers_cached_bytes"`
+	SwapTotalBytes     int64   `json:"swap_total_bytes"`
+	SwapUsedBytes      int64   `json:"swap_used_bytes"`
+	UsedPct            float64 `json:"used_pct"`
 }
 
 // NetSample is per-interface throughput since the previous sample.
 type NetSample struct {
-	Iface  string  `json:"iface"`
-	RxBps  float64 `json:"rx_bps"`
-	TxBps  float64 `json:"tx_bps"`
+	Iface string  `json:"iface"`
+	RxBps float64 `json:"rx_bps"`
+	TxBps float64 `json:"tx_bps"`
 }
 
 // DiskUsage is space usage for one mount point.
@@ -42,17 +42,17 @@ type DiskIOSample struct {
 
 // Sample is one aggregated observation for the API and UI.
 type Sample struct {
-	At           time.Time   `json:"at"`
-	CPUPct       float64     `json:"cpu_pct"`
-	PerCorePct   []float64   `json:"per_core_pct"`
-	LoadAvg      [3]float64  `json:"load_avg"`
-	Mem          MemSample   `json:"mem"`
-	Net          []NetSample `json:"net"`
-	Disks        []DiskUsage `json:"disks"`
-	DiskIO       []DiskIOSample `json:"disk_io"`
-	Uptime       float64     `json:"uptime_seconds"`
-	RatesReady   bool        `json:"rates_ready"`
-	Err          string      `json:"err,omitempty"`
+	At         time.Time      `json:"at"`
+	CPUPct     float64        `json:"cpu_pct"`
+	PerCorePct []float64      `json:"per_core_pct"`
+	LoadAvg    [3]float64     `json:"load_avg"`
+	Mem        MemSample      `json:"mem"`
+	Net        []NetSample    `json:"net"`
+	Disks      []DiskUsage    `json:"disks"`
+	DiskIO     []DiskIOSample `json:"disk_io"`
+	Uptime     float64        `json:"uptime_seconds"`
+	RatesReady bool           `json:"rates_ready"`
+	Err        string         `json:"err,omitempty"`
 }
 
 // normalizeSliceJSONFields replaces nil slices so encoding/json emits [] not null.
