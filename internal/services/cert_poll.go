@@ -23,10 +23,10 @@ import (
 
 const maxCertMessageLen = 512
 
-// StartCaddyCertPollLoop runs PollCaddyCertObservations on an interval until the process exits.
-// It is a no-op when cfg.CaddyCertPollIntervalSec <= 0.
+// StartCaddyCertPollLoop runs PollCaddyCertObservations on an interval until ctx is
+// cancelled. It is a no-op when cfg.CaddyCertPollIntervalSec <= 0.
 // obsCtx should carry observability store (e.g. obs.WithStore(context.Background(), store)) for UI samples.
-func StartCaddyCertPollLoop(log *slog.Logger, cfg *config.Config, store *repository.Store, obsCtx context.Context) {
+func StartCaddyCertPollLoop(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, obsCtx context.Context) {
 	sec := cfg.CaddyCertPollIntervalSec
 	if sec <= 0 {
 		return
@@ -52,8 +52,13 @@ func StartCaddyCertPollLoop(log *slog.Logger, cfg *config.Config, store *reposit
 	t := time.NewTicker(interval)
 	go func() {
 		defer t.Stop()
-		for range t.C {
-			run()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				run()
+			}
 		}
 	}()
 }

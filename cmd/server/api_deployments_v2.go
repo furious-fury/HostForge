@@ -158,7 +158,9 @@ func (s *server) handleServiceDeployActionV2(w http.ResponseWriter, r *http.Requ
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.registerDeploymentCancel(job.Deployment.ID, cancel)
+	s.deployWG.Add(1)
 	go func() {
+		defer s.deployWG.Done()
 		defer s.unregisterDeploymentCancel(job.Deployment.ID)
 		deployCtx := obs.WithStore(ctx, s.store)
 		_, execErr := services.ExecuteDeploy(deployCtx, s.log.With("service_id", serviceID, "environment_id", environmentID, "deployment_id", job.Deployment.ID), s.cfg, s.store, job, s.envSealer, s.dockerClient, s.newGitAuthResolver(context.Background()))
@@ -254,7 +256,9 @@ func (s *server) handleDeploymentRedeployV2(w http.ResponseWriter, r *http.Reque
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.registerDeploymentCancel(job.Deployment.ID, cancel)
+	s.deployWG.Add(1)
 	go func() {
+		defer s.deployWG.Done()
 		defer s.unregisterDeploymentCancel(job.Deployment.ID)
 		deployCtx := obs.WithStore(ctx, s.store)
 		_, execErr := services.ExecuteDeploy(deployCtx, s.log.With("service_id", source.ServiceID, "environment_id", source.EnvironmentID, "deployment_id", job.Deployment.ID), s.cfg, s.store, job, s.envSealer, s.dockerClient, s.newGitAuthResolver(context.Background()))
@@ -295,7 +299,9 @@ func (s *server) handleDeploymentRollbackV2(w http.ResponseWriter, r *http.Reque
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.registerDeploymentCancel(job.Deployment.ID, cancel)
+	s.deployWG.Add(1)
 	go func() {
+		defer s.deployWG.Done()
 		defer s.unregisterDeploymentCancel(job.Deployment.ID)
 		deployCtx := obs.WithStore(ctx, s.store)
 		_, execErr := services.ExecuteDeploy(deployCtx, s.log.With("service_id", source.ServiceID, "environment_id", source.EnvironmentID, "deployment_id", job.Deployment.ID, "rollback_of", source.ID), s.cfg, s.store, job, s.envSealer, s.dockerClient, s.newGitAuthResolver(context.Background()))
