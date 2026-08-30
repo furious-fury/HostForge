@@ -39,6 +39,7 @@ import (
 	"github.com/furious-fury/HostForge/internal/repository"
 	"github.com/furious-fury/HostForge/internal/reqctx"
 	"github.com/furious-fury/HostForge/internal/services"
+	"github.com/furious-fury/HostForge/internal/version"
 	"github.com/moby/moby/client"
 )
 
@@ -69,8 +70,13 @@ func runServer(log *slog.Logger, args []string) int {
 	webhookPath := fs.String("webhook-path", defaultWebhookPath, "github webhook route path (overrides "+config.WebhookBasePathEnv+")")
 	webhookMaxBodyBytes := fs.Int("webhook-max-body-bytes", defaultWebhookBodyLimit, "max webhook payload body in bytes (overrides "+config.WebhookMaxBodyBytesEnv+")")
 	webhookAsync := fs.Bool("webhook-async", defaultWebhookAsync, "accept and process webhooks asynchronously (overrides "+config.WebhookAsyncEnv+")")
+	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *showVersion {
+		fmt.Printf("%s commit=%s build_time=%s\n", version.Display(), firstNonEmpty(version.Commit, "unknown"), firstNonEmpty(version.BuildTime, "unknown"))
+		return 0
 	}
 
 	cfg, err := config.Load(*dataDir)
@@ -160,7 +166,11 @@ func runServer(log *slog.Logger, args []string) int {
 	}
 	db, err := database.OpenSQLite(ctx, cfg.DBPath())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
+		if errors.Is(err, database.ErrSchemaNewerThanBinary) {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "error: sqlite: %v\n", err)
+		}
 		return 1
 	}
 	defer db.Close()
@@ -242,6 +252,7 @@ func runServer(log *slog.Logger, args []string) int {
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WebhookBasePath, handler.withRequestContext(handler.handleGitHubWebhook))
 	mux.HandleFunc("/auth/session", handler.withRequestContext(handler.handleSessionRoutes))
+	mux.HandleFunc("/api/version", handler.withRequestContext(handler.handleVersionGet))
 	mux.HandleFunc("/api/system/status", handler.withRequestContext(handler.requireManagementAuth(handler.handleSystemStatus)))
 	mux.HandleFunc("/api/onboarding", handler.withRequestContext(handler.requireManagementAuth(handler.handleOnboardingRoutes)))
 	mux.HandleFunc("/api/system/host/snapshot", handler.withRequestContext(handler.requireManagementAuth(handler.handleHostSnapshot)))

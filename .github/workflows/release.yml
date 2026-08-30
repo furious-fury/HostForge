@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: startsWith(github.ref, 'refs/tags/')   # guards workflow_dispatch on a branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod, cache: true }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+
+      - name: Verify tag matches VERSION   # fail before any build cost
+        run: |
+          FILE_VER="$(tr -d '\r\n' < internal/version/VERSION | sed 's/^v//')"
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          if [ "$TAG_VER" != "$FILE_VER" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match internal/version/VERSION (${FILE_VER})"
+            exit 1
+          fi
+
+      - name: Build web UI
+        run: cd web && npm ci && npm run build
+
+      - name: Cross-compile server binaries
+        run: |
+          LDFLAGS="-X github.com/furious-fury/HostForge/internal/version.Commit=${GITHUB_SHA} -X github.com/furious-fury/HostForge/internal/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          for ARCH in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" go build -ldflags "${LDFLAGS}" -o "dist/${ARCH}/hostforge-server" ./cmd/server
+          done
+
+      - name: Package tarballs + checksums
+        run: |
+          for ARCH in amd64 arm64; do
+            mkdir -p "pkg/${ARCH}/web"
+            cp "dist/${ARCH}/hostforge-server" "pkg/${ARCH}/"
+            cp -r web/dist "pkg/${ARCH}/web/"
+            tar -C "pkg/${ARCH}" -czf "hostforge-${GITHUB_REF_NAME}-linux-${ARCH}.tar.gz" hostforge-server web
+          done
+          sha256sum hostforge-${GITHUB_REF_NAME}-linux-*.tar.gz > checksums.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            hostforge-${GITHUB_REF_NAME}-linux-amd64.tar.gz \
+            hostforge-${GITHUB_REF_NAME}-linux-arm64.tar.gz \
+            checksums.txt \
+            --title "${GITHUB_REF_NAME}" --generate-notes

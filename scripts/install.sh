@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# HostForge installer: build (or reuse) binaries, install under a prefix, optionally systemd.
+# HostForge installer: build, download, or reuse binaries, install under a
+# prefix, optionally systemd.
 # Idempotent: safe to re-run; does not overwrite an existing /etc/hostforge/hostforge.env.
 #
 # Usage (from repo clone):
-#   ./scripts/install.sh [--prefix /usr/local] [--data-dir /var/lib/hostforge] [--with-systemd] [--interactive] [--skip-build]
+#   ./scripts/install.sh [--prefix /usr/local] [--data-dir /var/lib/hostforge] [--with-systemd] [--interactive] [--skip-build|--download-release]
+#
+# Set HOSTFORGE_VERSION (e.g. HOSTFORGE_VERSION=v0.8.0) to pin --download-release
+# to a specific tagged release instead of the latest one. Setting HOSTFORGE_VERSION
+# alone also implies --download-release.
 #
 set -euo pipefail
 
@@ -13,23 +18,27 @@ PREFIX="/usr/local"
 DATA_DIR="/var/lib/hostforge"
 WITH_SYSTEMD=0
 SKIP_BUILD=0
+DOWNLOAD_RELEASE=0
 INTERACTIVE=0
+GITHUB_REPO="furious-fury/HostForge"
 
 usage() {
   sed -n '1,80p' "$0" | sed -n '/^# /s/^# //p' | head -n 20
   cat <<'EOF'
 
 Options:
-  --prefix PATH     Install directory (default: /usr/local). Binaries: PREFIX/bin/
-  --data-dir PATH   Server data directory used in systemd unit (default: /var/lib/hostforge)
-  --with-systemd    Create hostforge user, data dirs, env example, systemd unit (requires root)
-  --interactive     On first systemd install, prompt for the admin login secret and generate the remaining secrets
-  --skip-build      Do not run go build; use ./hostforge-server in repo root
-  -h, --help        Show this help
+  --prefix PATH        Install directory (default: /usr/local). Binaries: PREFIX/bin/
+  --data-dir PATH      Server data directory used in systemd unit (default: /var/lib/hostforge)
+  --with-systemd       Create hostforge user, data dirs, env example, systemd unit (requires root)
+  --interactive        On first systemd install, prompt for the admin login secret and generate the remaining secrets
+  --skip-build         Do not run go build; use ./hostforge-server in repo root
+  --download-release   Download a tagged release tarball instead of building (see HOSTFORGE_VERSION above)
+  -h, --help           Show this help
 
 Examples:
   ./scripts/install.sh
   sudo ./scripts/install.sh --with-systemd
+  HOSTFORGE_VERSION=v0.8.0 sudo ./scripts/install.sh --with-systemd --download-release
 EOF
 }
 
@@ -55,6 +64,10 @@ while [[ $# -gt 0 ]]; do
       SKIP_BUILD=1
       shift
       ;;
+    --download-release)
+      DOWNLOAD_RELEASE=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -67,6 +80,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "${HOSTFORGE_VERSION:-}" ]]; then
+  DOWNLOAD_RELEASE=1
+fi
+
+if [[ "${SKIP_BUILD}" -eq 1 && "${DOWNLOAD_RELEASE}" -eq 1 ]]; then
+  echo "error: --skip-build and --download-release (or HOSTFORGE_VERSION) are mutually exclusive." >&2
+  exit 2
+fi
+
 if [[ ! -f "${REPO_ROOT}/go.mod" ]]; then
   echo "error: go.mod not found; run this script from a HostForge repository clone." >&2
   exit 1
@@ -76,7 +98,103 @@ BIN_DIR="${PREFIX}/bin"
 TMP_BIN="${REPO_ROOT}/.install-build"
 mkdir -p "${BIN_DIR}" 2>/dev/null || true
 
-if [[ "${SKIP_BUILD}" -eq 0 ]]; then
+# resolve_latest_release_tag queries GitHub for the newest published release
+# tag, used when --download-release is given without a HOSTFORGE_VERSION pin.
+resolve_latest_release_tag() {
+  echo "Looking up the latest HostForge release..." >&2
+  local tag
+  tag="$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
+    | sed -n 's/^ *"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
+  if [[ -z "${tag}" ]]; then
+    echo "error: could not resolve the latest release tag from the GitHub API." >&2
+    exit 1
+  fi
+  printf '%s' "${tag}"
+}
+
+# download_release fetches and verifies the tagged release tarball for the
+# host architecture, landing the server binary and web/dist in the exact
+# places the build step would have — so every downstream step (install_bin,
+# systemd generation, WorkingDirectory=REPO_ROOT) is unchanged.
+download_release() {
+  local version="$1" arch tarball dl_url checksums_url expected actual
+  case "$(uname -m)" in
+    x86_64|amd64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *)
+      echo "error: unsupported architecture $(uname -m) for --download-release; use a plain build instead." >&2
+      exit 1
+      ;;
+  esac
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "error: curl is required for --download-release." >&2
+    exit 1
+  fi
+
+  mkdir -p "${TMP_BIN}"
+  tarball="hostforge-${version}-linux-${arch}.tar.gz"
+  dl_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${tarball}"
+  checksums_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/checksums.txt"
+
+  echo "Downloading HostForge ${version} (${arch})..."
+  if ! curl -fsSL -o "${TMP_BIN}/${tarball}" "${dl_url}"; then
+    echo "error: failed to download ${dl_url}; check HOSTFORGE_VERSION and network access." >&2
+    exit 1
+  fi
+  if ! curl -fsSL -o "${TMP_BIN}/checksums.txt" "${checksums_url}"; then
+    echo "error: failed to download ${checksums_url}." >&2
+    exit 1
+  fi
+
+  # Exact-filename match, not `sha256sum -c` (requires every listed file
+  # present) and not a substring grep (could match a longer filename sharing
+  # this one's prefix).
+  expected="$(awk -v f="${tarball}" '$2==f{print $1}' "${TMP_BIN}/checksums.txt")"
+  if [[ -z "${expected}" ]]; then
+    echo "error: ${tarball} is not listed in checksums.txt" >&2
+    exit 1
+  fi
+  actual="$(sha256sum "${TMP_BIN}/${tarball}" | awk '{print $1}')"
+  if [[ "${expected}" != "${actual}" ]]; then
+    echo "error: checksum mismatch for ${tarball} (expected ${expected}, got ${actual})" >&2
+    exit 1
+  fi
+
+  echo "Extracting ${tarball}..."
+  tar -xzf "${TMP_BIN}/${tarball}" -C "${TMP_BIN}"
+  if [[ ! -x "${TMP_BIN}/hostforge-server" ]]; then
+    echo "error: ${tarball} did not contain an executable hostforge-server." >&2
+    exit 1
+  fi
+
+  # Stricter than --skip-build on purpose: --skip-build only checks the
+  # binary is executable and never verifies web/dist exists at all, silently
+  # inheriting static_ui.go's own soft-fail-and-warn behavior. A corrupted or
+  # short tarball extraction here must fail the installer, not silently ship
+  # a UI-less HostForge.
+  if [[ ! -f "${TMP_BIN}/web/dist/index.html" ]]; then
+    echo "error: ${tarball} did not contain web/dist/index.html." >&2
+    exit 1
+  fi
+  rm -rf "${REPO_ROOT}/web/dist"
+  mkdir -p "${REPO_ROOT}/web"
+  mv "${TMP_BIN}/web/dist" "${REPO_ROOT}/web/dist"
+  if [[ ! -f "${REPO_ROOT}/web/dist/index.html" ]]; then
+    echo "error: web/dist/index.html missing after installing the downloaded release." >&2
+    exit 1
+  fi
+
+  HF_SRV="${TMP_BIN}/hostforge-server"
+}
+
+if [[ "${DOWNLOAD_RELEASE}" -eq 1 ]]; then
+  RELEASE_VERSION="${HOSTFORGE_VERSION:-}"
+  if [[ -z "${RELEASE_VERSION}" ]]; then
+    RELEASE_VERSION="$(resolve_latest_release_tag)"
+  fi
+  download_release "${RELEASE_VERSION}"
+elif [[ "${SKIP_BUILD}" -eq 0 ]]; then
 	mkdir -p "${TMP_BIN}"
 	echo "Building hostforge-server..."
 	(cd "${REPO_ROOT}" && go build -o "${TMP_BIN}/hostforge-server" ./cmd/server)
@@ -113,6 +231,19 @@ if [[ "${SKIP_BUILD}" -eq 0 ]]; then
 fi
 
 if [[ "${WITH_SYSTEMD}" -eq 0 ]]; then
+  # Reconstruct the exact re-run command for a systemd install, propagating
+  # whichever artifact source this run used. Note: `${SKIP_BUILD:+...}` looks
+  # tempting here but is wrong — SKIP_BUILD holds the string "0" or "1", both
+  # non-empty, so `:+` would always expand. Use explicit -eq checks instead.
+  RERUN_CMD="sudo $0 --prefix ${PREFIX} --data-dir ${DATA_DIR} --with-systemd"
+  if [[ "${SKIP_BUILD}" -eq 1 ]]; then
+    RERUN_CMD="${RERUN_CMD} --skip-build"
+  elif [[ "${DOWNLOAD_RELEASE}" -eq 1 ]]; then
+    RERUN_CMD="${RERUN_CMD} --download-release"
+  fi
+  if [[ -n "${HOSTFORGE_VERSION:-}" ]]; then
+    RERUN_CMD="HOSTFORGE_VERSION=${HOSTFORGE_VERSION} ${RERUN_CMD}"
+  fi
   cat <<EOF
 
 Installed:
@@ -122,7 +253,7 @@ Next steps:
   - Set secrets (see README "Authentication" and scripts/hostforge-server.env.example).
   - Run: hostforge-server -data-dir <dir> -listen <addr>
   - Install Caddy separately for TLS; point a route at HostForge if exposing the UI.
-  - For systemd + data under ${DATA_DIR}, re-run: sudo $0 --prefix ${PREFIX} --data-dir ${DATA_DIR} --with-systemd${SKIP_BUILD:+ --skip-build}
+  - For systemd + data under ${DATA_DIR}, re-run: ${RERUN_CMD}
 EOF
   exit 0
 fi
