@@ -71,13 +71,38 @@ func (s *server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
-func (s *server) buildSettingsPayload(r *http.Request) map[string]any {
-	cfg := s.cfg
+// handleVersionGet serves GET /api/version, unauthenticated. It exposes the
+// same build info block as /api/settings' "build" section and nothing else
+// — no config, paths, or auth state — so it is safe without management auth.
+func (s *server) handleVersionGet(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, buildVersionInfo())
+}
+
+// buildVersionInfo returns the release/build metadata block shared by
+// GET /api/version and the "build" section of GET /api/settings.
+func buildVersionInfo() map[string]any {
 	now := time.Now().UTC()
 	uptime := int64(0)
 	if !serverStartedAt.IsZero() {
 		uptime = int64(now.Sub(serverStartedAt).Seconds())
 	}
+	return map[string]any{
+		"version":         version.String(),
+		"version_display": version.Display(),
+		"commit":          strings.TrimSpace(version.Commit),
+		"build_time":      strings.TrimSpace(version.BuildTime),
+		"go_version":      runtime.Version(),
+		"os":              runtime.GOOS,
+		"arch":            runtime.GOARCH,
+		"pid":             os.Getpid(),
+		"started_at":      serverStartedAt.UTC().Format(time.RFC3339),
+		"uptime_seconds":  uptime,
+	}
+}
+
+func (s *server) buildSettingsPayload(r *http.Request) map[string]any {
+	cfg := s.cfg
+	now := time.Now().UTC()
 
 	scheme, _ := s.authenticateRequest(r)
 	authBlock := map[string]any{
@@ -109,18 +134,7 @@ func (s *server) buildSettingsPayload(r *http.Request) map[string]any {
 		logsSize = sz
 	}
 
-	build := map[string]any{
-		"version":         version.String(),
-		"version_display": version.Display(),
-		"commit":          strings.TrimSpace(version.Commit),
-		"build_time":      strings.TrimSpace(version.BuildTime),
-		"go_version":      runtime.Version(),
-		"os":              runtime.GOOS,
-		"arch":            runtime.GOARCH,
-		"pid":             os.Getpid(),
-		"started_at":      serverStartedAt.UTC().Format(time.RFC3339),
-		"uptime_seconds":  uptime,
-	}
+	build := buildVersionInfo()
 
 	paths := map[string]any{
 		"data_dir":            cfg.DataDir,

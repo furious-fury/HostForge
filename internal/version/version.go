@@ -1,5 +1,7 @@
 // Package version holds the release identifier embedded from the VERSION file.
-// Bump [VERSION] in this directory; the web UI reads the same file at build time (see web/vite.config.ts).
+// Bump [VERSION] in this directory. Commit and BuildTime are set at release
+// build time via -ldflags (see .github/workflows/release.yml); a local
+// `go build` leaves both empty.
 package version
 
 import (
