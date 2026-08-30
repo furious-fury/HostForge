@@ -50,7 +50,7 @@ func testExecutor(t *testing.T, runner *fakeRunner, images *fakeImageStore) *Bui
 		Address:         "unix:///run/buildkit/buildkitd.sock",
 		FrontendImage:   "ghcr.io/railwayapp/railpack-frontend@sha256:abcdef",
 		RailpackVersion: DefaultVersion,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestBuildKitExecutor_FailsWhenSolveFails(t *testing.T) {
 
 func TestNewBuildKitExecutor_RequiresPinnedFrontend(t *testing.T) {
 	t.Parallel()
-	_, err := NewBuildKitExecutor(BuildKitConfig{Address: "unix:///run/buildkit/buildkitd.sock", FrontendImage: "ghcr.io/railwayapp/railpack-frontend:latest", RailpackVersion: DefaultVersion})
+	_, err := NewBuildKitExecutor(BuildKitConfig{Address: "unix:///run/buildkit/buildkitd.sock", FrontendImage: "ghcr.io/railwayapp/railpack-frontend:latest", RailpackVersion: DefaultVersion}, nil)
 	if err == nil {
 		t.Fatal("expected digest pin error")
 	}

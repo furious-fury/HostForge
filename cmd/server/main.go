@@ -27,6 +27,7 @@ import (
 	"github.com/furious-fury/HostForge/internal/config"
 	"github.com/furious-fury/HostForge/internal/crypto/envcrypt"
 	"github.com/furious-fury/HostForge/internal/database"
+	"github.com/furious-fury/HostForge/internal/docker"
 	"github.com/furious-fury/HostForge/internal/hostmetrics"
 	"github.com/furious-fury/HostForge/internal/logging"
 	logsapi "github.com/furious-fury/HostForge/internal/logs"
@@ -36,6 +37,7 @@ import (
 	"github.com/furious-fury/HostForge/internal/repository"
 	"github.com/furious-fury/HostForge/internal/reqctx"
 	"github.com/furious-fury/HostForge/internal/services"
+	"github.com/moby/moby/client"
 )
 
 // serverStartedAt is used for uptime in /api/settings.
@@ -149,6 +151,16 @@ func runServer(log *slog.Logger, args []string) int {
 	}
 	defer db.Close()
 
+	// One Docker client is shared by every deploy, provisioning, and metrics path
+	// instead of each constructing and closing its own (ADR-0002 §8.2). Deferred
+	// after db.Close() so it closes first on shutdown (defers run LIFO).
+	dockerClient, err := docker.NewClient(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: docker: %v\n", err)
+		return 1
+	}
+	defer dockerClient.Close()
+
 	store := repository.New(db)
 	if created, err := store.EnsureActivePlatformServiceDomains(ctx); err != nil {
 		log.Warn("backfill platform share domains failed", "error", err)
@@ -160,7 +172,7 @@ func runServer(log *slog.Logger, args []string) int {
 		}
 	}
 	services.StartCaddyCertPollLoop(log, cfg, store, obs.WithStore(context.Background(), store))
-	startServiceMetricSampler(context.Background(), log, store)
+	startServiceMetricSampler(context.Background(), log, store, dockerClient)
 	webhookLimiter := newFixedWindowLimiter(cfg.WebhookRateLimitPerMinute, time.Minute)
 
 	hostReader := hostmetrics.DefaultReader(hostmetrics.ParseReaderOptionsFromEnv())
@@ -176,12 +188,12 @@ func runServer(log *slog.Logger, args []string) int {
 		}
 		envSealer = sealer
 	}
-	services.StartDatabaseReconciliationLoop(context.Background(), log, store, envSealer)
-	services.StartDatabaseOperationLoop(context.Background(), log, store, envSealer, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg.DatabaseOperationConcurrency, cfg)
-	services.StartDatabasePurgeLoop(context.Background(), log, store)
+	services.StartDatabaseReconciliationLoop(context.Background(), log, store, envSealer, dockerClient)
+	services.StartDatabaseOperationLoop(context.Background(), log, store, envSealer, dockerClient, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg.DatabaseOperationConcurrency, cfg)
+	services.StartDatabasePurgeLoop(context.Background(), log, store, dockerClient)
 	services.StartDatabaseBackupScheduleLoop(context.Background(), log, store, cfg.DatabaseTransferMaxPerHour)
 	services.StartDatabaseBackupRetentionLoop(context.Background(), log, store, envSealer)
-	services.StartDatabaseGatewayOperationLoop(context.Background(), log, cfg, store, envSealer)
+	services.StartDatabaseGatewayOperationLoop(context.Background(), log, cfg, store, envSealer, dockerClient)
 
 	handler := &server{
 		log:            log,
@@ -190,6 +202,7 @@ func runServer(log *slog.Logger, args []string) int {
 		webhookLimiter: webhookLimiter,
 		hostSampler:    hostSampler,
 		envSealer:      envSealer,
+		dockerClient:   dockerClient,
 	}
 
 	mux := http.NewServeMux()
@@ -252,6 +265,7 @@ type server struct {
 	deploymentCancelMu      sync.Mutex
 	databaseGatewayDomainMu sync.RWMutex
 	deploymentCancels       map[string]context.CancelFunc
+	dockerClient            *client.Client
 }
 
 type githubPushPayload struct {
@@ -436,7 +450,7 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		go func(job services.DeployJob, deployLog *slog.Logger) {
 			defer s.unregisterDeploymentCancel(job.Deployment.ID)
 			bg := obs.WithStore(ctx, s.store)
-			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer, s.newGitAuthResolver(context.Background()))
+			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer, s.dockerClient, s.newGitAuthResolver(context.Background()))
 			if execErr != nil && !errors.Is(execErr, context.Canceled) {
 				deployLog.Error("async webhook deployment failed", "error", execErr)
 			}

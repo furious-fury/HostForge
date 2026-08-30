@@ -81,7 +81,7 @@ func (s *server) handlePurgeDatabaseService(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"status": "error", "error": "database_purge_confirmation_mismatch"})
 		return
 	}
-	if err := platformservices.PurgeDatabaseServiceAndRuntime(r.Context(), s.log, s.store, service.ID, time.Now().UTC(), "operator"); err != nil {
+	if err := platformservices.PurgeDatabaseServiceAndRuntime(r.Context(), s.log, s.store, s.dockerClient, service.ID, time.Now().UTC(), "operator"); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": publicAPIError(err, "database_purge_unavailable")})
 		return
 	}

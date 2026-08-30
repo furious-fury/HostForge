@@ -32,7 +32,7 @@ type DatabaseConnectionInput struct {
 	ReplaceExisting   bool
 }
 
-func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, operation repository.DatabaseOperation, fail func(string, error), gatewayCfg *config.Config) {
+func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, operation repository.DatabaseOperation, fail func(string, error), gatewayCfg *config.Config) {
 	job, err := store.GetDatabaseUpgradeJob(ctx, operation.ID)
 	if err != nil {
 		fail("database_upgrade_job_missing", err)
@@ -49,13 +49,7 @@ func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *reposi
 	}
 	if instance.ImageRef == job.TargetImageRef && instance.Status == "healthy" {
 		if gatewayCfg != nil {
-			client, clientErr := docker.NewClient(ctx)
-			if clientErr != nil {
-				fail("docker_unavailable", clientErr)
-				return
-			}
-			resumeErr := resumePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance.ID)
-			_ = client.Close()
+			resumeErr := resumePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, dockerClient, instance.ID)
 			if resumeErr != nil {
 				fail("database_gateway_route_resume_failed", resumeErr)
 				return
@@ -114,12 +108,7 @@ func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *reposi
 		fail("database_service_identity_lookup_failed", err)
 		return
 	}
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		fail("docker_unavailable", err)
-		return
-	}
-	defer client.Close()
+	client := dockerClient
 	_ = store.UpdateDatabaseUpgradeJobStatus(ctx, operation.ID, "running")
 	_, _ = store.UpdateDatabaseOperation(ctx, operation.ID, "running", "image_pull", 15, "", "")
 	if err := docker.PullImage(ctx, client, job.TargetImageRef); err != nil {
@@ -387,7 +376,7 @@ func PrepareManagedDatabase(ctx context.Context, store *repository.Store, sealer
 	return created, err
 }
 
-func StartDatabaseOperationLoop(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dataDir string, minFreeDiskBytes int64, concurrency int, gatewayCfg *config.Config) {
+func StartDatabaseOperationLoop(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, dataDir string, minFreeDiskBytes int64, concurrency int, gatewayCfg *config.Config) {
 	if sealer == nil {
 		if log != nil {
 			log.Warn("database operation worker disabled; encryption key is not configured")
@@ -409,11 +398,11 @@ func StartDatabaseOperationLoop(ctx context.Context, log *slog.Logger, store *re
 			return
 		}
 		workerID := fmt.Sprintf("hostforge-%d-%d-%s", os.Getpid(), workerIndex, workerToken)
-		go runDatabaseOperationWorker(ctx, log, store, sealer, dataDir, minFreeDiskBytes, workerID, gatewayCfg)
+		go runDatabaseOperationWorker(ctx, log, store, sealer, dockerClient, dataDir, minFreeDiskBytes, workerID, gatewayCfg)
 	}
 }
 
-func runDatabaseOperationWorker(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dataDir string, minFreeDiskBytes int64, workerID string, gatewayCfg *config.Config) {
+func runDatabaseOperationWorker(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, dataDir string, minFreeDiskBytes int64, workerID string, gatewayCfg *config.Config) {
 	const leaseDuration = 2 * time.Minute
 	const leaseRefresh = 30 * time.Second
 	ticker := time.NewTicker(2 * time.Second)
@@ -451,7 +440,7 @@ func runDatabaseOperationWorker(ctx context.Context, log *slog.Logger, store *re
 					}
 				}
 			}(operation.ID)
-			processDatabaseOperation(operationCtx, log, store, sealer, operation, dataDir, minFreeDiskBytes, gatewayCfg)
+			processDatabaseOperation(operationCtx, log, store, sealer, dockerClient, operation, dataDir, minFreeDiskBytes, gatewayCfg)
 			cancelOperation()
 			<-leaseDone
 		}
@@ -463,7 +452,7 @@ func runDatabaseOperationWorker(ctx context.Context, log *slog.Logger, store *re
 	}
 }
 
-func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, operation repository.DatabaseOperation, dataDir string, minFreeDiskBytes int64, gatewayCfg *config.Config) {
+func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, operation repository.DatabaseOperation, dataDir string, minFreeDiskBytes int64, gatewayCfg *config.Config) {
 	defer func() {
 		completed, err := store.GetDatabaseOperation(context.WithoutCancel(ctx), operation.ID)
 		if err != nil || (completed.Status != "success" && completed.Status != "failed" && completed.Status != "cancelled") {
@@ -499,7 +488,7 @@ func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repo
 		}
 	}
 	if operation.OperationType == "provision" || operation.OperationType == "backup" || operation.OperationType == "restore" || operation.OperationType == "upgrade" {
-		if err := requireDatabaseDiskReserve(ctx, dataDir, minFreeDiskBytes); err != nil {
+		if err := requireDatabaseDiskReserve(ctx, dockerClient, dataDir, minFreeDiskBytes); err != nil {
 			if operation.OperationType == "backup" {
 				if backup, lookupErr := store.GetDatabaseBackupByOperationID(ctx, operation.ID); lookupErr == nil {
 					_, _ = store.CompleteDatabaseBackup(ctx, backup.ID, repository.CompleteDatabaseBackupInput{Status: "failed", ErrorCode: "database_disk_pressure", ErrorMessage: err.Error()})
@@ -514,19 +503,19 @@ func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repo
 	}
 	switch operation.OperationType {
 	case "backup":
-		processDatabaseBackup(ctx, log, store, sealer, operation, fail)
+		processDatabaseBackup(ctx, log, store, sealer, dockerClient, operation, fail)
 		return
 	case "restore":
-		processDatabaseRestore(ctx, log, store, sealer, operation, fail)
+		processDatabaseRestore(ctx, log, store, sealer, dockerClient, operation, fail)
 		return
 	case "rotate_credentials":
-		processDatabaseCredentialRotation(ctx, log, store, sealer, operation, fail)
+		processDatabaseCredentialRotation(ctx, log, store, sealer, dockerClient, operation, fail)
 		return
 	case "upgrade":
-		processDatabaseUpgrade(ctx, log, store, sealer, operation, fail, gatewayCfg)
+		processDatabaseUpgrade(ctx, log, store, sealer, dockerClient, operation, fail, gatewayCfg)
 		return
 	case "start", "stop", "restart":
-		processDatabaseRuntimeOperation(ctx, log, store, sealer, operation, fail, gatewayCfg)
+		processDatabaseRuntimeOperation(ctx, log, store, sealer, dockerClient, operation, fail, gatewayCfg)
 		return
 	case "provision", "restore_deleted":
 	default:
@@ -579,12 +568,7 @@ func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repo
 		return
 	}
 	_, _ = store.UpdateDatabaseOperation(ctx, operation.ID, "running", "docker_connect", 5, "", "")
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		fail("docker_unavailable", err)
-		return
-	}
-	defer client.Close()
+	client := dockerClient
 	service, err := store.GetService(ctx, instance.ServiceID)
 	if err != nil {
 		fail("database_service_identity_lookup_failed", err)
@@ -701,13 +685,8 @@ func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repo
 	}
 }
 
-func requireDatabaseDiskReserve(ctx context.Context, dataDir string, minFreeBytes int64) error {
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		return fmt.Errorf("inspect Docker storage root: %w", err)
-	}
-	defer client.Close()
-	info, err := client.Info(ctx, mobyclient.InfoOptions{})
+func requireDatabaseDiskReserve(ctx context.Context, dockerClient *mobyclient.Client, dataDir string, minFreeBytes int64) error {
+	info, err := dockerClient.Info(ctx, mobyclient.InfoOptions{})
 	if err != nil {
 		return fmt.Errorf("inspect Docker storage root: %w", err)
 	}
@@ -741,6 +720,7 @@ func processDatabaseRestore(
 	log *slog.Logger,
 	store *repository.Store,
 	sealer *envcrypt.Sealer,
+	dockerClient *mobyclient.Client,
 	operation repository.DatabaseOperation,
 	fail func(string, error),
 ) {
@@ -780,12 +760,7 @@ func processDatabaseRestore(
 		failRestore("database_service_identity_lookup_failed", err)
 		return
 	}
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		failRestore("docker_unavailable", err)
-		return
-	}
-	defer client.Close()
+	client := dockerClient
 	stoppedConsumers := []string{}
 	if job.Mode == "replace_current" {
 		stoppedConsumers, err = stopDatabaseConsumers(ctx, store, client, target)
@@ -964,6 +939,7 @@ func processDatabaseCredentialRotation(
 	log *slog.Logger,
 	store *repository.Store,
 	sealer *envcrypt.Sealer,
+	dockerClient *mobyclient.Client,
 	operation repository.DatabaseOperation,
 	fail func(string, error),
 ) {
@@ -1029,12 +1005,7 @@ func processDatabaseCredentialRotation(
 		return
 	}
 	rotationSecrets = append(rotationSecrets, newPassword)
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		fail("docker_unavailable", err)
-		return
-	}
-	defer client.Close()
+	client := dockerClient
 	inspection, err := docker.InspectManagedContainer(ctx, client, instance.DockerContainerID)
 	if err != nil || inspection.Labels[docker.InstanceIDLabel] != instance.ID {
 		fail("database_container_ownership_mismatch", errors.New("container ownership labels do not match database instance"))
@@ -1088,6 +1059,7 @@ func processDatabaseBackup(
 	log *slog.Logger,
 	store *repository.Store,
 	sealer *envcrypt.Sealer,
+	dockerClient *mobyclient.Client,
 	operation repository.DatabaseOperation,
 	fail func(string, error),
 ) {
@@ -1180,12 +1152,6 @@ func processDatabaseBackup(
 	datePath := time.Now().UTC().Format("2006/01/02")
 	objectKey := strings.Trim(strings.Join([]string{destination.ObjectPrefix, databaseService.Engine, service.ApplicationID, instance.EnvironmentID, instance.ID, datePath, backup.ID + ".hfbk"}, "/"), "/")
 	_, _ = store.UpdateDatabaseOperation(ctx, operation.ID, "running", "dump_stream", 25, "", "")
-	dockerClient, err := docker.NewClient(ctx)
-	if err != nil {
-		failBackup("docker_unavailable", err)
-		return
-	}
-	defer dockerClient.Close()
 
 	backupCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -1280,6 +1246,7 @@ func processDatabaseRuntimeOperation(
 	log *slog.Logger,
 	store *repository.Store,
 	sealer *envcrypt.Sealer,
+	dockerClient *mobyclient.Client,
 	operation repository.DatabaseOperation,
 	fail func(string, error),
 	gatewayCfg *config.Config,
@@ -1293,12 +1260,7 @@ func processDatabaseRuntimeOperation(
 		fail("database_container_not_provisioned", errors.New("database instance has no container"))
 		return
 	}
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		fail("docker_unavailable", err)
-		return
-	}
-	defer client.Close()
+	client := dockerClient
 	inspection, err := docker.InspectManagedContainer(ctx, client, instance.DockerContainerID)
 	if err != nil {
 		fail("database_container_inspection_failed", err)

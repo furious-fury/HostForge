@@ -380,7 +380,7 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 					writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"status": "error", "error": "database_delete_confirmation_mismatch"})
 					return
 				}
-				result, err := platformservices.DeleteDatabaseServiceAndRuntime(r.Context(), s.log, s.cfg, s.store, s.envSealer, service.ID, "operator")
+				result, err := platformservices.DeleteDatabaseServiceAndRuntime(r.Context(), s.log, s.cfg, s.store, s.envSealer, s.dockerClient, service.ID, "operator")
 				if err != nil {
 					writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": publicAPIError(err, "delete_database_service_failed")})
 					return
@@ -395,7 +395,7 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			result, err := platformservices.DeleteServiceAndRuntime(r.Context(), s.log, s.cfg, s.store, service.ID)
+			result, err := platformservices.DeleteServiceAndRuntime(r.Context(), s.log, s.cfg, s.store, s.dockerClient, service.ID)
 			if err != nil {
 				writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": publicAPIError(err, "delete_service_failed")})
 				return
@@ -498,9 +498,9 @@ func (s *server) handleServiceRuntimeActionV2(w http.ResponseWriter, r *http.Req
 		err    error
 	)
 	if action == "stop" {
-		result, err = platformservices.StopServiceEnvironment(r.Context(), s.store, serviceID, environmentID)
+		result, err = platformservices.StopServiceEnvironment(r.Context(), s.store, s.dockerClient, serviceID, environmentID)
 	} else {
-		result, err = platformservices.RestartServiceEnvironment(r.Context(), s.store, serviceID, environmentID)
+		result, err = platformservices.RestartServiceEnvironment(r.Context(), s.store, s.dockerClient, serviceID, environmentID)
 	}
 	if err != nil {
 		code := publicAPIError(err, action+"_failed")

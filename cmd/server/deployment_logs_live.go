@@ -285,12 +285,7 @@ func (s *server) streamContainerLogRaw(ctx context.Context, sink *wsLogSink, dep
 		_ = sink.writeText([]byte("error: container record not found for deployment"))
 		return
 	}
-	cli, err := docker.NewClient(ctx)
-	if err != nil {
-		_ = sink.writeText([]byte("error: docker unavailable"))
-		return
-	}
-	defer cli.Close()
+	cli := s.dockerClient
 	if err := docker.StreamContainerLogs(ctx, cli, containerRec.DockerContainerID, docker.LogStreamOptions{
 		Follow:     true,
 		Tail:       "200",
@@ -528,12 +523,7 @@ func (s *server) streamContainerLogJSON(ctx context.Context, log *slog.Logger, s
 		_ = sink.writeJSON(map[string]any{"t": deploylogs.TypeError, "code": "container_not_found", "msg": "container record not found for deployment"})
 		return
 	}
-	cli, err := docker.NewClient(ctx)
-	if err != nil {
-		_ = sink.writeJSON(map[string]any{"t": deploylogs.TypeError, "code": "docker_unavailable", "msg": "docker unavailable"})
-		return
-	}
-	defer cli.Close()
+	cli := s.dockerClient
 
 	_ = sink.writeJSON(map[string]any{
 		"t":              deploylogs.TypeHello,

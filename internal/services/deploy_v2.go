@@ -19,6 +19,7 @@ import (
 	"github.com/furious-fury/HostForge/internal/git"
 	"github.com/furious-fury/HostForge/internal/models"
 	"github.com/furious-fury/HostForge/internal/repository"
+	mobyclient "github.com/moby/moby/client"
 )
 
 type DeployTarget struct {
@@ -241,16 +242,12 @@ func ResolveActiveServiceContainer(ctx context.Context, store *repository.Store,
 	return target, deployment, container, nil
 }
 
-func StopServiceEnvironment(ctx context.Context, store *repository.Store, serviceID, environmentID string) (ServiceRuntimeResult, error) {
+func StopServiceEnvironment(ctx context.Context, store *repository.Store, dockerClient *mobyclient.Client, serviceID, environmentID string) (ServiceRuntimeResult, error) {
 	_, deployment, container, err := ResolveActiveServiceContainer(ctx, store, serviceID, environmentID)
 	if err != nil {
 		return ServiceRuntimeResult{}, err
 	}
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		return ServiceRuntimeResult{}, ErrCode("docker_unavailable", err)
-	}
-	defer client.Close()
+	client := dockerClient
 	if err := docker.StopContainer(ctx, client, container.DockerContainerID); err != nil {
 		return ServiceRuntimeResult{}, ErrCode("stop_container_failed", err)
 	}
@@ -263,16 +260,12 @@ func StopServiceEnvironment(ctx context.Context, store *repository.Store, servic
 	return ServiceRuntimeResult{DeploymentID: deployment.ID, ContainerID: container.DockerContainerID, Status: "stopped"}, nil
 }
 
-func RestartServiceEnvironment(ctx context.Context, store *repository.Store, serviceID, environmentID string) (ServiceRuntimeResult, error) {
+func RestartServiceEnvironment(ctx context.Context, store *repository.Store, dockerClient *mobyclient.Client, serviceID, environmentID string) (ServiceRuntimeResult, error) {
 	_, deployment, container, err := ResolveActiveServiceContainer(ctx, store, serviceID, environmentID)
 	if err != nil {
 		return ServiceRuntimeResult{}, err
 	}
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		return ServiceRuntimeResult{}, ErrCode("docker_unavailable", err)
-	}
-	defer client.Close()
+	client := dockerClient
 	if err := docker.RestartContainer(ctx, client, container.DockerContainerID, 10); err != nil {
 		return ServiceRuntimeResult{}, ErrCode("restart_container_failed", err)
 	}

@@ -323,12 +323,7 @@ func (s *server) handleDatabaseInstanceDiagnostics(w http.ResponseWriter, r *htt
 		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "database_container_not_provisioned"})
 		return
 	}
-	client, err := docker.NewClient(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "error", "error": "docker_unavailable"})
-		return
-	}
-	defer client.Close()
+	client := s.dockerClient
 	inspection, err := docker.InspectManagedContainer(r.Context(), client, instance.DockerContainerID)
 	if err != nil || inspection.Labels[docker.ResourceTypeLabel] != "database-container" || inspection.Labels[docker.InstanceIDLabel] != instance.ID {
 		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "database_container_ownership_mismatch"})

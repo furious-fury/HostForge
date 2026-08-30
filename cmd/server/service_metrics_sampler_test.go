@@ -39,7 +39,7 @@ func TestCollectServiceMetricCycleIsolatesContainerFailures(t *testing.T) {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if count := collectServiceMetricCycle(context.Background(), log, store, read); count != 1 {
+	if count := collectServiceMetricCycle(context.Background(), log, store, nil, read); count != 1 {
 		t.Fatalf("collected=%d want=1", count)
 	}
 	if len(store.samples) != 1 || store.samples[0].ServiceID != "healthy" || store.samples[0].EnvironmentID != "staging" {

@@ -10,13 +10,14 @@ import (
 	"github.com/furious-fury/HostForge/internal/config"
 	"github.com/furious-fury/HostForge/internal/docker"
 	"github.com/furious-fury/HostForge/internal/repository"
+	mobyclient "github.com/moby/moby/client"
 )
 
 type DeleteRuntimeResult struct {
 	CaddySyncError string
 }
 
-func cleanupServiceRuntime(ctx context.Context, log *slog.Logger, store *repository.Store, serviceID string) error {
+func cleanupServiceRuntime(ctx context.Context, log *slog.Logger, store *repository.Store, dockerClient *mobyclient.Client, serviceID string) error {
 	service, err := store.GetService(ctx, serviceID)
 	if err != nil {
 		return err
@@ -55,11 +56,7 @@ func cleanupServiceRuntime(ctx context.Context, log *slog.Logger, store *reposit
 	if len(artifacts) == 0 {
 		return nil
 	}
-	client, err := docker.NewClient(ctx)
-	if err != nil {
-		return ErrCode("docker_unavailable", err)
-	}
-	defer client.Close()
+	client := dockerClient
 	for _, artifact := range artifacts {
 		if err := docker.StopAndRemove(ctx, client, artifact.containerID); err != nil {
 			return ErrCode("delete_container_failed", err)
@@ -86,7 +83,7 @@ func syncCaddyAfterDelete(ctx context.Context, log *slog.Logger, cfg *config.Con
 	return ""
 }
 
-func DeleteServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, serviceID string) (DeleteRuntimeResult, error) {
+func DeleteServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, dockerClient *mobyclient.Client, serviceID string) (DeleteRuntimeResult, error) {
 	service, err := store.GetService(ctx, serviceID)
 	if err != nil {
 		return DeleteRuntimeResult{}, err
@@ -94,7 +91,7 @@ func DeleteServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.
 	if service.ServiceType != "application" {
 		return DeleteRuntimeResult{}, ErrCode("database_service_delete_requires_retention", errors.New("database services require the retained-volume deletion workflow"))
 	}
-	if err := cleanupServiceRuntime(ctx, log, store, serviceID); err != nil {
+	if err := cleanupServiceRuntime(ctx, log, store, dockerClient, serviceID); err != nil {
 		return DeleteRuntimeResult{}, err
 	}
 	if err := store.DeleteService(ctx, serviceID); err != nil {
@@ -103,7 +100,7 @@ func DeleteServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.
 	return DeleteRuntimeResult{CaddySyncError: syncCaddyAfterDelete(ctx, log, cfg, store)}, nil
 }
 
-func DeleteApplicationAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, applicationID string) (DeleteRuntimeResult, error) {
+func DeleteApplicationAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, dockerClient *mobyclient.Client, applicationID string) (DeleteRuntimeResult, error) {
 	environments, err := store.ListApplicationEnvironments(ctx, applicationID)
 	if err != nil {
 		return DeleteRuntimeResult{}, err
@@ -118,22 +115,22 @@ func DeleteApplicationAndRuntime(ctx context.Context, log *slog.Logger, cfg *con
 		}
 	}
 	for _, service := range services {
-		if err := cleanupServiceRuntime(ctx, log, store, service.ID); err != nil {
+		if err := cleanupServiceRuntime(ctx, log, store, dockerClient, service.ID); err != nil {
 			return DeleteRuntimeResult{}, err
 		}
 	}
 	if err := store.DeleteApplication(ctx, applicationID); err != nil {
 		return DeleteRuntimeResult{}, err
 	}
-	if client, dockerErr := docker.NewClient(ctx); dockerErr == nil {
-		defer client.Close()
+	// Network cleanup is best-effort: an orphaned empty network is a minor leak,
+	// not a reason to fail a delete that already committed. dockerClient is nil
+	// only in tests; production always constructs one at startup.
+	if dockerClient != nil {
 		for _, environment := range environments {
-			if _, cleanupErr := docker.RemoveEnvironmentNetworkIfEmpty(ctx, client, environment.ID); cleanupErr != nil && log != nil {
+			if _, cleanupErr := docker.RemoveEnvironmentNetworkIfEmpty(ctx, dockerClient, environment.ID); cleanupErr != nil && log != nil {
 				log.Warn("application environment network cleanup failed", "environment_id", environment.ID, "error", cleanupErr)
 			}
 		}
-	} else if log != nil {
-		log.Warn("application environment network cleanup skipped; Docker unavailable", "application_id", applicationID, "error", dockerErr)
 	}
 	return DeleteRuntimeResult{CaddySyncError: syncCaddyAfterDelete(ctx, log, cfg, store)}, nil
 }

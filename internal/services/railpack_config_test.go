@@ -59,7 +59,7 @@ func TestValidateRailpackConfig_AcceptsCompleteConfiguration(t *testing.T) {
 
 func TestNewRailpackAdapter_UsesEnabledConfiguration(t *testing.T) {
 	t.Parallel()
-	adapter, err := newRailpackAdapter(validRailpackConfig())
+	adapter, err := newRailpackAdapter(validRailpackConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

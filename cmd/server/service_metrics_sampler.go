@@ -7,6 +7,7 @@ import (
 
 	"github.com/furious-fury/HostForge/internal/docker"
 	"github.com/furious-fury/HostForge/internal/repository"
+	mobyclient "github.com/moby/moby/client"
 )
 
 const serviceMetricSampleInterval = 10 * time.Second
@@ -18,9 +19,9 @@ type serviceMetricStore interface {
 
 type containerMetricReader func(context.Context, string) (docker.ContainerMetric, error)
 
-func startServiceMetricSampler(ctx context.Context, log *slog.Logger, store serviceMetricStore) {
+func startServiceMetricSampler(ctx context.Context, log *slog.Logger, store serviceMetricStore, dockerClient *mobyclient.Client) {
 	go func() {
-		collectServiceMetricCycle(ctx, log, store, nil)
+		collectServiceMetricCycle(ctx, log, store, dockerClient, nil)
 		ticker := time.NewTicker(serviceMetricSampleInterval)
 		defer ticker.Stop()
 		for {
@@ -28,13 +29,13 @@ func startServiceMetricSampler(ctx context.Context, log *slog.Logger, store serv
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				collectServiceMetricCycle(ctx, log, store, nil)
+				collectServiceMetricCycle(ctx, log, store, dockerClient, nil)
 			}
 		}
 	}()
 }
 
-func collectServiceMetricCycle(ctx context.Context, log *slog.Logger, store serviceMetricStore, read containerMetricReader) int {
+func collectServiceMetricCycle(ctx context.Context, log *slog.Logger, store serviceMetricStore, dockerClient *mobyclient.Client, read containerMetricReader) int {
 	targets, err := store.ListActiveServiceMetricTargets(ctx)
 	if err != nil {
 		log.Warn("service metric target lookup failed", "error", err)
@@ -44,12 +45,7 @@ func collectServiceMetricCycle(ctx context.Context, log *slog.Logger, store serv
 		return 0
 	}
 	if read == nil {
-		client, clientErr := docker.NewClient(ctx)
-		if clientErr != nil {
-			log.Warn("service metric collection unavailable", "error", clientErr)
-			return 0
-		}
-		defer client.Close()
+		client := dockerClient
 		read = func(ctx context.Context, containerID string) (docker.ContainerMetric, error) {
 			return docker.CollectContainerMetric(ctx, client, containerID)
 		}
