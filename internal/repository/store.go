@@ -50,7 +50,7 @@ func (s *Store) UpdateDeploymentStatus(ctx context.Context, deploymentID, status
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO platform_events(application_id,service_id,environment_id,deployment_id,event_type,status,actor,message,detail,created_at)
 		SELECT COALESCE(svc.application_id,''),d.service_id,d.environment_id,d.id,
-		       'deployment',?,COALESCE(d.actor,''),'Deployment '+lower(?),?,?
+		       'deployment',?,COALESCE(d.actor,''),'Deployment ' || lower(?),?,?
 		FROM deployments d JOIN services svc ON svc.id=d.service_id WHERE d.id=?`,
 		status, status, strings.TrimSpace(errorMessage), now, strings.TrimSpace(deploymentID))
 	if err != nil {
