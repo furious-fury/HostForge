@@ -97,6 +97,17 @@ type Config struct {
 	// DatabaseMinFreeDiskBytes blocks database provisioning, backup, and restore
 	// before the Docker data filesystem crosses the operator safety reserve.
 	DatabaseMinFreeDiskBytes int64
+	// AppContainerMemoryLimitBytes is applied to every application container.
+	// Fleet-wide, not per-service (ADR-0002 §14.2) — the per-service resource
+	// model is Phase 8 work. 0 disables the limit, matching Docker's own
+	// "0 = unlimited" semantics.
+	AppContainerMemoryLimitBytes int64
+	// AppContainerCPULimitMillis is applied to every application container, in
+	// millicores (1000 = 1 vCPU). 0 disables the limit.
+	AppContainerCPULimitMillis int
+	// AppContainerPidsLimit is applied to every application container. 0
+	// disables the limit.
+	AppContainerPidsLimit int64
 	// DatabaseOperationConcurrency bounds concurrent persistent-resource jobs.
 	DatabaseOperationConcurrency int
 	// DatabaseTransferMaxPerHour bounds queued backup and restore operations.
@@ -229,6 +240,12 @@ const (
 	RailpackMinFreeDiskBytesEnv = "HOSTFORGE_RAILPACK_MIN_FREE_DISK_BYTES"
 	// DatabaseMinFreeDiskBytesEnv reserves host storage for database safety.
 	DatabaseMinFreeDiskBytesEnv = "HOSTFORGE_DATABASE_MIN_FREE_DISK_BYTES"
+	// AppContainerMemoryLimitBytesEnv caps memory on every application container.
+	AppContainerMemoryLimitBytesEnv = "HOSTFORGE_APP_CONTAINER_MEMORY_BYTES"
+	// AppContainerCPULimitMillisEnv caps CPU (in millicores) on every application container.
+	AppContainerCPULimitMillisEnv = "HOSTFORGE_APP_CONTAINER_CPU_MILLIS"
+	// AppContainerPidsLimitEnv caps the PIDs cgroup on every application container.
+	AppContainerPidsLimitEnv = "HOSTFORGE_APP_CONTAINER_PIDS_LIMIT"
 	// DatabaseOperationConcurrencyEnv bounds concurrent database operation workers.
 	DatabaseOperationConcurrencyEnv = "HOSTFORGE_DATABASE_OPERATION_CONCURRENCY"
 	// DatabaseTransferMaxPerHourEnv rate-limits backup and restore queue admission.
@@ -436,6 +453,27 @@ func Load(dataDirFlag string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	appContainerMemoryLimitBytes, err := envInt64(AppContainerMemoryLimitBytesEnv, 512*1024*1024)
+	if err != nil {
+		return nil, err
+	}
+	if appContainerMemoryLimitBytes < 0 {
+		return nil, fmt.Errorf("%s must be >= 0 (0 disables the limit)", AppContainerMemoryLimitBytesEnv)
+	}
+	appContainerCPULimitMillis, err := envInt(AppContainerCPULimitMillisEnv, 1000)
+	if err != nil {
+		return nil, err
+	}
+	if appContainerCPULimitMillis < 0 {
+		return nil, fmt.Errorf("%s must be >= 0 (0 disables the limit)", AppContainerCPULimitMillisEnv)
+	}
+	appContainerPidsLimit, err := envInt64(AppContainerPidsLimitEnv, 512)
+	if err != nil {
+		return nil, err
+	}
+	if appContainerPidsLimit < 0 {
+		return nil, fmt.Errorf("%s must be >= 0 (0 disables the limit)", AppContainerPidsLimitEnv)
+	}
 	databaseOperationConcurrency, err := envInt(DatabaseOperationConcurrencyEnv, 1)
 	if err != nil {
 		return nil, err
@@ -542,6 +580,9 @@ func Load(dataDirFlag string) (*Config, error) {
 		RailpackBuildConcurrency:            railpackBuildConcurrency,
 		RailpackMinFreeDiskBytes:            railpackMinFreeDiskBytes,
 		DatabaseMinFreeDiskBytes:            databaseMinFreeDiskBytes,
+		AppContainerMemoryLimitBytes:        appContainerMemoryLimitBytes,
+		AppContainerCPULimitMillis:          appContainerCPULimitMillis,
+		AppContainerPidsLimit:               appContainerPidsLimit,
 		DatabaseOperationConcurrency:        databaseOperationConcurrency,
 		DatabaseTransferMaxPerHour:          databaseTransferMaxPerHour,
 		DatabaseGatewaysEnabled:             databaseGatewaysEnabled,
