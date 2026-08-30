@@ -79,6 +79,37 @@ func (s *Store) UpdateDeploymentBuilder(ctx context.Context, deploymentID, build
 	return err
 }
 
+// UpdateDeploymentRailpackArtifacts persists the raw Railpack build plan and
+// info for one deployment (ADR-0002 §15.6/§15.7). A separate method from
+// UpdateDeploymentBuilder rather than an extension of it: a Dockerfile build
+// has no plan/info to report, and this lets deploy.go skip the write
+// entirely instead of passing two empty strings through every builder path.
+// planJSON/infoJSON are stored byte-exact, not trimmed — trimming JSON
+// content data is pointless and this keeps the stored value provably
+// identical to what was captured.
+func (s *Store) UpdateDeploymentRailpackArtifacts(ctx context.Context, deploymentID, planJSON, infoJSON string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE deployments SET railpack_plan_json=?,railpack_info_json=?,updated_at=? WHERE id=?`, planJSON, infoJSON, time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(deploymentID))
+	return err
+}
+
+// GetDeploymentRailpackArtifacts returns the raw Railpack plan/info for one
+// deployment. Deliberately not part of scanServiceDeployment or any listing
+// query: these columns can run tens of KB, deployment rows are never pruned,
+// and the deployments list is polled by the UI every few seconds — loading
+// this on every row of every poll would be pure waste for data almost no
+// request needs. Callers must apply the same authorization as service
+// configuration: a stored plan enumerates the build's environment variable
+// names (never values — Prepare passes placeholders, not secrets), which is
+// exposure parity with the already-plaintext deploy_install_cmd column, not
+// a new class of data, but should not be handed out more freely than that.
+func (s *Store) GetDeploymentRailpackArtifacts(ctx context.Context, deploymentID string) (planJSON, infoJSON string, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT railpack_plan_json,railpack_info_json FROM deployments WHERE id=?`, strings.TrimSpace(deploymentID)).Scan(&planJSON, &infoJSON)
+	if err != nil {
+		return "", "", fmt.Errorf("get deployment railpack artifacts: %w", err)
+	}
+	return planJSON, infoJSON, nil
+}
+
 func (s *Store) GetDeploymentByID(ctx context.Context, deploymentID string) (models.Deployment, error) {
 	return s.GetServiceDeployment(ctx, deploymentID)
 }

@@ -203,3 +203,78 @@ func TestPrepare_UsesRedactedEnvironmentPlaceholders(t *testing.T) {
 		}
 	}
 }
+
+// PlanJSON/InfoJSON exist because Adapter.Build deletes the artifacts
+// directory before returning to any caller — the content has to be
+// captured here, inside Prepare, or it's gone (ADR-0002 §15.6/§15.7).
+func TestPrepare_CapturesPlanAndInfoJSON(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	artifacts := t.TempDir()
+	const planBody = `{"steps":{},"deploy":{"startCommand":"npm start"}}`
+	const infoBody = `{"detectedProviders":["node"],"resolvedPackages":{"node":{"resolvedVersion":"20.11.0"}}}`
+	runner := &fakeRunner{run: func(_ string, args []string, _ string, stdout, _ io.Writer) error {
+		if reflect.DeepEqual(args, []string{"--version"}) {
+			_, _ = io.WriteString(stdout, "railpack 0.23.0\n")
+			return nil
+		}
+		planPath, infoPath := args[3], args[5]
+		if err := os.WriteFile(planPath, []byte(planBody), 0o600); err != nil {
+			return err
+		}
+		return os.WriteFile(infoPath, []byte(infoBody), 0o600)
+	}}
+
+	preparation, err := newTestPlanner(t, runner).Prepare(context.Background(), PrepareRequest{Worktree: worktree, ArtifactsDir: artifacts}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Byte equality, not a parsed comparison: what's persisted must be
+	// exactly what railpack wrote, not a re-serialization of it.
+	if preparation.PlanJSON != planBody {
+		t.Errorf("PlanJSON = %q, want %q", preparation.PlanJSON, planBody)
+	}
+	if preparation.InfoJSON != infoBody {
+		t.Errorf("InfoJSON = %q, want %q", preparation.InfoJSON, infoBody)
+	}
+	if preparation.StackKind != "node" {
+		t.Errorf("StackKind = %q, want node (must still work from the same read used for InfoJSON)", preparation.StackKind)
+	}
+}
+
+// Oversize provenance must never fail a build or corrupt stack detection —
+// it's captured on a best-effort basis. Truncating instead of omitting
+// would be worse than omitting: truncated JSON is unparseable by anything
+// that reads the stored column later.
+func TestPrepare_OmitsOversizePlanJSON(t *testing.T) {
+	t.Parallel()
+	worktree := t.TempDir()
+	artifacts := t.TempDir()
+	oversizePlan := strings.Repeat("a", maxProvenanceJSONBytes+1)
+	const infoBody = `{"detectedProviders":["go"]}`
+	runner := &fakeRunner{run: func(_ string, args []string, _ string, stdout, _ io.Writer) error {
+		if reflect.DeepEqual(args, []string{"--version"}) {
+			_, _ = io.WriteString(stdout, "railpack 0.23.0\n")
+			return nil
+		}
+		planPath, infoPath := args[3], args[5]
+		if err := os.WriteFile(planPath, []byte(oversizePlan), 0o600); err != nil {
+			return err
+		}
+		return os.WriteFile(infoPath, []byte(infoBody), 0o600)
+	}}
+
+	preparation, err := newTestPlanner(t, runner).Prepare(context.Background(), PrepareRequest{Worktree: worktree, ArtifactsDir: artifacts}, nil, nil)
+	if err != nil {
+		t.Fatalf("oversize provenance must not fail the build: %v", err)
+	}
+	if preparation.PlanJSON != "" {
+		t.Errorf("PlanJSON = %d bytes, want omitted (empty), not truncated", len(preparation.PlanJSON))
+	}
+	if preparation.InfoJSON != infoBody {
+		t.Errorf("InfoJSON = %q, want %q (under-cap file must still capture)", preparation.InfoJSON, infoBody)
+	}
+	if preparation.StackKind != "go" {
+		t.Errorf("StackKind = %q, want go — oversize plan must not degrade stack detection", preparation.StackKind)
+	}
+}

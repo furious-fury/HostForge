@@ -93,6 +93,8 @@ func (a *Adapter) Build(ctx context.Context, request builder.Request, sink build
 	}
 	result.StackKind = preparation.StackKind
 	result.StackLabel = preparation.StackLabel
+	result.PlanJSON = preparation.PlanJSON
+	result.InfoJSON = preparation.InfoJSON
 	return result, nil
 }
 
