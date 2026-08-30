@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/config"
-	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
-	"github.com/hostforge/hostforge/internal/databases"
-	"github.com/hostforge/hostforge/internal/docker"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/config"
+	"github.com/furious-fury/HostForge/internal/crypto/envcrypt"
+	"github.com/furious-fury/HostForge/internal/databases"
+	"github.com/furious-fury/HostForge/internal/docker"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 const DatabaseVolumeRetention = 7 * 24 * time.Hour

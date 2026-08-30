@@ -5,7 +5,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/hostforge/hostforge/internal/models"
+	"github.com/furious-fury/HostForge/internal/models"
 )
 
 // ObservabilityWriter is the subset of persistence used for best-effort UI samples.

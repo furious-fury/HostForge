@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/config"
+	"github.com/furious-fury/HostForge/internal/config"
 )
 
 // SuggestedRecord is one row to enter in a DNS manager (semantics vary by provider UI).

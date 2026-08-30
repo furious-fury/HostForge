@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/hostforge/hostforge/internal/repository"
-	"github.com/hostforge/hostforge/internal/services"
+	"github.com/furious-fury/HostForge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/services"
 )
 
 type environmentVariableRequest struct {

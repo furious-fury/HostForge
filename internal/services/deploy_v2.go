@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/config"
-	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
-	"github.com/hostforge/hostforge/internal/docker"
-	"github.com/hostforge/hostforge/internal/git"
-	"github.com/hostforge/hostforge/internal/models"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/config"
+	"github.com/furious-fury/HostForge/internal/crypto/envcrypt"
+	"github.com/furious-fury/HostForge/internal/docker"
+	"github.com/furious-fury/HostForge/internal/git"
+	"github.com/furious-fury/HostForge/internal/models"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 type DeployTarget struct {

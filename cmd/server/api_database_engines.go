@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"runtime"
 
-	"github.com/hostforge/hostforge/internal/databases"
-	"github.com/hostforge/hostforge/internal/hostmetrics"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/databases"
+	"github.com/furious-fury/HostForge/internal/hostmetrics"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 const (

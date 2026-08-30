@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 const testSCRAMVerifier = "SCRAM-SHA-256$4096:c2FsdA==$c3RvcmVk:a2V5"

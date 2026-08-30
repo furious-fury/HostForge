@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/dnsops"
-	"github.com/hostforge/hostforge/internal/git"
-	"github.com/hostforge/hostforge/internal/services"
+	"github.com/furious-fury/HostForge/internal/dnsops"
+	"github.com/furious-fury/HostForge/internal/git"
+	"github.com/furious-fury/HostForge/internal/services"
 )
 
 type caddySyncOutcome struct {

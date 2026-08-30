@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/caddy"
-	"github.com/hostforge/hostforge/internal/dnsops"
-	"github.com/hostforge/hostforge/internal/repository"
-	platformservices "github.com/hostforge/hostforge/internal/services"
+	"github.com/furious-fury/HostForge/internal/caddy"
+	"github.com/furious-fury/HostForge/internal/dnsops"
+	"github.com/furious-fury/HostForge/internal/repository"
+	platformservices "github.com/furious-fury/HostForge/internal/services"
 )
 
 type onboardingCompleteRequest struct {

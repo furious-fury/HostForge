@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/dnsops"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/dnsops"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 type serviceDomainRequest struct {

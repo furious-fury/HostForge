@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/caddy"
-	"github.com/hostforge/hostforge/internal/config"
-	"github.com/hostforge/hostforge/internal/docker"
-	"github.com/hostforge/hostforge/internal/version"
+	"github.com/furious-fury/HostForge/internal/caddy"
+	"github.com/furious-fury/HostForge/internal/config"
+	"github.com/furious-fury/HostForge/internal/docker"
+	"github.com/furious-fury/HostForge/internal/version"
 )
 
 // Row is one line in the System panel.

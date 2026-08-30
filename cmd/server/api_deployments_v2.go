@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/models"
-	"github.com/hostforge/hostforge/internal/obs"
-	"github.com/hostforge/hostforge/internal/repository"
-	"github.com/hostforge/hostforge/internal/services"
+	"github.com/furious-fury/HostForge/internal/models"
+	"github.com/furious-fury/HostForge/internal/obs"
+	"github.com/furious-fury/HostForge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/services"
 )
 
 func deploymentToV2(item models.Deployment) map[string]any {

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/hostforge/hostforge/internal/git"
-	"github.com/hostforge/hostforge/internal/git/authresolver"
-	githubapp "github.com/hostforge/hostforge/internal/github/app"
+	"github.com/furious-fury/HostForge/internal/git"
+	"github.com/furious-fury/HostForge/internal/git/authresolver"
+	githubapp "github.com/furious-fury/HostForge/internal/github/app"
 )
 
 // appClientHolder lazily loads the per-App RSA key from the sealed DB row and

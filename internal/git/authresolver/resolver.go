@@ -5,7 +5,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/hostforge/hostforge/internal/git"
+	"github.com/furious-fury/HostForge/internal/git"
 )
 
 type AppTokenProvider interface {

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/databases"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/databases"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 func TestCreatePostgreSQLServiceQueuesIsolatedProvisioning(t *testing.T) {

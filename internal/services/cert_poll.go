@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/config"
-	"github.com/hostforge/hostforge/internal/models"
-	"github.com/hostforge/hostforge/internal/obs"
-	"github.com/hostforge/hostforge/internal/redact"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/config"
+	"github.com/furious-fury/HostForge/internal/models"
+	"github.com/furious-fury/HostForge/internal/obs"
+	"github.com/furious-fury/HostForge/internal/redact"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 const maxCertMessageLen = 512

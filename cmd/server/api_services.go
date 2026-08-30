@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	githubapp "github.com/hostforge/hostforge/internal/github/app"
-	"github.com/hostforge/hostforge/internal/repository"
-	platformservices "github.com/hostforge/hostforge/internal/services"
+	githubapp "github.com/furious-fury/HostForge/internal/github/app"
+	"github.com/furious-fury/HostForge/internal/repository"
+	platformservices "github.com/furious-fury/HostForge/internal/services"
 )
 
 func (s *server) serviceEnvironmentStates(r *http.Request, service repository.Service, bindings []repository.ServiceEnvironment) []map[string]any {

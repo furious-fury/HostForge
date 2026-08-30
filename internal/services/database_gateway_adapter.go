@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 // PgBouncer requires trust-authenticated users to exist in auth_file. This

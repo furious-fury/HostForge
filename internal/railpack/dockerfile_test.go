@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hostforge/hostforge/internal/builder"
+	"github.com/furious-fury/HostForge/internal/builder"
 )
 
 func TestDockerfileBuilder_ImplementsBuilderContract(t *testing.T) {

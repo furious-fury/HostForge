@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/hostforge/hostforge/internal/builder"
-	hfdocker "github.com/hostforge/hostforge/internal/docker"
+	"github.com/furious-fury/HostForge/internal/builder"
+	hfdocker "github.com/furious-fury/HostForge/internal/docker"
 	"github.com/moby/moby/client"
 )
 

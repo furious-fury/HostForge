@@ -1,4 +1,4 @@
-module github.com/hostforge/hostforge
+module github.com/furious-fury/HostForge
 
 go 1.25.0
 

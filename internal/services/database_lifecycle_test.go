@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/database"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/database"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 func TestDeleteDatabaseServiceRetainsVolumeMetadata(t *testing.T) {

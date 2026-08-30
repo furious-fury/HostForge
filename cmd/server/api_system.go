@@ -3,7 +3,7 @@ package main
 import (
 	"net/http"
 
-	"github.com/hostforge/hostforge/internal/sysstatus"
+	"github.com/furious-fury/HostForge/internal/sysstatus"
 )
 
 func (s *server) handleSystemStatus(w http.ResponseWriter, r *http.Request) {

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/backups"
-	"github.com/hostforge/hostforge/internal/repository"
+	"github.com/furious-fury/HostForge/internal/backups"
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 var r2AccountIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{32}$`)

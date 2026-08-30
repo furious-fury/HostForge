@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hostforge/hostforge/internal/hostmetrics"
+	"github.com/furious-fury/HostForge/internal/hostmetrics"
 )
 
 type hostSnapshotCache struct {

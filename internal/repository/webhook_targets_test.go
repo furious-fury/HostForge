@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hostforge/hostforge/internal/models"
+	"github.com/furious-fury/HostForge/internal/models"
 )
 
 func TestAutoDeployTargetsAndRollbackAudit(t *testing.T) {

@@ -17,12 +17,12 @@ import (
 	"unicode"
 
 	"github.com/containerd/errdefs"
-	backupstorage "github.com/hostforge/hostforge/internal/backups"
-	"github.com/hostforge/hostforge/internal/config"
-	"github.com/hostforge/hostforge/internal/crypto/envcrypt"
-	"github.com/hostforge/hostforge/internal/databases"
-	"github.com/hostforge/hostforge/internal/docker"
-	"github.com/hostforge/hostforge/internal/repository"
+	backupstorage "github.com/furious-fury/HostForge/internal/backups"
+	"github.com/furious-fury/HostForge/internal/config"
+	"github.com/furious-fury/HostForge/internal/crypto/envcrypt"
+	"github.com/furious-fury/HostForge/internal/databases"
+	"github.com/furious-fury/HostForge/internal/docker"
+	"github.com/furious-fury/HostForge/internal/repository"
 	mobyclient "github.com/moby/moby/client"
 )
 
