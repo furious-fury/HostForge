@@ -112,6 +112,20 @@ type Config struct {
 	DatabaseOperationConcurrency int
 	// DatabaseTransferMaxPerHour bounds queued backup and restore operations.
 	DatabaseTransferMaxPerHour int
+	// ControlPlaneSnapshotIntervalMinutes controls how often a VACUUM INTO
+	// snapshot of hostforge.db is taken (ADR-0002 §17.2), independent of
+	// migrations. 0 disables the scheduled loop.
+	ControlPlaneSnapshotIntervalMinutes int
+	// ControlPlaneSnapshotRetentionDays bounds how long scheduled snapshots
+	// (local file, remote object if uploaded, and the row) are kept.
+	ControlPlaneSnapshotRetentionDays int
+	// ControlPlaneSnapshotDir is where scheduled snapshots are written.
+	// Defaults under DataDir. Distinct from the untracked pre-migration
+	// snapshot internal/database.OpenSQLite writes next to hostforge.db.
+	ControlPlaneSnapshotDir string
+	// ControlPlaneSnapshotDestinationID optionally names a backup_destinations
+	// row scheduled snapshots are also uploaded to. Empty means local-only.
+	ControlPlaneSnapshotDestinationID string
 	// DatabaseGatewaysEnabled gates the public database gateway feature. It is
 	// intentionally false by default for the first staging rollout.
 	DatabaseGatewaysEnabled bool
@@ -250,6 +264,18 @@ const (
 	DatabaseOperationConcurrencyEnv = "HOSTFORGE_DATABASE_OPERATION_CONCURRENCY"
 	// DatabaseTransferMaxPerHourEnv rate-limits backup and restore queue admission.
 	DatabaseTransferMaxPerHourEnv = "HOSTFORGE_DATABASE_TRANSFER_MAX_PER_HOUR"
+	// ControlPlaneSnapshotIntervalMinutesEnv sets the scheduled control-plane
+	// snapshot interval in minutes. 0 disables the loop.
+	ControlPlaneSnapshotIntervalMinutesEnv = "HOSTFORGE_CONTROL_PLANE_SNAPSHOT_INTERVAL_MINUTES"
+	// ControlPlaneSnapshotRetentionDaysEnv bounds how long scheduled
+	// control-plane snapshots are kept.
+	ControlPlaneSnapshotRetentionDaysEnv = "HOSTFORGE_CONTROL_PLANE_SNAPSHOT_RETENTION_DAYS"
+	// ControlPlaneSnapshotDirEnv overrides where scheduled control-plane
+	// snapshots are written.
+	ControlPlaneSnapshotDirEnv = "HOSTFORGE_CONTROL_PLANE_SNAPSHOT_DIR"
+	// ControlPlaneSnapshotDestinationIDEnv optionally names a
+	// backup_destinations row scheduled snapshots are uploaded to.
+	ControlPlaneSnapshotDestinationIDEnv = "HOSTFORGE_CONTROL_PLANE_SNAPSHOT_DESTINATION_ID"
 	// DatabaseGatewaysEnabledEnv gates all public database gateway mutations.
 	DatabaseGatewaysEnabledEnv = "HOSTFORGE_DATABASE_GATEWAYS_ENABLED"
 	// PostgreSQLGatewayImageEnv is the required digest-pinned PgBouncer image.
@@ -488,6 +514,25 @@ func Load(dataDirFlag string) (*Config, error) {
 	if databaseTransferMaxPerHour < 1 || databaseTransferMaxPerHour > 10000 {
 		return nil, fmt.Errorf("%s must be between 1 and 10000", DatabaseTransferMaxPerHourEnv)
 	}
+	controlPlaneSnapshotIntervalMinutes, err := envInt(ControlPlaneSnapshotIntervalMinutesEnv, 360)
+	if err != nil {
+		return nil, err
+	}
+	if controlPlaneSnapshotIntervalMinutes < 0 {
+		return nil, fmt.Errorf("%s must be >= 0 (0 disables the loop)", ControlPlaneSnapshotIntervalMinutesEnv)
+	}
+	controlPlaneSnapshotRetentionDays, err := envInt(ControlPlaneSnapshotRetentionDaysEnv, 14)
+	if err != nil {
+		return nil, err
+	}
+	if controlPlaneSnapshotRetentionDays < 1 || controlPlaneSnapshotRetentionDays > 3650 {
+		return nil, fmt.Errorf("%s must be between 1 and 3650", ControlPlaneSnapshotRetentionDaysEnv)
+	}
+	controlPlaneSnapshotDir := strings.TrimSpace(os.Getenv(ControlPlaneSnapshotDirEnv))
+	if controlPlaneSnapshotDir == "" {
+		controlPlaneSnapshotDir = filepath.Join(abs, "control-plane-snapshots")
+	}
+	controlPlaneSnapshotDestinationID := strings.TrimSpace(os.Getenv(ControlPlaneSnapshotDestinationIDEnv))
 	databaseGatewaysEnabled, err := envBool(DatabaseGatewaysEnabledEnv, false)
 	if err != nil {
 		return nil, err
@@ -585,6 +630,10 @@ func Load(dataDirFlag string) (*Config, error) {
 		AppContainerPidsLimit:               appContainerPidsLimit,
 		DatabaseOperationConcurrency:        databaseOperationConcurrency,
 		DatabaseTransferMaxPerHour:          databaseTransferMaxPerHour,
+		ControlPlaneSnapshotIntervalMinutes: controlPlaneSnapshotIntervalMinutes,
+		ControlPlaneSnapshotRetentionDays:   controlPlaneSnapshotRetentionDays,
+		ControlPlaneSnapshotDir:             controlPlaneSnapshotDir,
+		ControlPlaneSnapshotDestinationID:   controlPlaneSnapshotDestinationID,
 		DatabaseGatewaysEnabled:             databaseGatewaysEnabled,
 		PostgreSQLGatewayImage:              postgresqlGatewayImage,
 		PostgreSQLGatewayVersion:            postgresqlGatewayVersion,
