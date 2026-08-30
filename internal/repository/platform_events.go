@@ -124,7 +124,7 @@ func (s *Store) RecordDeploymentEvent(ctx context.Context, deploymentID, status,
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO platform_events(application_id,service_id,environment_id,deployment_id,event_type,status,actor,message,detail,created_at)
 		SELECT COALESCE(svc.application_id,''),COALESCE(d.service_id,''),COALESCE(d.environment_id,''),d.id,
-		       'deployment',?,COALESCE(d.actor,''),'Deployment '+lower(?),?,?
+		       'deployment',?,COALESCE(d.actor,''),'Deployment ' || lower(?),?,?
 		FROM deployments d LEFT JOIN services svc ON svc.id=d.service_id WHERE d.id=?`,
 		strings.TrimSpace(status), strings.TrimSpace(status), strings.TrimSpace(detail), time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(deploymentID))
 	if err != nil {

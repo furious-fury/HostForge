@@ -30,3 +30,59 @@ func TestPlatformEventFiltersAndCursorPagination(t *testing.T) {
 		t.Fatalf("filtered=%+v err=%v", filtered, err)
 	}
 }
+
+// Deployment status events build their message in SQL. SQLite's `+` is
+// arithmetic, not concatenation, so `'Deployment '+lower(?)` coerces both
+// operands to numbers and evaluates to 0 for every status. The activity feed
+// renders that message directly, so every deployment event read "0".
+func TestDeploymentEventMessagesAreConcatenated(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	app, err := store.CreateApplication(ctx, "Concat", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	envs, err := store.ListApplicationEnvironments(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := store.CreateService(ctx, CreateServiceInput{ApplicationID: app.ID, Name: "api", RepoURL: "https://github.com/acme/concat.git", InternalPort: 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := store.CreateServiceDeployment(ctx, CreateServiceDeploymentInput{ServiceID: service.ID, EnvironmentID: envs[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// RecordDeploymentEvent and UpdateDeploymentStatus each build the message
+	// with their own copy of the expression, so both need covering.
+	if err := store.RecordDeploymentEvent(ctx, deployment.ID, "BUILDING", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateDeploymentStatus(ctx, deployment.ID, "SUCCESS", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _, err := store.ListPlatformEventsFiltered(ctx, PlatformEventFilter{ApplicationID: app.ID, EventType: "deployment", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range events {
+		got[e.Message] = true
+	}
+	for _, want := range []string{"Deployment building", "Deployment success"} {
+		if !got[want] {
+			t.Errorf("missing event message %q; got %v", want, keysOf(got))
+		}
+	}
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
