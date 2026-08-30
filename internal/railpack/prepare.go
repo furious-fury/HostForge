@@ -34,13 +34,29 @@ type PrepareRequest struct {
 
 // Preparation is the non-secret metadata a future BuildKit adapter needs to
 // invoke the Railpack frontend and persist build provenance.
+//
+// PlanJSON and InfoJSON are the raw file contents, captured here because
+// Adapter.Build deletes the artifacts directory (defer os.RemoveAll) before
+// returning to any caller that might otherwise re-open these files. Capped
+// at maxProvenanceJSONBytes each; over the cap the field is left empty
+// (never truncated — truncated JSON is unparseable) and a warning is logged
+// by the caller. Missing or unreadable is also left empty, never an error:
+// provenance capture must never fail a build.
 type Preparation struct {
 	Version    string
 	PlanPath   string
 	InfoPath   string
 	StackKind  string
 	StackLabel string
+	PlanJSON   string
+	InfoJSON   string
 }
+
+// maxProvenanceJSONBytes bounds how much of railpack-plan.json/railpack-info.json
+// is persisted per deployment. Real plans observed in Railpack's own test corpus
+// run 3-15 KB; this is roughly 17x that, wide enough for legitimate variance
+// while still bounding a deployments row that is never pruned.
+const maxProvenanceJSONBytes = 256 * 1024
 
 // commandRunner exists to keep CLI execution isolated and fully testable.
 type commandRunner interface {
@@ -137,14 +153,46 @@ func (p *Planner) Prepare(ctx context.Context, request PrepareRequest, stdout, s
 			return Preparation{}, fmt.Errorf("railpack prepare wrote invalid %s", filepath.Base(path))
 		}
 	}
-	stackKind, stackLabel := StackFromInfoPathAndWorktree(infoPath, request.Worktree)
+
+	// Read the info file once. StackFromInfoPathAndWorktree/StackFromInfoPath
+	// would each re-read it from disk; reusing the bytes already captured here
+	// for provenance avoids reading the same file twice per build.
+	infoRaw, infoJSON := readProvenanceJSON(infoPath)
+	_, planJSON := readProvenanceJSON(planPath)
+	stackKind, stackLabel := "unknown", "Unknown"
+	if infoRaw != nil {
+		stackKind, stackLabel = StackFromInfoJSON(infoRaw)
+	}
+	if stackKind == "node" {
+		stackKind, stackLabel = refineNodeStack(request.Worktree, stackKind, stackLabel)
+	}
 	return Preparation{
 		Version:    p.expectedVersion,
 		PlanPath:   planPath,
 		InfoPath:   infoPath,
 		StackKind:  stackKind,
 		StackLabel: stackLabel,
+		PlanJSON:   planJSON,
+		InfoJSON:   infoJSON,
 	}, nil
+}
+
+// readProvenanceJSON reads path for persistence, not detection. raw is the
+// full file content, used by the caller for stack detection regardless of
+// size (matching the pre-existing, uncapped StackFromInfoPath behavior);
+// nil means the read failed. capped is raw as a string, or empty if raw
+// exceeds maxProvenanceJSONBytes or the read failed — never truncated,
+// since truncated JSON is unparseable by any future consumer of the stored
+// column.
+func readProvenanceJSON(path string) (raw []byte, capped string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, ""
+	}
+	if len(raw) > maxProvenanceJSONBytes {
+		return raw, ""
+	}
+	return raw, string(raw)
 }
 
 // StackFromInfoPath derives the stable UI stack fields from Railpack's

@@ -43,6 +43,15 @@ func TestAdapter_BuildsWithPrepareAndBuildKitThenCleansArtifacts(t *testing.T) {
 	if result.ImageID != "sha256:abc" || result.StackKind != "go" || result.StackLabel != "Go" || len(events) < 2 || events[0].Phase != "prepare" || events[len(events)-1].Phase == "prepare" {
 		t.Fatalf("unexpected result=%+v events=%+v", result, events)
 	}
+	// Content must have been captured (into the returned Result) before
+	// the artifacts directory below is confirmed deleted. These two
+	// assertions are deliberately in tension: capturing plan/info content
+	// only works if the read happens before the artifacts dir is
+	// removed, so this is the one test that would catch a future change
+	// that moved the read to after cleanup.
+	if result.PlanJSON != `{"steps":{}}` || result.InfoJSON != `{"detectedProviders":["go"]}` {
+		t.Fatalf("provenance not captured before artifact cleanup: plan=%q info=%q", result.PlanJSON, result.InfoJSON)
+	}
 	entries, err := os.ReadDir(artifactsRoot)
 	if err != nil {
 		t.Fatal(err)

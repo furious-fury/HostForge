@@ -240,6 +240,18 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 			log.Info("deploy step", "step", "deployment_stack_persist", "status", "ok", "stack_kind", buildResult.StackKind, "stack_label", buildResult.StackLabel, "builder", buildResult.Kind)
 			_, _ = fmt.Fprintf(combinedOut, "hostforge: detected stack kind=%q label=%q builder=%q\n", buildResult.StackKind, buildResult.StackLabel, buildResult.Kind)
 		}
+		// Provenance only, never fatal to the deploy: a Dockerfile build has
+		// nothing to report, and an oversize plan/info file (capped in
+		// internal/railpack) already comes back as an empty string, not an
+		// error. The size log line is how the real distribution on this
+		// operator's repos gets learned — it can't be measured in advance.
+		if buildResult.PlanJSON != "" || buildResult.InfoJSON != "" {
+			if err := store.UpdateDeploymentRailpackArtifacts(ctx, job.Deployment.ID, buildResult.PlanJSON, buildResult.InfoJSON); err != nil {
+				log.Warn("deploy step", "step", "deployment_railpack_artifacts_persist", "status", "failed", "error", err)
+			} else {
+				log.Info("deploy step", "step", "deployment_railpack_artifacts_persist", "status", "ok", "plan_bytes", len(buildResult.PlanJSON), "info_bytes", len(buildResult.InfoJSON))
+			}
+		}
 		detectedStackKind = buildResult.StackKind
 		_, _ = fmt.Fprintf(combinedOut, "\nhostforge: ===== RAILPACK BUILDKIT IMAGE BUILD SUCCEEDED image=%s =====\n\n", job.ImageRef)
 		msRailpack := time.Since(t1).Milliseconds()

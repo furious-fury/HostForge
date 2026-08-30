@@ -58,6 +58,11 @@ type Result struct {
 	ImageID    string
 	StackKind  string
 	StackLabel string
+	// PlanJSON and InfoJSON are the raw Railpack build plan/info, captured
+	// for provenance (ADR-0002 §15.6/§15.7). Empty for a Dockerfile build,
+	// or when the source file exceeded the persistence size cap.
+	PlanJSON string
+	InfoJSON string
 }
 
 // Builder turns an isolated source worktree into a locally runnable image.
