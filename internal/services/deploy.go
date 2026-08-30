@@ -268,7 +268,10 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 			docker.EnvironmentIDLabel: job.environmentID(),
 			docker.ServiceIDLabel:     job.serviceID(),
 		},
-		Env: extraEnv,
+		Env:              extraEnv,
+		MemoryLimitBytes: cfg.AppContainerMemoryLimitBytes,
+		CPULimitMillis:   cfg.AppContainerCPULimitMillis,
+		PidsLimit:        cfg.AppContainerPidsLimit,
 	})
 	if err != nil {
 		e := ErrCode("run_container_failed", err)

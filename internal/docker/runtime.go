@@ -45,6 +45,13 @@ type RunOptions struct {
 	Labels         map[string]string
 	// Env is extra KEY=value pairs (runtime). PORT is always set from ContainerPort and wins over any duplicate here.
 	Env []string
+	// MemoryLimitBytes, CPULimitMillis, and PidsLimit are fleet-wide resource
+	// limits (ADR-0002 §14.2), not per-service — every app container gets the
+	// same values, sourced from config. 0 disables that one limit, matching
+	// Docker's own "0 = unlimited" semantics.
+	MemoryLimitBytes int64
+	CPULimitMillis   int
+	PidsLimit        int64
 }
 
 // RunContainer creates and starts a container with host->container port mapping.
@@ -89,6 +96,14 @@ func RunContainer(ctx context.Context, cli *client.Client, opts RunOptions) (str
 			networkName: {Aliases: opts.NetworkAliases},
 		}}
 	}
+	resources := container.Resources{
+		Memory:   opts.MemoryLimitBytes,
+		NanoCPUs: int64(opts.CPULimitMillis) * 1_000_000,
+	}
+	if opts.PidsLimit > 0 {
+		limit := opts.PidsLimit
+		resources.PidsLimit = &limit
+	}
 	resp, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config: &container.Config{
 			Image:        opts.ImageRef,
@@ -102,6 +117,16 @@ func RunContainer(ctx context.Context, cli *client.Client, opts RunOptions) (str
 			PortBindings: bindings,
 			RestartPolicy: container.RestartPolicy{
 				Name: "unless-stopped",
+			},
+			Resources: resources,
+			// CapDrop/SecurityOpt/tmpfs mirror the database-gateway hardening
+			// profile (ADR-0002 §14.4). ReadonlyRootfs is deliberately not set
+			// here — arbitrary application images are not safe under it by
+			// default, and there is no per-service opt-in yet to make it safe.
+			CapDrop:     []string{"ALL"},
+			SecurityOpt: []string{"no-new-privileges"},
+			Tmpfs: map[string]string{
+				"/tmp": "rw,noexec,nosuid,nodev,size=16m",
 			},
 		},
 		NetworkingConfig: networkingConfig,
