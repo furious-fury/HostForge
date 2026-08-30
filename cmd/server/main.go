@@ -121,6 +121,10 @@ func runServer(log *slog.Logger, args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %s must be set\n", config.WebhookSecretEnv)
 		return 2
 	}
+	if strings.TrimSpace(os.Getenv(config.EnvEncryptionKeyEnv)) == "" {
+		fmt.Fprintf(os.Stderr, "error: %s is required\n", config.EnvEncryptionKeyEnv)
+		return 2
+	}
 	if cfg.WebhookRateLimitPerMinute <= 0 {
 		fmt.Fprintln(os.Stderr, "error: webhook rate limit per minute must be > 0")
 		return 2
@@ -199,14 +203,23 @@ func runServer(log *slog.Logger, args []string) int {
 	hostSampler := hostmetrics.NewSampler(hostmetrics.IntervalFromEnv(5000), hostmetrics.CapacityFromEnv(360), hostReader)
 	hostSampler.Start(shutdownCtx)
 
-	var envSealer *envcrypt.Sealer
-	if k := strings.TrimSpace(os.Getenv(config.EnvEncryptionKeyEnv)); k != "" {
-		sealer, err := envcrypt.NewFromBase64Key(k)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s: %v\n", config.EnvEncryptionKeyEnv, err)
-			return 1
-		}
-		envSealer = sealer
+	// HOSTFORGE_ENV_ENCRYPTION_KEY presence was already checked above; construct
+	// the sealer and confirm it's the same key that sealed this database's
+	// existing secrets before anything else runs (ADR-0002 §20.4). A mismatched
+	// key is not recoverable — every secret it sealed is permanently unreadable
+	// with any other key — so this must be a startup failure, not a degraded
+	// feature.
+	envSealer, err := envcrypt.NewFromBase64Key(strings.TrimSpace(os.Getenv(config.EnvEncryptionKeyEnv)))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %s: %v\n", config.EnvEncryptionKeyEnv, err)
+		return 1
+	}
+	if err := envcrypt.VerifyOrInitCanary(envSealer,
+		func() ([]byte, bool, error) { return store.GetEncryptionCanary(ctx) },
+		func(sealed []byte) error { return store.SetEncryptionCanary(ctx, sealed) },
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
 	}
 	services.StartDatabaseReconciliationLoop(shutdownCtx, log, store, envSealer, dockerClient)
 	services.StartDatabaseOperationLoop(shutdownCtx, log, store, envSealer, dockerClient, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg.DatabaseOperationConcurrency, cfg)
