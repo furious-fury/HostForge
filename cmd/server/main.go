@@ -123,6 +123,10 @@ func runServer(log *slog.Logger, args []string) int {
 		fmt.Fprintln(os.Stderr, "error: webhook rate limit per minute must be > 0")
 		return 2
 	}
+	if cfg.LoginRateLimitPerMinute <= 0 {
+		fmt.Fprintln(os.Stderr, "error: login rate limit per minute must be > 0")
+		return 2
+	}
 	if cfg.WebhookMaxBodyBytes <= 0 {
 		fmt.Fprintln(os.Stderr, "error: webhook max body bytes must be > 0")
 		return 2
@@ -174,6 +178,7 @@ func runServer(log *slog.Logger, args []string) int {
 	services.StartCaddyCertPollLoop(log, cfg, store, obs.WithStore(context.Background(), store))
 	startServiceMetricSampler(context.Background(), log, store, dockerClient)
 	webhookLimiter := newFixedWindowLimiter(cfg.WebhookRateLimitPerMinute, time.Minute)
+	loginLimiter := newFixedWindowLimiter(cfg.LoginRateLimitPerMinute, time.Minute)
 
 	hostReader := hostmetrics.DefaultReader(hostmetrics.ParseReaderOptionsFromEnv())
 	hostSampler := hostmetrics.NewSampler(hostmetrics.IntervalFromEnv(5000), hostmetrics.CapacityFromEnv(360), hostReader)
@@ -200,6 +205,7 @@ func runServer(log *slog.Logger, args []string) int {
 		cfg:            cfg,
 		store:          store,
 		webhookLimiter: webhookLimiter,
+		loginLimiter:   loginLimiter,
 		hostSampler:    hostSampler,
 		envSealer:      envSealer,
 		dockerClient:   dockerClient,
@@ -257,6 +263,7 @@ type server struct {
 	cfg                     *config.Config
 	store                   *repository.Store
 	webhookLimiter          *fixedWindowLimiter
+	loginLimiter            *fixedWindowLimiter
 	hostSampler             *hostmetrics.Sampler
 	hostSnapCache           hostSnapshotCache
 	envSealer               *envcrypt.Sealer
@@ -481,6 +488,12 @@ func (s *server) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
+	remoteIP := requestIP(r)
+	if !s.loginLimiter.Allow(remoteIP, time.Now().UTC()) {
+		s.requestLog(r).Warn("login rejected", "reason", "rate_limited", "remote_ip", remoteIP)
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"status": "error", "error": "rate_limited"})
+		return
+	}
 	if !auth.BearerMatches(r.Header.Get("Authorization"), s.cfg.APIToken) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"status": "error", "error": "invalid_api_token"})
 		return
