@@ -3,16 +3,14 @@ package database
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"io"
-	"os"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
-// OpenSQLite opens the SQLite database at dbPath, pings it, and runs ApplyMigrations.
+// OpenSQLite opens the SQLite database at dbPath, pings it, snapshots it if
+// any migration is pending, then runs ApplyMigrations.
 // The DSN uses WAL and a busy timeout to reduce "database is locked" under concurrent readers.
 // MaxOpenConns(1) matches SQLite’s typical single-writer usage on the control plane.
 //
@@ -21,9 +19,6 @@ import (
 // and `_journal_mode=` query parameters are mattn/go-sqlite3 spellings and are
 // silently discarded here.
 func OpenSQLite(ctx context.Context, dbPath string) (*sql.DB, error) {
-	if err := backupBeforeApplicationModelMigration(dbPath); err != nil {
-		return nil, err
-	}
 	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -39,6 +34,19 @@ func OpenSQLite(ctx context.Context, dbPath string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
+
+	pending, err := PendingMigrations(ctx, db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if len(pending) > 0 {
+		if err := snapshotBeforeMigrations(ctx, db, dbPath); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("pre-migration snapshot: %w", err)
+		}
+	}
+
 	if err := ApplyMigrations(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -46,40 +54,33 @@ func OpenSQLite(ctx context.Context, dbPath string) (*sql.DB, error) {
 	return db, nil
 }
 
-func backupBeforeApplicationModelMigration(dbPath string) error {
-	info, err := os.Stat(dbPath)
-	if errors.Is(err, os.ErrNotExist) || err == nil && info.Size() == 0 {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("stat sqlite before migration backup: %w", err)
-	}
-	backupPath := dbPath + ".pre-application-model.bak"
-	if _, err := os.Stat(backupPath); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stat sqlite migration backup: %w", err)
-	}
-	src, err := os.Open(dbPath)
-	if err != nil {
-		return fmt.Errorf("open sqlite migration source: %w", err)
-	}
-	defer src.Close()
-	dst, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
-	if err != nil {
-		return fmt.Errorf("create sqlite migration backup: %w", err)
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		_ = dst.Close()
-		_ = os.Remove(backupPath)
-		return fmt.Errorf("copy sqlite migration backup: %w", err)
-	}
-	if err := dst.Sync(); err != nil {
-		_ = dst.Close()
-		return fmt.Errorf("sync sqlite migration backup: %w", err)
-	}
-	if err := dst.Close(); err != nil {
-		return fmt.Errorf("close sqlite migration backup: %w", err)
+// snapshotBeforeMigrations writes a VACUUM INTO snapshot of the database,
+// named after dbPath, before any pending migration runs (ADR-0002 §17.3).
+//
+// This replaces the old backupBeforeApplicationModelMigration, which did a
+// raw io.Copy of the whole file, once ever, keyed to a single fixed
+// filename. VACUUM INTO produces a transactionally consistent snapshot
+// under WAL without pausing writers, where an io.Copy of the raw db file
+// can tear across the main file and the WAL. This runs once per boot that
+// has at least one pending migration — i.e. roughly once per version
+// upgrade, not once ever and not on every boot (a restart with nothing
+// pending is the common case and does no extra I/O here).
+//
+// A snapshot failure blocks startup and ApplyMigrations is never reached —
+// the same fail-closed behaviour the function this replaces already had: a
+// database is never migrated unless a safety copy of its pre-migration
+// state was written first.
+//
+// These snapshots are not tracked in any table and are never purged
+// automatically — they accumulate at roughly one file per upgrade, a low
+// rate; an operator reclaims space by deleting old
+// "*.pre-migration-*.snapshot" files by hand. This is a different,
+// lower-value problem than the retained, tracked snapshots taken by
+// internal/services.StartControlPlaneSnapshotLoop.
+func snapshotBeforeMigrations(ctx context.Context, db *sql.DB, dbPath string) error {
+	snapshotPath := fmt.Sprintf("%s.pre-migration-%s.snapshot", dbPath, time.Now().UTC().Format("20060102T150405Z"))
+	if _, err := db.ExecContext(ctx, `VACUUM INTO ?`, snapshotPath); err != nil {
+		return fmt.Errorf("vacuum into %s: %w", snapshotPath, err)
 	}
 	return nil
 }

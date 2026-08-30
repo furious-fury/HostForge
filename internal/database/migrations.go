@@ -24,29 +24,68 @@ var migrationFiles embed.FS
 // least as new as whatever last wrote this database, never an older one.
 var ErrSchemaNewerThanBinary = errors.New("database schema is newer than this binary; run a binary at least as new as whatever last wrote this database, not an older one")
 
-// ApplyMigrations ensures schema_migrations exists, then runs each embedded migrations/*.sql
-// file once, in numeric filename order. Filenames act as version keys (e.g. 0001_initial.sql);
-// the leading digits, not the raw string, order them — a lexical sort would misorder once
-// migration counts reach different digit widths (e.g. "10000_x.sql" before "9999_x.sql").
-// Each migration runs in a single transaction: DDL + insert into schema_migrations.
-//
-// Before applying anything, the database's highest already-applied migration is compared
-// against the highest migration this binary knows about. If the database is ahead, this
-// returns ErrSchemaNewerThanBinary instead of touching the database — a downgrade (running
-// an older binary against a newer database) is rejected outright rather than silently
-// applying nothing and leaving the mismatch for application code to trip over later.
+// ApplyMigrations ensures schema_migrations exists, then runs every pending
+// embedded migration, in numeric filename order. See PendingMigrations for
+// how "pending" is computed and how a downgrade is rejected. Each migration
+// runs in a single transaction: DDL + insert into schema_migrations.
 func ApplyMigrations(ctx context.Context, db *sql.DB) error {
+	pending, err := pendingMigrations(ctx, db)
+	if err != nil {
+		return err
+	}
+	for _, name := range pending {
+		body, err := migrationFiles.ReadFile("migrations/" + name)
+		if err != nil {
+			return fmt.Errorf("read migration %s: %w", name, err)
+		}
+		if err := applyMigration(ctx, db, name, string(body)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PendingMigrations returns the embedded migration filenames not yet
+// recorded in schema_migrations, in the same numeric order ApplyMigrations
+// applies them in. It performs the same downgrade guard ApplyMigrations
+// does, so a database written by a newer binary returns
+// ErrSchemaNewerThanBinary here too.
+//
+// Exported so a caller that needs to know "is anything pending" before
+// deciding to do something else first — internal/database/sqlite.go's
+// pre-migration snapshot — can ask without duplicating this logic, and
+// without ApplyMigrations itself growing a parameter every existing direct
+// caller (including several tests) would have to start passing.
+func PendingMigrations(ctx context.Context, db *sql.DB) ([]string, error) {
+	return pendingMigrations(ctx, db)
+}
+
+// pendingMigrations ensures schema_migrations exists, reads and numerically
+// sorts the embedded migration filenames — the leading digits, not the raw
+// string, order them, since a lexical sort would misorder once migration
+// counts reach different digit widths (e.g. "10000_x.sql" before
+// "9999_x.sql") — rejects a downgrade, and returns exactly the filenames
+// not yet recorded in schema_migrations.
+//
+// Before returning anything, the database's highest already-applied
+// migration is compared against the highest migration this binary knows
+// about. If the database is ahead, this returns ErrSchemaNewerThanBinary
+// instead of touching the database further — a downgrade (running an older
+// binary against a newer database) is rejected outright rather than
+// silently reporting nothing pending and leaving the mismatch for
+// application code to trip over later.
+func pendingMigrations(ctx context.Context, db *sql.DB) ([]string, error) {
 	if _, err := db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS schema_migrations (
 	version TEXT PRIMARY KEY,
 	applied_at TEXT NOT NULL
 );`); err != nil {
-		return fmt.Errorf("ensure schema_migrations: %w", err)
+		return nil, fmt.Errorf("ensure schema_migrations: %w", err)
 	}
 
 	entries, err := fs.ReadDir(migrationFiles, "migrations")
 	if err != nil {
-		return fmt.Errorf("read migrations: %w", err)
+		return nil, fmt.Errorf("read migrations: %w", err)
 	}
 	var names []string
 	for _, entry := range entries {
@@ -72,35 +111,54 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	if len(names) > 0 {
 		highestKnown, err := migrationNumber(names[len(names)-1])
 		if err != nil {
-			return fmt.Errorf("parse embedded migration filename %s: %w", names[len(names)-1], err)
+			return nil, fmt.Errorf("parse embedded migration filename %s: %w", names[len(names)-1], err)
 		}
 		highestApplied, found, err := highestAppliedMigration(ctx, db)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if found && highestApplied > highestKnown {
-			return fmt.Errorf("%w (database has migration %04d applied, this binary only knows up to %04d)",
+			return nil, fmt.Errorf("%w (database has migration %04d applied, this binary only knows up to %04d)",
 				ErrSchemaNewerThanBinary, highestApplied, highestKnown)
 		}
 	}
 
+	applied, err := appliedMigrationSet(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	pending := make([]string, 0, len(names))
 	for _, name := range names {
-		applied, err := migrationApplied(ctx, db, name)
-		if err != nil {
-			return err
-		}
-		if applied {
-			continue
-		}
-		body, err := migrationFiles.ReadFile("migrations/" + name)
-		if err != nil {
-			return fmt.Errorf("read migration %s: %w", name, err)
-		}
-		if err := applyMigration(ctx, db, name, string(body)); err != nil {
-			return err
+		if !applied[name] {
+			pending = append(pending, name)
 		}
 	}
-	return nil
+	return pending, nil
+}
+
+// appliedMigrationSet returns every version already recorded in
+// schema_migrations, as a set — one query, instead of the one
+// SELECT-COUNT-per-embedded-file round trip the old migrationApplied helper
+// used to cost when called once per name in a loop.
+func appliedMigrationSet(ctx context.Context, db *sql.DB) (map[string]bool, error) {
+	rows, err := db.QueryContext(ctx, `SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, fmt.Errorf("list applied migrations: %w", err)
+	}
+	defer rows.Close()
+
+	applied := map[string]bool{}
+	for rows.Next() {
+		var version string
+		if err := rows.Scan(&version); err != nil {
+			return nil, fmt.Errorf("scan applied migration: %w", err)
+		}
+		applied[version] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list applied migrations: %w", err)
+	}
+	return applied, nil
 }
 
 // migrationNumber extracts the leading numeric prefix from a migration
@@ -145,19 +203,6 @@ func highestAppliedMigration(ctx context.Context, db *sql.DB) (highest int, foun
 		return 0, false, fmt.Errorf("list applied migrations: %w", err)
 	}
 	return highest, found, nil
-}
-
-// migrationApplied returns true if version (the migration file name) was already applied.
-func migrationApplied(ctx context.Context, db *sql.DB, version string) (bool, error) {
-	var count int
-	if err := db.QueryRowContext(
-		ctx,
-		`SELECT COUNT(1) FROM schema_migrations WHERE version = ?`,
-		version,
-	).Scan(&count); err != nil {
-		return false, fmt.Errorf("check migration %s: %w", version, err)
-	}
-	return count > 0, nil
 }
 
 // applyMigration runs one migration file in a transaction: execute SQL, then insert version.
