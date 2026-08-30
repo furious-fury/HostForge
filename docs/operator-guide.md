@@ -48,3 +48,12 @@ settings.
 - Configure Cloudflare R2 or generic HTTPS S3 storage from Settings, then test the destination before enabling a database backup policy.
 - Treat replace-current restore as destructive even though HostForge creates and verifies a safety backup first. Prefer restore-as-copy for drills and investigation.
 - Back up `/var/lib/hostforge`, `/etc/hostforge/hostforge.env`, and the object-storage bucket under separate access controls. A SQLite copy without the encryption key is not a complete disaster-recovery set.
+
+## Control-plane durability
+
+Two independent snapshot mechanisms protect `hostforge.db` itself (ADR-0002 §17), separate from the managed-database backups above:
+
+- A pre-migration snapshot runs automatically inside `hostforge-server` whenever a boot has at least one pending schema migration — roughly once per version upgrade. It is a plain file next to `hostforge.db`, named `hostforge.db.pre-migration-<timestamp>.snapshot`, and is never purged automatically; delete old ones by hand once you no longer need them.
+- A scheduled snapshot loop takes a `VACUUM INTO` copy on its own interval, tracked in the database and retained for a configurable window. Configure it with `HOSTFORGE_CONTROL_PLANE_SNAPSHOT_INTERVAL_MINUTES` (default 360; `0` disables it), `HOSTFORGE_CONTROL_PLANE_SNAPSHOT_RETENTION_DAYS` (default 14), `HOSTFORGE_CONTROL_PLANE_SNAPSHOT_DIR` (defaults under the data directory), and optionally `HOSTFORGE_CONTROL_PLANE_SNAPSHOT_DESTINATION_ID` to also upload each snapshot to a configured backup destination.
+- Restore either kind of snapshot with `scripts/control-plane-restore.sh /path/to/snapshot.sqlite`, run as root with `HF_CONFIRM_CONTROL_PLANE_RESTORE=RESTORE` set. It stops the service, backs up the current database first, installs the snapshot, and restarts.
+- A control-plane snapshot contains every secret the database has ever sealed. Back up `HOSTFORGE_ENV_ENCRYPTION_KEY` on a separate path from the snapshots themselves — a snapshot without the matching key is unrecoverable. Restoring one sealed under a different key is not silent: the server fails its encryption canary check at boot and the restore script reports this distinctly (exit code `3`) rather than treating it as a failed restore.

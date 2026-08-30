@@ -237,6 +237,7 @@ func runServer(log *slog.Logger, args []string) int {
 	services.StartDatabaseBackupScheduleLoop(shutdownCtx, log, store, cfg.DatabaseTransferMaxPerHour)
 	services.StartDatabaseBackupRetentionLoop(shutdownCtx, log, store, envSealer)
 	services.StartDatabaseGatewayOperationLoop(shutdownCtx, log, cfg, store, envSealer, dockerClient)
+	services.StartControlPlaneSnapshotLoop(shutdownCtx, log, cfg, store, envSealer)
 
 	handler := &server{
 		log:            log,

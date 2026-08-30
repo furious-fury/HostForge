@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -143,8 +142,26 @@ func TestPopulatedProjectCutoverCreatesBackupAndPreservesRelationships(t *testin
 		t.Fatal(err)
 	}
 	defer migrated.Close()
-	if _, err := os.Stat(dbPath + ".pre-application-model.bak"); err != nil {
-		t.Fatalf("migration backup missing: %v", err)
+
+	snapshots, err := filepath.Glob(dbPath + ".pre-migration-*.snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 {
+		t.Fatalf("pre-migration snapshot missing or duplicated: got %v", snapshots)
+	}
+	// The snapshot must have been taken *before* the legacy->v2 cutover
+	// migration ran, not after — open it directly and confirm it still has
+	// the pre-cutover "projects" row. If this ever finds the v2 "applications"
+	// table instead, the snapshot is being taken too late to be useful.
+	snapshotDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(snapshots[0])))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshotDB.Close()
+	var snapshotProjectID string
+	if err := snapshotDB.QueryRowContext(ctx, `SELECT id FROM projects WHERE id='project-1'`).Scan(&snapshotProjectID); err != nil {
+		t.Fatalf("pre-migration snapshot missing pre-cutover projects row: %v", err)
 	}
 
 	var appID, serviceID, serviceRepo, productionBranch, stagingBranch, activeDeployment string
