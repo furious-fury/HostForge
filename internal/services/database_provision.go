@@ -527,6 +527,14 @@ func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repo
 			return
 		}
 	}
+	// 'delete' and 'purge' are absent by design, not by omission.
+	// FinalizeDatabaseServiceDeletion writes a terminal 'delete' row as an
+	// audit record (status='success'), and the claim query only ever selects
+	// queued or lease-expired rows, so a 'delete' operation never reaches
+	// this switch. 'purge' is permitted by the 0021 CHECK constraint but has
+	// no writer anywhere; removing a CHECK value needs a full SQLite table
+	// rebuild, which is not worth it for one unused string — and three
+	// foreign keys point at this table.
 	switch operation.OperationType {
 	case "backup":
 		processDatabaseBackup(ctx, log, store, sealer, dockerClient, operation, fail)
