@@ -627,7 +627,15 @@ function DatabaseServiceOverview({ service, data, environments }: {
   const database = data.database
   const instances = data.database_instances || []
   const operations = data.database_operations || []
-  const activeOperation = operations.find((operation) => operation.status === "queued" || operation.status === "running")
+  // Operations arrive newest-first, and more than one can now be outstanding:
+  // work sharing a database is queued behind whatever is running rather than
+  // rejected. Taking the first queued-or-running match would therefore show a
+  // newly queued operation sitting at 0% while the one actually doing work is
+  // ignored, which reads as a frozen progress bar. Prefer what is running,
+  // and otherwise show the oldest thing waiting, since that runs next.
+  const activeOperation =
+    operations.find((operation) => operation.status === "running") ??
+    operations.filter((operation) => operation.status === "queued").at(-1)
   const restoreMutation = useMutation({
     mutationFn: () => api.restoreDeletedDatabase(service.id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.service(service.id) }),
