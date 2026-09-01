@@ -171,3 +171,43 @@ func TestEveryEnqueuePathWritesBothTables(t *testing.T) {
 		t.Fatalf("%d database_operations rows have no operations row", orphaned)
 	}
 }
+
+// Deleting a service with work in flight still reports the conflict, but now
+// also asks that work to stop. The worker sees the request on its next lease
+// renewal, so the operator's retry succeeds instead of hitting the same wall
+// until the operation happens to finish.
+func TestBeginDeletionRequestsCancellationOfRunningOperations(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	ctx := context.Background()
+	created := newDatabaseOperationFixture(t, store, "cancelondelete")
+	operationID := created.Operations[0].ID
+
+	if _, err := store.ClaimNextOperation(ctx, ClaimOptions{Owner: "worker-a", Lease: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.BeginDatabaseServiceDeletion(ctx, created.Service.ID); err == nil {
+		t.Fatal("deletion proceeded while an operation was running")
+	}
+
+	operation, err := store.GetOperation(ctx, operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.CancelRequestedAt.IsZero() {
+		t.Fatal("deletion did not request cancellation of the running operation")
+	}
+	if operation.Status != "running" {
+		t.Fatalf("status = %q: cancellation is cooperative, the row should still be running", operation.Status)
+	}
+
+	// And the worker learns about it on its next renewal.
+	cancelRequested, err := store.RenewOperationLease(ctx, operationID, "worker-a", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cancelRequested {
+		t.Fatal("the lease holder was not told cancellation had been requested")
+	}
+}

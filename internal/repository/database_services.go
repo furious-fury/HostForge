@@ -1253,14 +1253,28 @@ func (s *Store) BeginDatabaseServiceDeletion(ctx context.Context, serviceID stri
 		return nil, err
 	}
 	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	var running int
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM operations WHERE service_id=? AND status='running'`, strings.TrimSpace(serviceID)).Scan(&running); err != nil {
 		return nil, err
 	}
 	if running > 0 {
+		// Ask the running operations to stop at their next step boundary
+		// before refusing. The worker observes this on its lease-renewal
+		// tick, so a retry shortly after this error succeeds rather than
+		// hitting the same wall — previously the operator could only wait
+		// for the operation to finish on its own.
+		if _, err = tx.ExecContext(ctx, `
+			UPDATE operations SET cancel_requested_at=?,updated_at=?
+			WHERE service_id=? AND status='running' AND cancel_requested_at=''`,
+			now, now, strings.TrimSpace(serviceID)); err != nil {
+			return nil, err
+		}
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("database operation is currently running")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, table := range []string{"database_operations", "operations"} {
 		if _, err = tx.ExecContext(ctx, `
 			UPDATE `+table+`
