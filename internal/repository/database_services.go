@@ -724,22 +724,19 @@ func (s *Store) ListDatabaseConnectionBindingsSealed(ctx context.Context, consum
 	return out, rows.Err()
 }
 
-func (s *Store) GetDatabaseOperation(ctx context.Context, operationID string) (DatabaseOperation, error) {
+// databaseOperationColumns is the one place the column list lives, so the
+// single-row and list reads cannot drift into a positional-scan mismatch.
+const databaseOperationColumns = `id,service_id,database_instance_id,operation_type,status,progress_step,progress_percent,` +
+	`actor,error_code,error_message,attempt_count,lease_owner,lease_expires_at,` +
+	`started_at,completed_at,created_at,updated_at`
+
+func scanDatabaseOperation(row rowScanner) (DatabaseOperation, error) {
 	var item DatabaseOperation
 	var instanceID sql.NullString
 	var started, completed, leaseExpires, created, updated string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id,service_id,database_instance_id,operation_type,status,progress_step,progress_percent,
-		       actor,error_code,error_message,attempt_count,lease_owner,lease_expires_at,
-		       started_at,completed_at,created_at,updated_at
-		FROM database_operations WHERE id=?`, strings.TrimSpace(operationID),
-	).Scan(&item.ID, &item.ServiceID, &instanceID, &item.OperationType, &item.Status,
+	if err := row.Scan(&item.ID, &item.ServiceID, &instanceID, &item.OperationType, &item.Status,
 		&item.ProgressStep, &item.ProgressPercent, &item.Actor, &item.ErrorCode, &item.ErrorMessage,
-		&item.AttemptCount, &item.LeaseOwner, &leaseExpires, &started, &completed, &created, &updated)
-	if errors.Is(err, sql.ErrNoRows) {
-		return DatabaseOperation{}, sql.ErrNoRows
-	}
-	if err != nil {
+		&item.AttemptCount, &item.LeaseOwner, &leaseExpires, &started, &completed, &created, &updated); err != nil {
 		return DatabaseOperation{}, err
 	}
 	if instanceID.Valid {
@@ -753,12 +750,29 @@ func (s *Store) GetDatabaseOperation(ctx context.Context, operationID string) (D
 	return item, nil
 }
 
+func (s *Store) GetDatabaseOperation(ctx context.Context, operationID string) (DatabaseOperation, error) {
+	item, err := scanDatabaseOperation(s.db.QueryRowContext(ctx,
+		`SELECT `+databaseOperationColumns+` FROM database_operations WHERE id=?`,
+		strings.TrimSpace(operationID)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return DatabaseOperation{}, sql.ErrNoRows
+	}
+	if err != nil {
+		return DatabaseOperation{}, err
+	}
+	return item, nil
+}
+
+// ListDatabaseOperations reads full rows in one query. It previously selected
+// ids and then called GetDatabaseOperation per id — up to 51 round trips for
+// a single call, all serialised behind the one connection SetMaxOpenConns(1)
+// allows, on a list the database detail screen polls every 2 seconds.
 func (s *Store) ListDatabaseOperations(ctx context.Context, serviceID string, limit int) ([]DatabaseOperation, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id FROM database_operations
+		SELECT `+databaseOperationColumns+` FROM database_operations
 		WHERE service_id=?
 		ORDER BY created_at DESC,id DESC
 		LIMIT ?`, strings.TrimSpace(serviceID), limit)
@@ -766,26 +780,15 @@ func (s *Store) ListDatabaseOperations(ctx context.Context, serviceID string, li
 		return nil, err
 	}
 	defer rows.Close()
-	ids := []string{}
+	out := []DatabaseOperation{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	out := make([]DatabaseOperation, 0, len(ids))
-	for _, id := range ids {
-		item, err := s.GetDatabaseOperation(ctx, id)
+		item, err := scanDatabaseOperation(rows)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, item)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 func (s *Store) QueueDatabaseInstanceOperation(ctx context.Context, instanceID, operationType, actor string) (DatabaseOperation, error) {
