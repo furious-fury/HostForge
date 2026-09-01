@@ -12,12 +12,6 @@ import (
 	"github.com/moby/moby/client"
 )
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return fn(request)
-}
-
 func TestStopAndRemoveTreatsMissingContainerAsRemoved(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		return &http.Response{

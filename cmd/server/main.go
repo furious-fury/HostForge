@@ -40,6 +40,7 @@ import (
 	"github.com/furious-fury/HostForge/internal/reqctx"
 	"github.com/furious-fury/HostForge/internal/services"
 	"github.com/furious-fury/HostForge/internal/version"
+	"github.com/furious-fury/HostForge/internal/workers"
 	"github.com/moby/moby/client"
 )
 
@@ -231,8 +232,31 @@ func runServer(log *slog.Logger, args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	services.StartDatabaseReconciliationLoop(shutdownCtx, log, store, envSealer, dockerClient)
-	databaseWG := services.StartDatabaseOperationLoop(shutdownCtx, log, store, envSealer, dockerClient, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg.DatabaseOperationConcurrency, cfg)
+	services.StartDatabaseInstanceReconciliationLoop(shutdownCtx, log, store, envSealer, dockerClient)
+
+	// Database operations run on the generic operations queue. The runtime
+	// recovers abandoned work as part of Start, before any worker begins, so
+	// the ordering between recovery and the workers cannot be got wrong.
+	operationsRuntime, err := workers.New(workers.Config{
+		Log:         log,
+		Store:       store,
+		Concurrency: cfg.DatabaseOperationConcurrency,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: operations runtime: %v\n", err)
+		return 1
+	}
+	if err := operationsRuntime.Register(services.NewDatabaseOperationHandlers(
+		log, store, envSealer, dockerClient, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg,
+	)...); err != nil {
+		fmt.Fprintf(os.Stderr, "error: register database operation handlers: %v\n", err)
+		return 1
+	}
+	if err := operationsRuntime.Start(shutdownCtx); err != nil {
+		fmt.Fprintf(os.Stderr, "error: start operations runtime: %v\n", err)
+		return 1
+	}
+
 	services.StartDatabasePurgeLoop(shutdownCtx, log, store, dockerClient)
 	services.StartDatabaseBackupScheduleLoop(shutdownCtx, log, store, cfg.DatabaseTransferMaxPerHour)
 	services.StartDatabaseBackupRetentionLoop(shutdownCtx, log, store, envSealer)
@@ -341,17 +365,23 @@ func runServer(log *slog.Logger, args []string) int {
 	// cancelled. Past the deadline the process exits with the lease still held
 	// and the next boot recovers it once the lease expires.
 	log.Info("shutdown: draining in-flight database operations")
-	operationsDone := make(chan struct{})
+	if err := operationsRuntime.Wait(drainCtx); err != nil {
+		// Past the deadline the runtime releases the leases it could not
+		// drain, so the next start recovers that work immediately.
+		log.Warn("shutdown: operation drain timed out; leases released for recovery", "error", err)
+	} else {
+		log.Info("shutdown: database operations drained")
+	}
+	gatewayDone := make(chan struct{})
 	go func() {
-		databaseWG.Wait()
 		gatewayWG.Wait()
-		close(operationsDone)
+		close(gatewayDone)
 	}()
 	select {
-	case <-operationsDone:
-		log.Info("shutdown: database operations drained")
+	case <-gatewayDone:
+		log.Info("shutdown: gateway operations drained")
 	case <-drainCtx.Done():
-		log.Warn("shutdown: database operation drain timed out; exiting with operations still in flight")
+		log.Warn("shutdown: gateway operation drain timed out; exiting with operations still in flight")
 	}
 
 	// dockerClient and db close via their defers above, in that order.

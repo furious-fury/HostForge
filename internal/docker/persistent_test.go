@@ -12,29 +12,7 @@ import (
 	"testing"
 
 	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/moby/moby/client"
 )
-
-func newDockerHTTPTestClient(t *testing.T, transport roundTripFunc) *client.Client {
-	t.Helper()
-	dockerClient, err := client.New(
-		client.WithHost("http://docker.test"),
-		client.WithHTTPClient(&http.Client{Transport: transport}),
-		client.WithVersion("1.47"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = dockerClient.Close() })
-	return dockerClient
-}
-
-func dockerResponse(request *http.Request, status int, body string) *http.Response {
-	return &http.Response{
-		StatusCode: status, Status: http.StatusText(status), Header: make(http.Header),
-		Body: io.NopCloser(strings.NewReader(body)), Request: request,
-	}
-}
 
 func TestEnsureEnvironmentNetworkCreatesOwnedBridge(t *testing.T) {
 	var calls atomic.Int32

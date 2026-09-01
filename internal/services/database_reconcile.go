@@ -14,25 +14,19 @@ import (
 	mobyclient "github.com/moby/moby/client"
 )
 
-func StartDatabaseReconciliationLoop(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client) {
-	if count, err := store.RequeueExpiredDatabaseOperations(ctx, time.Now().UTC()); err != nil {
-		if log != nil {
-			log.Error("recover interrupted database operations failed", "error", err)
-		}
-	} else if count > 0 && log != nil {
-		log.Info("requeued expired database operation leases", "count", count)
-	}
-	failExhaustedDatabaseOperations(ctx, log, store)
+// StartDatabaseInstanceReconciliationLoop keeps database instance state in
+// step with what Docker actually reports.
+//
+// It no longer recovers interrupted operations: that moved into the
+// operations runtime's Start, which runs it before any worker exists. The
+// old arrangement depended on this function being called before the worker
+// loop, an ordering that was load-bearing and written down nowhere.
+func StartDatabaseInstanceReconciliationLoop(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client) {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			reconcileDatabaseInstances(ctx, log, store, sealer, dockerClient)
-			// Also on the ticker, not only at boot: an operation exhausts its
-			// attempts while the process is running, and without this it would
-			// stay queued — skipped by the claim query, polled by the UI — until
-			// the next restart.
-			failExhaustedDatabaseOperations(ctx, log, store)
 			select {
 			case <-ctx.Done():
 				return
@@ -40,20 +34,6 @@ func StartDatabaseReconciliationLoop(ctx context.Context, log *slog.Logger, stor
 			}
 		}
 	}()
-}
-
-func failExhaustedDatabaseOperations(ctx context.Context, log *slog.Logger, store *repository.Store) {
-	count, err := store.FailExhaustedDatabaseOperations(ctx, time.Now().UTC())
-	if err != nil {
-		if log != nil {
-			log.Error("fail exhausted database operations failed", "error", err)
-		}
-		return
-	}
-	if count > 0 && log != nil {
-		log.Warn("failed database operations that exceeded the retry limit",
-			"count", count, "max_attempts", repository.MaxDatabaseOperationAttempts)
-	}
 }
 
 func reconcileDatabaseInstances(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client) {

@@ -386,6 +386,41 @@ describe("service overview", () => {
     expect(metrics).toHaveBeenCalled()
   })
 
+  it("shows the running operation, not the newest queued one", async () => {
+    const databaseService: ServiceDTO = { ...service, service_type: "database", name: "Busy database", repo_url: "", stack_kind: "postgresql", stack_label: "PostgreSQL" }
+    vi.spyOn(api, "application").mockResolvedValue({ application, environments: [environment], services: [databaseService], service_bindings: {} })
+    vi.spyOn(api, "service").mockResolvedValue({
+      service: databaseService,
+      database: { service_id: databaseService.id, engine: "postgresql", default_version: "18" },
+      database_instances: [{
+        id: "db-instance-busy", service_id: databaseService.id, environment_id: environment.id,
+        engine_version: "18", docker_container_id: "container-1", network_alias: "busy-production",
+        internal_port: 5432, volume_name: "hostforge-db-busy", resource_preset: "development",
+        cpu_limit_millis: 500, memory_limit_bytes: 512 * 1024 * 1024, desired_state: "running",
+        status: "healthy", health_message: "", created_at: "2026-07-01T00:00:00Z", updated_at: "2026-07-01T00:00:00Z",
+      }],
+      // Newest first, as the API returns them. Operations sharing a database
+      // queue behind each other rather than being rejected, so a queued
+      // operation can sit in front of the one actually running.
+      database_operations: [{
+        id: "operation-queued", service_id: databaseService.id, database_instance_id: "db-instance-busy",
+        operation_type: "restart", status: "queued", progress_step: "queued", progress_percent: 0,
+        created_at: "2026-07-01T00:10:00Z", updated_at: "2026-07-01T00:10:00Z",
+      }, {
+        id: "operation-running", service_id: databaseService.id, database_instance_id: "db-instance-busy",
+        operation_type: "backup", status: "running", progress_step: "uploading", progress_percent: 65,
+        created_at: "2026-07-01T00:00:00Z", updated_at: "2026-07-01T00:05:00Z",
+      }],
+      database_bindings: {}, database_credentials: {}, bindings: [], environment_states: [],
+    })
+
+    renderOverview()
+
+    // The running operation's progress, not the queued one's 0%.
+    expect(await screen.findByText("65%")).toBeInTheDocument()
+    expect(screen.queryByText("0%")).not.toBeInTheDocument()
+  })
+
   it("shows the retained operation error when an older failed provision has no container logs", async () => {
     const user = userEvent.setup()
     const databaseService: ServiceDTO = { ...service, service_type: "database", name: "Failed database", repo_url: "", stack_kind: "postgresql", stack_label: "PostgreSQL" }

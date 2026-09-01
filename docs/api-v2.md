@@ -31,6 +31,20 @@ Creating a service, or changing its source through `PATCH`, verifies that `githu
 
 ## Database services
 
+Database operations run on the generic operations queue (ADR-0002 §4). Two
+consequences are visible through this API:
+
+- A second action on a database that is already busy is **accepted and
+  queued**, not rejected. It runs once the operation ahead of it finishes.
+  Operations sharing a database are serialised when they are claimed, so only
+  one ever runs at a time. Previously such a request failed with
+  `database operation already in progress`.
+- `GET /api/database-operations/:operationID` and the `database_operations`
+  array in the service response are unchanged in shape, fields, and status
+  values. Clients that poll while `status` is `queued` or `running` keep
+  working as before — but more than one operation can now be outstanding, so
+  a client showing "the active operation" should prefer the `running` one.
+
 - `GET /api/database-engines`
 - `POST /api/applications/:applicationID/database-services`
 - `GET /api/services/:serviceID`

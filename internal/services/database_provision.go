@@ -4,16 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 
@@ -375,107 +372,6 @@ func PrepareManagedDatabase(ctx context.Context, store *repository.Store, sealer
 		return repository.CreatedDatabaseService{}, ErrCode("database_service_name_conflict", err)
 	}
 	return created, err
-}
-
-// StartDatabaseOperationLoop starts the database operation workers and
-// returns a WaitGroup that completes once they have all stopped.
-//
-// stopCtx signals shutdown: workers stop claiming new operations, but an
-// operation already in flight runs to completion on a context detached from
-// stopCtx. Wait on the returned group to drain them — see the shutdown
-// sequence in cmd/server. Callers that do not drain may ignore the result.
-func StartDatabaseOperationLoop(stopCtx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, dataDir string, minFreeDiskBytes int64, concurrency int, gatewayCfg *config.Config) *sync.WaitGroup {
-	var wg sync.WaitGroup
-	if sealer == nil {
-		if log != nil {
-			log.Warn("database operation worker disabled; encryption key is not configured")
-		}
-		return &wg
-	}
-	if concurrency < 1 {
-		if log != nil {
-			log.Error("database operation worker disabled; concurrency must be positive")
-		}
-		return &wg
-	}
-	for workerIndex := 0; workerIndex < concurrency; workerIndex++ {
-		workerToken, err := randomDatabaseToken(12)
-		if err != nil {
-			if log != nil {
-				log.Error("database operation worker identity generation failed", "worker", workerIndex, "error", err)
-			}
-			return &wg
-		}
-		workerID := fmt.Sprintf("hostforge-%d-%d-%s", os.Getpid(), workerIndex, workerToken)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			runDatabaseOperationWorker(stopCtx, log, store, sealer, dockerClient, dataDir, minFreeDiskBytes, workerID, gatewayCfg)
-		}()
-	}
-	return &wg
-}
-
-func runDatabaseOperationWorker(stopCtx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, dataDir string, minFreeDiskBytes int64, workerID string, gatewayCfg *config.Config) {
-	const leaseDuration = 2 * time.Minute
-	const leaseRefresh = 30 * time.Second
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		for {
-			// Stop claiming as soon as shutdown starts. Without this the
-			// drain loop keeps pulling work off a backlog after SIGTERM and
-			// the process cannot finish draining.
-			if stopCtx.Err() != nil {
-				return
-			}
-			operation, err := store.ClaimNextDatabaseOperation(stopCtx, workerID, leaseDuration)
-			if errors.Is(err, sql.ErrNoRows) {
-				break
-			}
-			if err != nil {
-				if log != nil {
-					log.Error("claim database operation failed", "worker_id", workerID, "error", err)
-				}
-				break
-			}
-			// Deliberately detached from stopCtx: an operation that has been
-			// claimed holds a lease and owns real resources (a container, a
-			// volume, an in-progress restore), so shutdown must drain it
-			// rather than cancel it mid-step. This mirrors how deploys
-			// detach in cmd/server. The only thing that cancels this context
-			// is losing the lease, below.
-			operationCtx, cancelOperation := context.WithCancel(context.WithoutCancel(stopCtx))
-			leaseDone := make(chan struct{})
-			go func(operationID string) {
-				defer close(leaseDone)
-				leaseTicker := time.NewTicker(leaseRefresh)
-				defer leaseTicker.Stop()
-				for {
-					select {
-					case <-operationCtx.Done():
-						return
-					case <-leaseTicker.C:
-						if err := store.RenewDatabaseOperationLease(operationCtx, operationID, workerID, leaseDuration); err != nil {
-							if log != nil {
-								log.Error("database operation lease lost; cancelling worker", "operation_id", operationID, "error", err)
-							}
-							cancelOperation()
-							return
-						}
-					}
-				}
-			}(operation.ID)
-			processDatabaseOperation(operationCtx, log, store, sealer, dockerClient, operation, dataDir, minFreeDiskBytes, gatewayCfg)
-			cancelOperation()
-			<-leaseDone
-		}
-		select {
-		case <-stopCtx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
 }
 
 func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, operation repository.DatabaseOperation, dataDir string, minFreeDiskBytes int64, gatewayCfg *config.Config) {
