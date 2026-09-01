@@ -847,15 +847,10 @@ func (s *Store) QueueDatabaseInstanceOperation(ctx context.Context, instanceID, 
 		return DatabaseOperation{}, err
 	}
 	defer tx.Rollback()
-	var active int
-	if err = tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM database_operations
-		WHERE database_instance_id=? AND status IN ('queued','running')`, instance.ID).Scan(&active); err != nil {
-		return DatabaseOperation{}, err
-	}
-	if active > 0 {
-		return DatabaseOperation{}, fmt.Errorf("database operation already in progress")
-	}
+	// No admission guard: operations sharing an instance are serialised by
+	// lock_key when they are claimed, so a second request queues behind the
+	// first instead of being rejected. See the note on
+	// insertDatabaseOperationQueueRow.
 	if operationType != "rotate_credentials" {
 		if _, err = tx.ExecContext(ctx, `
 			UPDATE database_instances SET desired_state=?,status=?,updated_at=? WHERE id=?`,
@@ -900,13 +895,7 @@ func (s *Store) QueueDatabaseUpgrade(ctx context.Context, instanceID, engineVers
 		return DatabaseOperation{}, err
 	}
 	defer tx.Rollback()
-	var active int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM database_operations WHERE database_instance_id=? AND status IN ('queued','running')`, instance.ID).Scan(&active); err != nil {
-		return DatabaseOperation{}, err
-	}
-	if active > 0 {
-		return DatabaseOperation{}, fmt.Errorf("database operation already in progress")
-	}
+	// Serialised by lock_key at claim time; see QueueDatabaseInstanceOperation.
 	stamp := now.Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO database_operations(id,service_id,database_instance_id,operation_type,status,progress_step,progress_percent,actor,created_at,updated_at) VALUES(?,?,?,'upgrade','queued','queued',0,?,?,?)`, operation.ID, operation.ServiceID, operation.DatabaseInstanceID, operation.Actor, stamp, stamp); err != nil {
 		return DatabaseOperation{}, err
@@ -1230,7 +1219,7 @@ func (s *Store) UpdateDatabaseInstanceState(ctx context.Context, instanceID stri
 // layer before this transaction is committed.
 func (s *Store) EnsureDatabaseServiceDeletionReady(ctx context.Context, serviceID string) error {
 	var running int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM database_operations WHERE service_id=? AND status='running'`, strings.TrimSpace(serviceID)).Scan(&running)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM operations WHERE service_id=? AND status='running'`, strings.TrimSpace(serviceID)).Scan(&running)
 	if err != nil {
 		return err
 	}
@@ -1242,7 +1231,7 @@ func (s *Store) EnsureDatabaseServiceDeletionReady(ctx context.Context, serviceI
 
 func (s *Store) EnsureDatabaseServicePurgeReady(ctx context.Context, serviceID string) error {
 	var active int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM database_operations WHERE service_id=? AND status IN ('queued','running')`, strings.TrimSpace(serviceID)).Scan(&active)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM operations WHERE service_id=? AND status IN ('queued','running')`, strings.TrimSpace(serviceID)).Scan(&active)
 	if err != nil {
 		return err
 	}
@@ -1265,18 +1254,20 @@ func (s *Store) BeginDatabaseServiceDeletion(ctx context.Context, serviceID stri
 	}
 	defer tx.Rollback()
 	var running int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM database_operations WHERE service_id=? AND status='running'`, strings.TrimSpace(serviceID)).Scan(&running); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM operations WHERE service_id=? AND status='running'`, strings.TrimSpace(serviceID)).Scan(&running); err != nil {
 		return nil, err
 	}
 	if running > 0 {
 		return nil, fmt.Errorf("database operation is currently running")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE database_operations
-		SET status='cancelled',progress_step='cancelled_by_delete',completed_at=?,lease_owner='',lease_expires_at='',updated_at=?
-		WHERE service_id=? AND status='queued'`, now, now, strings.TrimSpace(serviceID)); err != nil {
-		return nil, err
+	for _, table := range []string{"database_operations", "operations"} {
+		if _, err = tx.ExecContext(ctx, `
+			UPDATE `+table+`
+			SET status='cancelled',progress_step='cancelled_by_delete',completed_at=?,lease_owner='',lease_expires_at='',updated_at=?
+			WHERE service_id=? AND status='queued'`, now, now, strings.TrimSpace(serviceID)); err != nil {
+			return nil, err
+		}
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM database_bindings WHERE database_instance_id IN (SELECT id FROM database_instances WHERE service_id=?)`, strings.TrimSpace(serviceID)); err != nil {
 		return nil, err
@@ -1306,7 +1297,7 @@ func (s *Store) FinalizeDatabaseServiceDeletion(ctx context.Context, serviceID s
 	}
 	defer tx.Rollback()
 	var active int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM database_operations WHERE service_id=? AND status IN ('queued','running')`, strings.TrimSpace(serviceID)).Scan(&active); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM operations WHERE service_id=? AND status IN ('queued','running')`, strings.TrimSpace(serviceID)).Scan(&active); err != nil {
 		return nil, err
 	}
 	if active > 0 {

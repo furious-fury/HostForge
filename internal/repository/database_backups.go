@@ -345,13 +345,9 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, instanceID, destination
 		return DatabaseBackup{}, DatabaseOperation{}, err
 	}
 	defer tx.Rollback()
-	var active int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM database_operations WHERE database_instance_id=? AND status IN ('queued','running')`, instance.ID).Scan(&active); err != nil || active > 0 {
-		if err == nil {
-			err = fmt.Errorf("database operation already in progress")
-		}
-		return DatabaseBackup{}, DatabaseOperation{}, err
-	}
+	// Serialised by lock_key at claim time; see QueueDatabaseInstanceOperation.
+	// enforceDatabaseTransferRateLimit below stays: it is an hourly cap on
+	// transfer volume, not a serialiser, and answers a different question.
 	if err = enforceDatabaseTransferRateLimit(ctx, tx, now, maxTransfersPerHour); err != nil {
 		return DatabaseBackup{}, DatabaseOperation{}, err
 	}

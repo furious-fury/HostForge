@@ -135,8 +135,24 @@ func TestQueueDatabaseUpgradePersistsImmutableImageTransition(t *testing.T) {
 	if err != nil || job.PreviousImageRef != instance.ImageRef || job.TargetImageRef != "postgres@sha256:new" || job.EngineVersion != "18" {
 		t.Fatalf("unexpected upgrade job: %+v err=%v", job, err)
 	}
-	if _, err := store.QueueDatabaseUpgrade(ctx, instance.ID, "18", "postgres@sha256:another", "operator"); err == nil {
-		t.Fatal("concurrent database upgrade was accepted")
+	// A second upgrade on the same instance is now queued rather than
+	// rejected: lock_key serialises them at claim time, so the operator gets
+	// their action accepted and executed in order instead of an error. The
+	// invariant that matters — only one runs at a time — is asserted by
+	// TestClaimSerialisesOperationsSharingALockKey.
+	second, err := store.QueueDatabaseUpgrade(ctx, instance.ID, "18", "postgres@sha256:another", "operator")
+	if err != nil {
+		t.Fatalf("concurrent database upgrade was rejected rather than queued: %v", err)
+	}
+	if second.Status != "queued" {
+		t.Fatalf("second upgrade status = %q, want queued", second.Status)
+	}
+	queued, err := store.GetOperation(ctx, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.LockKey != "dbi:"+instance.ID {
+		t.Fatalf("second upgrade lock_key = %q, want dbi:%s", queued.LockKey, instance.ID)
 	}
 	if _, err := store.CommitDatabaseInstanceUpgrade(ctx, instance.ID, instance.ImageRef, job.TargetImageRef, "new-container"); err != nil {
 		t.Fatal(err)
