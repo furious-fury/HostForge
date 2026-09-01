@@ -9,6 +9,43 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+### Added
+
+- A generic operations queue, and a worker runtime that runs jobs off it.
+  Database operations are the first subsystem on it. Work is serialised by a
+  lock key when it is claimed, survives a crash, and can be cancelled at a
+  step boundary.
+- Interrupted operations are now recovered as part of starting the runtime,
+  before any worker runs, rather than by a separate loop that had to be
+  called first.
+
+### Changed
+
+- **A second action on a busy database is queued rather than rejected.**
+  Previously it failed with `database operation already in progress`. Only
+  one operation per database still runs at a time. The admission checks this
+  replaces were bypassed by four of the seven paths that enqueue work, so the
+  guarantee they appeared to give did not hold.
+- Shutdown drains in-flight database operations instead of cancelling them,
+  and releases their leases if the drain deadline passes so the next start
+  recovers immediately.
+
+### Fixed
+
+- Operations for a database being deleted are cancelled instead of being left
+  queued forever, invisible to the queue and polled by the UI indefinitely.
+- Deleting a database with work in flight now asks that work to stop, so a
+  retry succeeds shortly after rather than failing until the operation
+  finishes on its own.
+- The database detail screen shows the operation that is running rather than
+  the most recently queued one, which could leave the progress bar reading 0%
+  and apparently frozen.
+- Operations that exhausted their retries were re-claimed forever; they now
+  fail with `interrupted`.
+- The database operation claim and the per-instance admission checks had no
+  supporting index and scanned the whole table.
+- A persistent database error made the gateway worker spin without yielding.
+
 ## [0.8.0] - 2026-08-30
 
 ### Added
