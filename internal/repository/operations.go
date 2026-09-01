@@ -122,6 +122,44 @@ func insertOperationTx(ctx context.Context, tx *sql.Tx, in NewOperationInput, no
 	return err
 }
 
+// insertDatabaseOperationQueueRow writes the operations row paired with a
+// database_operations row inserted earlier in the same transaction. The two
+// share a primary key, so this must run in that transaction or the queue
+// gains a row the projection does not have.
+//
+// It derives every column from the database_operations row by the same
+// expression migration 0028 uses to backfill, rather than taking them as Go
+// arguments. That is deliberate: it means a row enqueued today and a row
+// backfilled from before this change are populated identically, and the
+// seven insert sites cannot drift from each other or from the migration.
+func insertDatabaseOperationQueueRow(ctx context.Context, tx *sql.Tx, operationID string) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO operations (
+			id, kind, lock_key, status, priority, progress_step, progress_percent,
+			available_at, attempt, max_attempts,
+			application_id, service_id, environment_id, actor,
+			started_at, completed_at, created_at, updated_at
+		)
+		SELECT
+			op.id,
+			'db_' || op.operation_type,
+			CASE
+				WHEN op.database_instance_id IS NOT NULL AND op.database_instance_id <> ''
+					THEN 'dbi:' || op.database_instance_id
+				ELSE 'dbsvc:' || op.service_id
+			END,
+			op.status, ?, op.progress_step, op.progress_percent,
+			'', 0, ?,
+			COALESCE(svc.application_id, ''), op.service_id, COALESCE(inst.environment_id, ''),
+			op.actor, op.started_at, op.completed_at, op.created_at, op.updated_at
+		FROM database_operations op
+		LEFT JOIN services svc ON svc.id = op.service_id
+		LEFT JOIN database_instances inst ON inst.id = op.database_instance_id
+		WHERE op.id = ?`,
+		defaultOperationPriority, defaultOperationMaxAttempts, strings.TrimSpace(operationID))
+	return err
+}
+
 // EnqueueOperation inserts a standalone operations row. Database operations
 // enqueue through their own paths, which write both tables in one
 // transaction; this exists for tests and for future subsystems that have no

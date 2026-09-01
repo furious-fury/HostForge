@@ -362,6 +362,9 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, instanceID, destination
 	if _, err = tx.ExecContext(ctx, `INSERT INTO database_backups(id,operation_id,database_instance_id,destination_id,status,trigger_kind,engine,database_name,engine_version,expires_at,created_at,updated_at) VALUES(?,?,?,?, 'queued',?,?,?,?,?,?,?)`, backup.ID, backup.OperationID, backup.DatabaseInstanceID, backup.DestinationID, backup.TriggerKind, backup.Engine, backup.DatabaseName, backup.EngineVersion, backup.ExpiresAt.Format(time.RFC3339), stamp, stamp); err != nil {
 		return DatabaseBackup{}, DatabaseOperation{}, err
 	}
+	if err = insertDatabaseOperationQueueRow(ctx, tx, operation.ID); err != nil {
+		return DatabaseBackup{}, DatabaseOperation{}, err
+	}
 	if err = tx.Commit(); err != nil {
 		return DatabaseBackup{}, DatabaseOperation{}, err
 	}
@@ -563,6 +566,12 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, backupID, targetInstan
 		return DatabaseOperation{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO database_restore_jobs(operation_id,backup_id,target_instance_id,safety_backup_id,mode,status,created_at,updated_at) VALUES(?,?,?,?,?, 'queued',?,?)`, operation.ID, backup.ID, target.ID, safetyBackupValue, mode, stamp, stamp); err != nil {
+		return DatabaseOperation{}, err
+	}
+	// This is the site that has always queued a restore alongside its own
+	// still-running safety backup on the same instance — no admission guard,
+	// deliberately. Sharing a lock_key is what now orders the two.
+	if err = insertDatabaseOperationQueueRow(ctx, tx, operation.ID); err != nil {
 		return DatabaseOperation{}, err
 	}
 	if err = tx.Commit(); err != nil {
