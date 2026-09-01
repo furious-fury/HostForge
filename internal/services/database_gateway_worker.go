@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/furious-fury/HostForge/internal/config"
@@ -20,15 +21,20 @@ import (
 	mobyclient "github.com/moby/moby/client"
 )
 
-func StartDatabaseGatewayOperationLoop(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client) {
+// StartDatabaseGatewayOperationLoop starts the gateway operation workers and
+// returns a WaitGroup that completes once they have all stopped. See
+// StartDatabaseOperationLoop for the drain contract; this loop follows it.
+func StartDatabaseGatewayOperationLoop(stopCtx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client) *sync.WaitGroup {
+	var wg sync.WaitGroup
+	ctx := stopCtx
 	if cfg == nil || !cfg.DatabaseGatewaysEnabled {
-		return
+		return &wg
 	}
 	if sealer == nil {
 		if log != nil {
 			log.Error("database gateway worker disabled; encryption key is not configured")
 		}
-		return
+		return &wg
 	}
 	if count, err := store.RequeueExpiredDatabaseGatewayOperations(ctx, time.Now().UTC()); err != nil {
 		if log != nil {
@@ -48,9 +54,18 @@ func StartDatabaseGatewayOperationLoop(ctx context.Context, log *slog.Logger, cf
 	}
 	for index := 0; index < workers; index++ {
 		workerID := fmt.Sprintf("hostforge-gateway-%d-%d", os.Getpid(), index)
-		go runDatabaseGatewayWorker(ctx, log, cfg, store, sealer, dockerClient, workerID)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runDatabaseGatewayWorker(stopCtx, log, cfg, store, sealer, dockerClient, workerID)
+		}()
 	}
-	go runDatabaseGatewayClaims(ctx, log, cfg, store, dockerClient)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runDatabaseGatewayClaims(stopCtx, log, cfg, store, dockerClient)
+	}()
+	return &wg
 }
 
 func queueDatabaseGatewayStartupReconciliation(ctx context.Context, store *repository.Store) error {
@@ -162,15 +177,18 @@ func reconcileDatabaseGatewayUsage(ctx context.Context, store *repository.Store,
 	return store.TouchDatabaseExternalCredentialUsage(ctx, roles, now)
 }
 
-func runDatabaseGatewayWorker(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, workerID string) {
+func runDatabaseGatewayWorker(stopCtx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, workerID string) {
 	const leaseDuration = 2 * time.Minute
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
-		operation, err := store.ClaimNextDatabaseGatewayOperation(ctx, workerID, leaseDuration)
+		if stopCtx.Err() != nil {
+			return
+		}
+		operation, err := store.ClaimNextDatabaseGatewayOperation(stopCtx, workerID, leaseDuration)
 		if errors.Is(err, sql.ErrNoRows) {
 			select {
-			case <-ctx.Done():
+			case <-stopCtx.Done():
 				return
 			case <-ticker.C:
 			}
@@ -180,9 +198,20 @@ func runDatabaseGatewayWorker(ctx context.Context, log *slog.Logger, cfg *config
 			if log != nil {
 				log.Error("claim database gateway operation failed", "error", err)
 			}
+			// Back off on the same ticker the empty-queue branch uses. A bare
+			// continue here spins a CPU for as long as the error persists —
+			// a closed or unreadable database never returns ErrNoRows, so
+			// nothing else in this loop would ever yield or observe stopCtx.
+			select {
+			case <-stopCtx.Done():
+				return
+			case <-ticker.C:
+			}
 			continue
 		}
-		operationCtx, cancel := context.WithCancel(ctx)
+		// Detached from stopCtx so shutdown drains a claimed operation rather
+		// than cancelling it mid-step; see runDatabaseOperationWorker.
+		operationCtx, cancel := context.WithCancel(context.WithoutCancel(stopCtx))
 		leaseDone := make(chan struct{})
 		go func() {
 			defer close(leaseDone)
