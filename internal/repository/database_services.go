@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -88,24 +89,44 @@ type DatabaseConnectionBindingSealed struct {
 	ReplaceExisting    bool
 }
 
+// MaxDatabaseOperationAttempts caps how many times one operation may be
+// claimed. attempt_count rises on every claim, and the claim query also
+// matches running rows whose lease has expired, so an operation that
+// reliably wedges its worker — a hung image pull, a deadlock that never
+// panics — was re-claimed every two minutes forever while the UI polled it
+// every two seconds (ADR-0002 §4.3).
+//
+// This is a constant rather than a column because every operation type wants
+// the same cap today: a column would have one writer, a hardcoded default at
+// each insert site, and no API to set it. ADR Phase 1 introduces a per-kind
+// operations.max_attempts, which is where a real per-operation limit belongs.
+const MaxDatabaseOperationAttempts = 5
+
 type DatabaseOperation struct {
-	ID                 string    `json:"id"`
-	ServiceID          string    `json:"service_id"`
-	DatabaseInstanceID string    `json:"database_instance_id,omitempty"`
-	OperationType      string    `json:"operation_type"`
-	Status             string    `json:"status"`
-	ProgressStep       string    `json:"progress_step"`
-	ProgressPercent    int       `json:"progress_percent"`
-	Actor              string    `json:"actor,omitempty"`
-	ErrorCode          string    `json:"error_code,omitempty"`
-	ErrorMessage       string    `json:"error_message,omitempty"`
-	AttemptCount       int       `json:"attempt_count"`
-	LeaseOwner         string    `json:"-"`
-	LeaseExpiresAt     time.Time `json:"-"`
-	StartedAt          time.Time `json:"started_at,omitempty"`
-	CompletedAt        time.Time `json:"completed_at,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID        string `json:"id"`
+	ServiceID string `json:"service_id"`
+	// DatabaseInstanceID is empty for service-scoped audit rows; see the note
+	// on OperationType.
+	DatabaseInstanceID string `json:"database_instance_id,omitempty"`
+	// OperationType covers more values than processDatabaseOperation
+	// dispatches on. FinalizeDatabaseServiceDeletion writes a terminal
+	// 'delete' row as an audit record, which the claim query can never
+	// select; 'purge' is permitted by the 0021 CHECK constraint but has no
+	// writer at all.
+	OperationType   string    `json:"operation_type"`
+	Status          string    `json:"status"`
+	ProgressStep    string    `json:"progress_step"`
+	ProgressPercent int       `json:"progress_percent"`
+	Actor           string    `json:"actor,omitempty"`
+	ErrorCode       string    `json:"error_code,omitempty"`
+	ErrorMessage    string    `json:"error_message,omitempty"`
+	AttemptCount    int       `json:"attempt_count"`
+	LeaseOwner      string    `json:"-"`
+	LeaseExpiresAt  time.Time `json:"-"`
+	StartedAt       time.Time `json:"started_at,omitempty"`
+	CompletedAt     time.Time `json:"completed_at,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type DatabaseUpgradeJob struct {
@@ -724,22 +745,19 @@ func (s *Store) ListDatabaseConnectionBindingsSealed(ctx context.Context, consum
 	return out, rows.Err()
 }
 
-func (s *Store) GetDatabaseOperation(ctx context.Context, operationID string) (DatabaseOperation, error) {
+// databaseOperationColumns is the one place the column list lives, so the
+// single-row and list reads cannot drift into a positional-scan mismatch.
+const databaseOperationColumns = `id,service_id,database_instance_id,operation_type,status,progress_step,progress_percent,` +
+	`actor,error_code,error_message,attempt_count,lease_owner,lease_expires_at,` +
+	`started_at,completed_at,created_at,updated_at`
+
+func scanDatabaseOperation(row rowScanner) (DatabaseOperation, error) {
 	var item DatabaseOperation
 	var instanceID sql.NullString
 	var started, completed, leaseExpires, created, updated string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id,service_id,database_instance_id,operation_type,status,progress_step,progress_percent,
-		       actor,error_code,error_message,attempt_count,lease_owner,lease_expires_at,
-		       started_at,completed_at,created_at,updated_at
-		FROM database_operations WHERE id=?`, strings.TrimSpace(operationID),
-	).Scan(&item.ID, &item.ServiceID, &instanceID, &item.OperationType, &item.Status,
+	if err := row.Scan(&item.ID, &item.ServiceID, &instanceID, &item.OperationType, &item.Status,
 		&item.ProgressStep, &item.ProgressPercent, &item.Actor, &item.ErrorCode, &item.ErrorMessage,
-		&item.AttemptCount, &item.LeaseOwner, &leaseExpires, &started, &completed, &created, &updated)
-	if errors.Is(err, sql.ErrNoRows) {
-		return DatabaseOperation{}, sql.ErrNoRows
-	}
-	if err != nil {
+		&item.AttemptCount, &item.LeaseOwner, &leaseExpires, &started, &completed, &created, &updated); err != nil {
 		return DatabaseOperation{}, err
 	}
 	if instanceID.Valid {
@@ -753,12 +771,29 @@ func (s *Store) GetDatabaseOperation(ctx context.Context, operationID string) (D
 	return item, nil
 }
 
+func (s *Store) GetDatabaseOperation(ctx context.Context, operationID string) (DatabaseOperation, error) {
+	item, err := scanDatabaseOperation(s.db.QueryRowContext(ctx,
+		`SELECT `+databaseOperationColumns+` FROM database_operations WHERE id=?`,
+		strings.TrimSpace(operationID)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return DatabaseOperation{}, sql.ErrNoRows
+	}
+	if err != nil {
+		return DatabaseOperation{}, err
+	}
+	return item, nil
+}
+
+// ListDatabaseOperations reads full rows in one query. It previously selected
+// ids and then called GetDatabaseOperation per id — up to 51 round trips for
+// a single call, all serialised behind the one connection SetMaxOpenConns(1)
+// allows, on a list the database detail screen polls every 2 seconds.
 func (s *Store) ListDatabaseOperations(ctx context.Context, serviceID string, limit int) ([]DatabaseOperation, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id FROM database_operations
+		SELECT `+databaseOperationColumns+` FROM database_operations
 		WHERE service_id=?
 		ORDER BY created_at DESC,id DESC
 		LIMIT ?`, strings.TrimSpace(serviceID), limit)
@@ -766,26 +801,15 @@ func (s *Store) ListDatabaseOperations(ctx context.Context, serviceID string, li
 		return nil, err
 	}
 	defer rows.Close()
-	ids := []string{}
+	out := []DatabaseOperation{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	out := make([]DatabaseOperation, 0, len(ids))
-	for _, id := range ids {
-		item, err := s.GetDatabaseOperation(ctx, id)
+		item, err := scanDatabaseOperation(rows)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, item)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 func (s *Store) QueueDatabaseInstanceOperation(ctx context.Context, instanceID, operationType, actor string) (DatabaseOperation, error) {
@@ -976,6 +1000,7 @@ func (s *Store) ClaimNextDatabaseOperation(ctx context.Context, leaseOwner strin
 	err = tx.QueryRowContext(ctx, `
 		SELECT op.id FROM database_operations op
 		WHERE (op.status='queued' OR (op.status='running' AND (op.lease_expires_at='' OR op.lease_expires_at<=?)))
+		  AND op.attempt_count < `+strconv.Itoa(MaxDatabaseOperationAttempts)+`
 		  AND (op.database_instance_id IS NULL OR EXISTS(
 		    SELECT 1 FROM database_instances active_instance
 		    WHERE active_instance.id=op.database_instance_id AND active_instance.desired_state<>'deleted'
@@ -1030,6 +1055,51 @@ func (s *Store) RenewDatabaseOperationLease(ctx context.Context, operationID, le
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// FailExhaustedDatabaseOperations marks operations that have used up their
+// claim budget as failed, so a request that reliably wedges its worker
+// surfaces as a failure instead of sitting queued forever while the claim
+// query skips it (ADR-0002 §4.3).
+//
+// Companion rows are failed before the parent, mirroring
+// RequeueExpiredDatabaseOperations, so a caller reading the child row never
+// sees it queued under a terminal parent.
+func (s *Store) FailExhaustedDatabaseOperations(ctx context.Context, at time.Time) (int64, error) {
+	now := at.UTC().Format(time.RFC3339Nano)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	exhausted := `SELECT id FROM database_operations WHERE status IN ('queued','running') AND attempt_count>=` +
+		strconv.Itoa(MaxDatabaseOperationAttempts)
+	for _, table := range []string{"database_backups", "database_restore_jobs", "database_upgrade_jobs"} {
+		if _, err = tx.ExecContext(ctx, `UPDATE `+table+
+			` SET status='failed',updated_at=? WHERE status IN ('queued','running') AND operation_id IN (`+exhausted+`)`, now); err != nil {
+			return 0, err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE database_operations
+		SET status='failed',progress_step='interrupted',
+		    error_code='interrupted',
+		    error_message='operation exceeded the retry limit',
+		    completed_at=?,lease_owner='',lease_expires_at='',updated_at=?
+		WHERE status IN ('queued','running') AND attempt_count>=?`,
+		now, now, MaxDatabaseOperationAttempts)
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (s *Store) RequeueExpiredDatabaseOperations(ctx context.Context, at time.Time) (int64, error) {

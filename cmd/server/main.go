@@ -232,11 +232,11 @@ func runServer(log *slog.Logger, args []string) int {
 		return 1
 	}
 	services.StartDatabaseReconciliationLoop(shutdownCtx, log, store, envSealer, dockerClient)
-	services.StartDatabaseOperationLoop(shutdownCtx, log, store, envSealer, dockerClient, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg.DatabaseOperationConcurrency, cfg)
+	databaseWG := services.StartDatabaseOperationLoop(shutdownCtx, log, store, envSealer, dockerClient, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg.DatabaseOperationConcurrency, cfg)
 	services.StartDatabasePurgeLoop(shutdownCtx, log, store, dockerClient)
 	services.StartDatabaseBackupScheduleLoop(shutdownCtx, log, store, cfg.DatabaseTransferMaxPerHour)
 	services.StartDatabaseBackupRetentionLoop(shutdownCtx, log, store, envSealer)
-	services.StartDatabaseGatewayOperationLoop(shutdownCtx, log, cfg, store, envSealer, dockerClient)
+	gatewayWG := services.StartDatabaseGatewayOperationLoop(shutdownCtx, log, cfg, store, envSealer, dockerClient)
 	services.StartControlPlaneSnapshotLoop(shutdownCtx, log, cfg, store, envSealer)
 
 	handler := &server{
@@ -333,6 +333,25 @@ func runServer(log *slog.Logger, args []string) int {
 		log.Info("shutdown: deploys drained")
 	case <-drainCtx.Done():
 		log.Warn("shutdown: deploy drain timed out; exiting with deploys still in flight")
+	}
+
+	// Database and gateway operations are the same shape as deploys: a claimed
+	// operation owns a container, a volume, or an in-progress restore, and runs
+	// on a context detached from shutdownCtx so it is drained rather than
+	// cancelled. Past the deadline the process exits with the lease still held
+	// and the next boot recovers it once the lease expires.
+	log.Info("shutdown: draining in-flight database operations")
+	operationsDone := make(chan struct{})
+	go func() {
+		databaseWG.Wait()
+		gatewayWG.Wait()
+		close(operationsDone)
+	}()
+	select {
+	case <-operationsDone:
+		log.Info("shutdown: database operations drained")
+	case <-drainCtx.Done():
+		log.Warn("shutdown: database operation drain timed out; exiting with operations still in flight")
 	}
 
 	// dockerClient and db close via their defers above, in that order.
