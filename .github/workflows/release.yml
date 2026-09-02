@@ -16,7 +16,7 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/')   # guards workflow_dispatch on a branch
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v5
@@ -32,6 +32,17 @@ jobs:
             echo "::error::tag ${GITHUB_REF_NAME} does not match internal/version/VERSION (${FILE_VER})"
             exit 1
           fi
+
+      # A tagged release is now the install path: scripts/bootstrap-ubuntu.sh
+      # downloads these artifacts rather than building from source on the
+      # operator's host. Publishing without running the suite would ship
+      # straight to every new install. Mirrors the Go job in ci.yml; the race
+      # detector stays there, where it is not on the release critical path.
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
 
       - name: Build web UI
         run: cd web && npm ci && npm run build
