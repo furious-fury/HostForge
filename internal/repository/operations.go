@@ -221,6 +221,13 @@ type ClaimOptions struct {
 	MinPriority int
 	// Now is the clock. Zero means time.Now().
 	Now time.Time
+	// Kinds restricts the claim to these operation kinds. Empty means claim
+	// any kind. Required whenever more than one workers.Runtime shares this
+	// table: without it, a runtime whose handlers only cover one domain
+	// claims another domain's work, finds no handler for it, and fails it as
+	// operation_kind_not_registered instead of leaving it for the runtime
+	// that actually owns it.
+	Kinds []string
 }
 
 // ClaimNextOperation atomically claims the highest-priority runnable
@@ -257,8 +264,7 @@ func (s *Store) ClaimNextOperation(ctx context.Context, opts ClaimOptions) (Oper
 	}
 	defer tx.Rollback()
 
-	var id string
-	if err := tx.QueryRowContext(ctx, `
+	query := `
 		SELECT o.id FROM operations o
 		WHERE o.status='queued'
 		  AND (o.available_at='' OR o.available_at<=?)
@@ -267,9 +273,22 @@ func (s *Store) ClaimNextOperation(ctx context.Context, opts ClaimOptions) (Oper
 		  AND NOT EXISTS (
 		    SELECT 1 FROM operations running
 		    WHERE running.status='running' AND running.lock_key=o.lock_key
-		  )
+		  )`
+	args := []any{now, opts.MinPriority}
+	if len(opts.Kinds) > 0 {
+		placeholders := make([]string, len(opts.Kinds))
+		for i, kind := range opts.Kinds {
+			placeholders[i] = "?"
+			args = append(args, kind)
+		}
+		query += ` AND o.kind IN (` + strings.Join(placeholders, ",") + `)`
+	}
+	query += `
 		ORDER BY o.priority DESC,o.created_at,o.id
-		LIMIT 1`, now, opts.MinPriority).Scan(&id); err != nil {
+		LIMIT 1`
+
+	var id string
+	if err := tx.QueryRowContext(ctx, query, args...).Scan(&id); err != nil {
 		return Operation{}, err
 	}
 

@@ -37,6 +37,16 @@ type Config struct {
 	// MinPriority reserves this runtime's workers for operations at or above
 	// a priority. Zero claims anything (ADR-0002 §20.2).
 	MinPriority int
+
+	// SkipRecovery skips the RecoverOperations call in Start. Recovery is
+	// process-wide, not per-runtime: it requeues or fails every abandoned
+	// operation regardless of kind, so when a process runs more than one
+	// Runtime over the same store, exactly one of them may recover — running
+	// it twice races each runtime's in-flight claims against the other's
+	// recovery sweep, and a second sweep after workers have already started
+	// claiming can snatch back work that is legitimately in progress. The
+	// runtime that does NOT skip it must be started first.
+	SkipRecovery bool
 }
 
 // Runtime owns a pool of workers claiming from the operations queue.
@@ -44,6 +54,12 @@ type Runtime struct {
 	cfg      Config
 	registry *registry
 	wg       sync.WaitGroup
+
+	// kinds is a snapshot of the registered handler kinds, taken once in
+	// Start after Register can no longer be called. Reading it from run
+	// needs no lock: it is written once before any worker goroutine starts,
+	// and never written again.
+	kinds []string
 
 	mu      sync.Mutex
 	started bool
@@ -104,14 +120,19 @@ func (r *Runtime) Start(stopCtx context.Context) error {
 		return errors.New("workers: already started")
 	}
 	r.started = true
+	r.kinds = r.registry.kinds()
 	r.mu.Unlock()
 
-	requeued, failed, err := r.cfg.Store.RecoverOperations(stopCtx, time.Now().UTC())
-	if err != nil {
-		return fmt.Errorf("recover operations: %w", err)
-	}
-	if requeued > 0 || failed > 0 {
-		r.cfg.Log.Info("recovered interrupted operations", "requeued", requeued, "failed", failed)
+	if r.cfg.SkipRecovery {
+		r.cfg.Log.Info("skipping operation recovery; another runtime in this process owns it")
+	} else {
+		requeued, failed, err := r.cfg.Store.RecoverOperations(stopCtx, time.Now().UTC())
+		if err != nil {
+			return fmt.Errorf("recover operations: %w", err)
+		}
+		if requeued > 0 || failed > 0 {
+			r.cfg.Log.Info("recovered interrupted operations", "requeued", requeued, "failed", failed)
+		}
 	}
 
 	for index := 0; index < r.cfg.Concurrency; index++ {

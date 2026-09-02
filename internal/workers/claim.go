@@ -23,6 +23,7 @@ func (r *Runtime) run(stopCtx context.Context, owner string) {
 				Owner:       owner,
 				Lease:       r.cfg.Lease,
 				MinPriority: r.cfg.MinPriority,
+				Kinds:       r.kinds,
 			})
 			if errors.Is(err, sql.ErrNoRows) {
 				break
