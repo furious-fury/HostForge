@@ -89,9 +89,18 @@ if [[ "${SKIP_BUILD}" -eq 1 && "${DOWNLOAD_RELEASE}" -eq 1 ]]; then
   exit 2
 fi
 
-if [[ ! -f "${REPO_ROOT}/go.mod" ]]; then
-  echo "error: go.mod not found; run this script from a HostForge repository clone." >&2
-  exit 1
+# Only a source build needs the repository itself. A release install needs
+# this script and its siblings (scripts/lib, the env example, the Caddy
+# layout migration), which travel together in whatever tree this script was
+# unpacked into -- a clone, or an extracted source tarball. Demanding go.mod
+# for those too would rule out installing without git on the host, which is
+# the whole point of --download-release.
+if [[ "${SKIP_BUILD}" -eq 0 && "${DOWNLOAD_RELEASE}" -eq 0 ]]; then
+  if [[ ! -f "${REPO_ROOT}/go.mod" ]]; then
+    echo "error: go.mod not found; a source build must run from a HostForge repository clone." >&2
+    echo "To install a prebuilt release instead, pass --download-release (or set HOSTFORGE_VERSION)." >&2
+    exit 1
+  fi
 fi
 
 BIN_DIR="${PREFIX}/bin"
@@ -209,6 +218,15 @@ else
   HF_SRV="${REPO_ROOT}/hostforge-server"
   if [[ ! -x "${HF_SRV}" ]]; then
     echo "error: --skip-build requires executable ${HF_SRV}" >&2
+    exit 1
+  fi
+  # Same strictness download_release applies to its own extraction. The
+  # server resolves the UI from "web/dist" relative to its working
+  # directory and, when that is missing, logs one warning and serves the
+  # API with no UI at all (cmd/server/static_ui.go). A silent UI-less
+  # install is worse than a failed one.
+  if [[ ! -f "${REPO_ROOT}/web/dist/index.html" ]]; then
+    echo "error: --skip-build requires ${REPO_ROOT}/web/dist/index.html; without it the server starts with no UI." >&2
     exit 1
   fi
 fi
