@@ -21,8 +21,11 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod, cache: true }
+      # Node 24, matching the Web job in ci.yml. The UI shipped in the tarball
+      # should be built and tested on the same major CI validated it on;
+      # otherwise "CI was green" says nothing about the artifact.
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: "24" }
 
       - name: Verify tag matches VERSION   # fail before any build cost
         run: |
@@ -44,8 +47,17 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # The web/dist built here is shipped inside the tarball, so it is the UI
+      # every release install serves. Building it proves it compiles, not that
+      # it works; run the suite too rather than shipping an untested UI.
+      - name: Install web dependencies
+        run: cd web && npm ci
+
+      - name: Test web UI
+        run: cd web && npm run test
+
       - name: Build web UI
-        run: cd web && npm ci && npm run build
+        run: cd web && npm run build
 
       - name: Cross-compile server binaries
         run: |
