@@ -8,6 +8,7 @@ import (
 
 	"github.com/furious-fury/HostForge/internal/config"
 	"github.com/furious-fury/HostForge/internal/database"
+	"github.com/furious-fury/HostForge/internal/models"
 	"github.com/furious-fury/HostForge/internal/repository"
 	"github.com/furious-fury/HostForge/internal/workers"
 )
@@ -136,6 +137,58 @@ func TestLoadDeployJobRoundTripsWithPrepareServiceDeploy(t *testing.T) {
 	}
 	if loaded.Deployment.ID != prepared.Deployment.ID {
 		t.Errorf("Deployment.ID = %q, want %q", loaded.Deployment.ID, prepared.Deployment.ID)
+	}
+	if loaded.Target == nil || prepared.Target == nil {
+		t.Fatalf("Target = %v, want both non-nil", loaded.Target)
+	}
+	if loaded.Target.Service.ID != prepared.Target.Service.ID || loaded.Target.Environment.ID != prepared.Target.Environment.ID || loaded.Target.Application.ID != prepared.Target.Application.ID {
+		t.Errorf("Target = %+v, want service/environment/application matching %+v", loaded.Target, prepared.Target)
+	}
+}
+
+// LoadDeployJob's PreviousContainer is what lets ExecuteDeploy tear down the
+// prior container after cutover. Covered separately from the round-trip
+// above because it needs a first SUCCESS deployment with an attached
+// container to be non-zero at all.
+func TestLoadDeployJobRoundTripsPreviousContainer(t *testing.T) {
+	ctx := context.Background()
+	cfg, store, target := buildTestDeployTarget(t, "prevcontainer")
+
+	first, err := PrepareServiceDeploy(ctx, cfg, store, target, "manual", "operator", "abc123", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateDeploymentStatus(ctx, first.Deployment.ID, models.DeploymentSuccess, ""); err != nil {
+		t.Fatal(err)
+	}
+	container, err := store.AttachContainer(ctx, repository.AttachContainerInput{
+		DeploymentID: first.Deployment.ID, DockerContainerID: "prev-container", InternalPort: 3000, HostPort: 40000, Status: "RUNNING",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := PrepareServiceDeploy(ctx, cfg, store, target, "manual", "operator", "def456", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.PreviousContainer.ID != container.ID {
+		t.Fatalf("Prepare: PreviousContainer.ID = %q, want %q", second.PreviousContainer.ID, container.ID)
+	}
+
+	deployment, err := store.GetServiceDeployment(ctx, second.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadDeployJob(ctx, cfg, store, deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.PreviousContainer.ID != container.ID {
+		t.Fatalf("Load: PreviousContainer.ID = %q, want %q", loaded.PreviousContainer.ID, container.ID)
+	}
+	if loaded.PreviousContainer.DockerContainerID != "prev-container" {
+		t.Fatalf("Load: PreviousContainer.DockerContainerID = %q, want prev-container", loaded.PreviousContainer.DockerContainerID)
 	}
 }
 
