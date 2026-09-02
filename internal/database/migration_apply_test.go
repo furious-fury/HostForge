@@ -15,7 +15,7 @@ func openFullyMigratedDB(t *testing.T, name string) (*sql.DB, context.Context) {
 	t.Helper()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), name)
-	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath)))
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", filepath.ToSlash(dbPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestApplyMigrationsCreatesFinalServiceSchema(t *testing.T) {
 func TestPopulatedProjectCutoverCreatesBackupAndPreservesRelationships(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "legacy.db")
-	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath)))
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", filepath.ToSlash(dbPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestPopulatedProjectCutoverCreatesBackupAndPreservesRelationships(t *testin
 	// migration ran, not after — open it directly and confirm it still has
 	// the pre-cutover "projects" row. If this ever finds the v2 "applications"
 	// table instead, the snapshot is being taken too late to be useful.
-	snapshotDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(snapshots[0])))
+	snapshotDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", filepath.ToSlash(snapshots[0])))
 	if err != nil {
 		t.Fatal(err)
 	}

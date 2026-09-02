@@ -46,7 +46,7 @@ func TestVacuumIntoSyntaxIsSupportedByDriver(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "source.db")
-	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath)))
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", filepath.ToSlash(dbPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestVacuumIntoSyntaxIsSupportedByDriver(t *testing.T) {
 		t.Fatalf("VACUUM INTO with a bound parameter: %v", err)
 	}
 
-	snapshotDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(snapshotPath)))
+	snapshotDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", filepath.ToSlash(snapshotPath)))
 	if err != nil {
 		t.Fatal(err)
 	}

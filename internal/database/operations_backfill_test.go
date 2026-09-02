@@ -18,7 +18,7 @@ func TestBackfillPopulatesOperationsForExistingRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "backfill.db")
-	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath)))
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", filepath.ToSlash(dbPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
