@@ -5,13 +5,31 @@ applications only through Caddy HTTPS hostnames.
 
 ## Installation
 
+On a fresh Ubuntu 24.04 host:
+
 ```bash
-sudo ./scripts/install.sh --with-systemd
+curl -fsSL https://raw.githubusercontent.com/furious-fury/HostForge/main/scripts/bootstrap-ubuntu.sh | sudo bash
 ```
+
+This provisions the host and installs the latest published release — a
+checksum-verified prebuilt binary and UI. Nothing is compiled on the server.
+Set `HOSTFORGE_VERSION=vX.Y.Z` to pin a release instead of taking the latest.
+
+To install into an existing tree directly:
+
+```bash
+sudo ./scripts/install.sh --with-systemd --download-release
+```
+
+Omit `--download-release` to build from a repository clone instead, which
+requires Go and Node on the host.
 
 The installer creates the service user, data directory, systemd unit, and an
 environment-file template when one does not already exist. Configure secrets in
 `/etc/hostforge/hostforge.env`; never commit that file.
+
+Upgrades and rollbacks are covered in [the VPS update runbook](./vps-update.md).
+Removing an installation is `sudo ./scripts/uninstall.sh --yes`.
 
 See [`scripts/hostforge-server.env.example`](../scripts/hostforge-server.env.example)
 for the configuration reference, including disabled-by-default Railpack/BuildKit

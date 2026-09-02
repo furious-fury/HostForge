@@ -71,6 +71,13 @@ The verify phase checks TLS, generated-role separation and safety, current and f
 
 Use a fresh read-only URL from an allowed source. The fixture pins the versions in its package and requirements files; `npm ci` uses the committed lockfile.
 
+This drill needs Node.js and Python on the VPS. A release install does not provide them — HostForge itself needs neither, so the bootstrapper stops installing them. Install them for this drill and remove them afterwards if the host is meant to stay minimal:
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
+sudo apt-get install -y nodejs python3-venv
+```
+
 ```bash
 export DATABASE_URL='<secret read-only URL>'
 cd scripts/database-gateway-client-smoke
