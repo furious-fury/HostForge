@@ -33,9 +33,20 @@ type testRuntime struct {
 // exec runs SQL directly against the same database file. repository.Store's
 // handle is unexported, so a test in this package that needs to stage a row
 // state the public API cannot produce opens its own connection.
+//
+// That second connection races the runtime's own writes (the lease-refresh
+// ticker in particular) for SQLite's single write lock. `_busy_timeout=`
+// is the mattn/go-sqlite3 spelling; modernc.org/sqlite (this driver, see
+// internal/database.OpenSQLite) silently discards it, leaving the timeout
+// at SQLite's default of zero -- any contention then fails immediately
+// with SQLITE_BUSY instead of waiting. That was rare enough to miss under
+// a normal test run, but reliably surfaced under `go test -race`, which
+// slows execution enough to widen the collision window. Use the pragma
+// form OpenSQLite documents so this connection actually waits like every
+// other one in the codebase does.
 func (h *testRuntime) exec(query string, args ...any) {
 	h.t.Helper()
-	raw, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(h.dbPath)))
+	raw, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", filepath.ToSlash(h.dbPath)))
 	if err != nil {
 		h.t.Fatal(err)
 	}

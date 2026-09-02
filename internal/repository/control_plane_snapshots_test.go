@@ -144,7 +144,7 @@ func TestVacuumIntoWritesReadableSnapshot(t *testing.T) {
 		t.Fatalf("VacuumInto: %v", err)
 	}
 
-	snapshotDB, err := sql.Open("sqlite", "file:"+filepath.ToSlash(snapshotPath)+"?_busy_timeout=5000")
+	snapshotDB, err := sql.Open("sqlite", "file:"+filepath.ToSlash(snapshotPath)+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}

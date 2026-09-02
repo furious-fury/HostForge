@@ -18,7 +18,7 @@ func openTestDB(t *testing.T) (*sql.DB, *Store) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "obs.db")
-	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath))
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", filepath.ToSlash(dbPath))
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		t.Fatal(err)

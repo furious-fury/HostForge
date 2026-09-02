@@ -312,9 +312,23 @@ if [[ ! -f "${ENV_FILE}" ]]; then
       echo "error: openssl is required for interactive secret generation." >&2
       exit 1
     fi
-    read -r -s -p "Choose HostForge admin login secret (minimum 16 characters): " admin_secret
+    # Read from the controlling terminal, not stdin. bootstrap-ubuntu.sh's
+    # documented invocation is `curl ... | sudo bash`, which makes stdin
+    # whatever of the piped script bash hasn't consumed yet, not the
+    # keyboard. A plain `read` here silently grabs that leftover script
+    # content instead of prompting -- confirmed locally: it reads real
+    # script text, not typed input -- which is exactly why two secrets
+    # typed identically can come back different: each read grabs a
+    # different leftover fragment, never what was actually typed. /dev/tty
+    # is the terminal itself, unaffected by what stdin is doing.
+    if [[ ! -r /dev/tty ]]; then
+      echo "error: --interactive requires a controlling terminal (no /dev/tty available)." >&2
+      echo "Omit --interactive and edit ${ENV_FILE} manually instead." >&2
+      exit 1
+    fi
+    read -r -s -p "Choose HostForge admin login secret (minimum 16 characters): " admin_secret < /dev/tty
     echo
-    read -r -s -p "Confirm HostForge admin login secret: " admin_secret_confirm
+    read -r -s -p "Confirm HostForge admin login secret: " admin_secret_confirm < /dev/tty
     echo
     if [[ "${#admin_secret}" -lt 16 ]]; then
       echo "error: admin login secret must be at least 16 characters." >&2

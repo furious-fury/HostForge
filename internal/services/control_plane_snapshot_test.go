@@ -43,7 +43,7 @@ func newControlPlaneSnapshotTestStore(t *testing.T) (*repository.Store, string) 
 // repository.Store.db isn't reachable from this package.
 func backdateControlPlaneSnapshot(t *testing.T, dbPath, id string, when time.Time) {
 	t.Helper()
-	raw, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", filepath.ToSlash(dbPath)))
+	raw, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", filepath.ToSlash(dbPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
