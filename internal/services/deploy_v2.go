@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +23,28 @@ import (
 	"github.com/furious-fury/HostForge/internal/repository"
 	mobyclient "github.com/moby/moby/client"
 )
+
+// DeployLockKey returns the operations queue lock key that serialises
+// deploys for one service environment. Also used as the git worktree scope
+// (git.WorktreeDir): the two must stay identical, or work that queues one
+// at a time behind this key could still share a checkout with something
+// running concurrently.
+func DeployLockKey(serviceID, environmentID string) string {
+	return "svc:" + serviceID + ":" + environmentID
+}
+
+// newBuildID returns a build identifier unique even within the same
+// second. The timestamp alone collides for two deploys of the same
+// repo+branch starting in the same wall-clock second, which corrupts both
+// the image tag (the second build silently overwrites the first) and the
+// container name (docker.RunContainer fails outright on the clash).
+func newBuildID() (string, error) {
+	suffix := make([]byte, 4)
+	if _, err := rand.Read(suffix); err != nil {
+		return "", fmt.Errorf("generate build id suffix: %w", err)
+	}
+	return time.Now().UTC().Format("20060102t150405") + "-" + hex.EncodeToString(suffix), nil
+}
 
 type DeployTarget struct {
 	Application repository.Application
@@ -61,13 +85,16 @@ func ResolveDeployTarget(ctx context.Context, store *repository.Store, serviceID
 func PrepareServiceDeploy(ctx context.Context, cfg *config.Config, store *repository.Store, target DeployTarget, trigger, actor, commitHash, rollbackOf string) (DeployJob, error) {
 	repoURL := strings.TrimSpace(target.Service.RepoURL)
 	branch := strings.TrimSpace(target.Binding.Branch)
-	slug := git.WorktreeDir(repoURL, branch)
+	slug := git.WorktreeDir(DeployLockKey(target.Service.ID, target.Environment.ID), repoURL, branch)
 	worktree := filepath.Join(cfg.WorktreesDir(), slug)
 	buildDirectory, err := ResolveServiceBuildDirectory(worktree, target.Service.RootDirectory)
 	if err != nil {
 		return DeployJob{}, err
 	}
-	buildID := time.Now().UTC().Format("20060102t150405")
+	buildID, err := newBuildID()
+	if err != nil {
+		return DeployJob{}, err
+	}
 	imageRef := fmt.Sprintf("hostforge/%s:%s", slug, buildID)
 	containerName := fmt.Sprintf("hostforge-%s-%s", slug[:12], buildID)
 
