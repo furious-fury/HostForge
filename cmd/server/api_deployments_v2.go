@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/furious-fury/HostForge/internal/models"
-	"github.com/furious-fury/HostForge/internal/obs"
 	"github.com/furious-fury/HostForge/internal/repository"
 	"github.com/furious-fury/HostForge/internal/services"
 )
@@ -151,48 +150,15 @@ func (s *server) handleServiceDeployActionV2(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": code})
 		return
 	}
+	// PrepareServiceDeploy enqueues the operation as its own last write; the
+	// deploy runtime claims and runs it. Nothing here launches it directly
+	// any more.
 	job, err := services.PrepareServiceDeploy(r.Context(), s.cfg, s.store, target, "manual", "operator", "", "")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": publicAPIError(err, "failed_to_accept_deployment")})
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.registerDeploymentCancel(job.Deployment.ID, cancel)
-	s.deployWG.Add(1)
-	go func() {
-		defer s.deployWG.Done()
-		defer s.unregisterDeploymentCancel(job.Deployment.ID)
-		deployCtx := obs.WithStore(ctx, s.store)
-		_, execErr := services.ExecuteDeploy(deployCtx, s.log.With("service_id", serviceID, "environment_id", environmentID, "deployment_id", job.Deployment.ID), s.cfg, s.store, job, s.envSealer, s.dockerClient, s.newGitAuthResolver(context.Background()))
-		if execErr != nil && !errors.Is(execErr, context.Canceled) {
-			s.log.Error("async service deployment failed", "deployment_id", job.Deployment.ID, "error", execErr)
-		}
-	}()
 	writeJSON(w, http.StatusAccepted, map[string]any{"status": "accepted", "deployment": deploymentToV2(job.Deployment)})
-}
-
-func (s *server) registerDeploymentCancel(id string, cancel context.CancelFunc) {
-	s.deploymentCancelMu.Lock()
-	defer s.deploymentCancelMu.Unlock()
-	if s.deploymentCancels == nil {
-		s.deploymentCancels = make(map[string]context.CancelFunc)
-	}
-	s.deploymentCancels[id] = cancel
-}
-
-func (s *server) unregisterDeploymentCancel(id string) {
-	s.deploymentCancelMu.Lock()
-	defer s.deploymentCancelMu.Unlock()
-	delete(s.deploymentCancels, id)
-}
-
-func (s *server) cancelDeploymentExecution(id string) {
-	s.deploymentCancelMu.Lock()
-	cancel := s.deploymentCancels[id]
-	s.deploymentCancelMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
 }
 
 func (s *server) handleDeploymentV2Detail(w http.ResponseWriter, r *http.Request, deploymentID string) bool {
@@ -226,7 +192,16 @@ func (s *server) handleDeploymentCancelV2(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusConflict, map[string]string{"status": "error", "error": "deployment_not_cancellable"})
 		return
 	}
-	s.cancelDeploymentExecution(deploymentID)
+	// CancelDeployment above is the gate: it produced the 409 case just
+	// handled, it is what the UI reads, and it is what the log stream's
+	// terminal poll observes. This is best-effort on top of it -- a running
+	// deploy's operation row needs cancel_requested_at set so the runtime
+	// actually stops it; a queued deploy's operation is cancelled outright
+	// by the same call, though CancelDeployment above already made the
+	// deployment itself terminal either way.
+	if _, err := s.store.RequestOperationCancellation(r.Context(), deploymentID); err != nil {
+		s.log.Warn("request operation cancellation failed", "deployment_id", deploymentID, "error", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled", "deployment_id": strings.TrimSpace(deploymentID)})
 }
 
@@ -254,18 +229,6 @@ func (s *server) handleDeploymentRedeployV2(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": publicAPIError(err, "failed_to_accept_deployment")})
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.registerDeploymentCancel(job.Deployment.ID, cancel)
-	s.deployWG.Add(1)
-	go func() {
-		defer s.deployWG.Done()
-		defer s.unregisterDeploymentCancel(job.Deployment.ID)
-		deployCtx := obs.WithStore(ctx, s.store)
-		_, execErr := services.ExecuteDeploy(deployCtx, s.log.With("service_id", source.ServiceID, "environment_id", source.EnvironmentID, "deployment_id", job.Deployment.ID), s.cfg, s.store, job, s.envSealer, s.dockerClient, s.newGitAuthResolver(context.Background()))
-		if execErr != nil && !errors.Is(execErr, context.Canceled) {
-			s.log.Error("async service redeployment failed", "deployment_id", job.Deployment.ID, "error", execErr)
-		}
-	}()
 	writeJSON(w, http.StatusAccepted, map[string]any{"status": "accepted", "deployment": deploymentToV2(job.Deployment)})
 }
 
@@ -297,17 +260,5 @@ func (s *server) handleDeploymentRollbackV2(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": publicAPIError(err, "failed_to_accept_rollback")})
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.registerDeploymentCancel(job.Deployment.ID, cancel)
-	s.deployWG.Add(1)
-	go func() {
-		defer s.deployWG.Done()
-		defer s.unregisterDeploymentCancel(job.Deployment.ID)
-		deployCtx := obs.WithStore(ctx, s.store)
-		_, execErr := services.ExecuteDeploy(deployCtx, s.log.With("service_id", source.ServiceID, "environment_id", source.EnvironmentID, "deployment_id", job.Deployment.ID, "rollback_of", source.ID), s.cfg, s.store, job, s.envSealer, s.dockerClient, s.newGitAuthResolver(context.Background()))
-		if execErr != nil && !errors.Is(execErr, context.Canceled) {
-			s.log.Error("async service rollback failed", "deployment_id", job.Deployment.ID, "rollback_of", source.ID, "error", execErr)
-		}
-	}()
 	writeJSON(w, http.StatusAccepted, map[string]any{"status": "accepted", "deployment": deploymentToV2(job.Deployment)})
 }
