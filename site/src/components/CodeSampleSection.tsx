@@ -2,10 +2,8 @@ import { motion } from "framer-motion";
 
 import { CodeBlock } from "./CodeBlock";
 
-const INSTALL_SNIPPET = `# On a fresh Debian/Ubuntu host
-git clone https://github.com/furious-fury/HostForge.git /opt/hostforge
-cd /opt/hostforge
-sudo ./scripts/install.sh --with-systemd`;
+const INSTALL_SNIPPET = `# On a fresh Ubuntu 24.04 host
+curl -fsSL https://raw.githubusercontent.com/furious-fury/HostForge/main/scripts/bootstrap-ubuntu.sh | sudo bash`;
 
 const CLI_SNIPPET = `# Continue in the authenticated control plane
 # 1. Configure the GitHub App and synchronize installations

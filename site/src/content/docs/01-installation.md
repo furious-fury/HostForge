@@ -6,28 +6,39 @@ group: Getting Started
 order: 2
 ---
 
-## Prerequisites
-
-- Go 1.25 or newer
-- Git and Docker Engine
-- Railpack at the configured pinned version
-- `buildctl` plus a reachable BuildKit daemon
-- Node.js/npm to build `web/dist`
-- Caddy for public HTTPS routing
-
 ## Install
 
-From the repository root:
+On a fresh Ubuntu 24.04 host, as root:
 
 ```bash
-./scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/furious-fury/HostForge/main/scripts/bootstrap-ubuntu.sh | sudo bash
 ```
 
-For the managed Linux service layout:
+This provisions Docker, BuildKit, Railpack, and Caddy, then installs the latest HostForge release: a checksum-verified prebuilt binary and UI. Nothing is compiled on your server, so it needs neither the Go nor the Node toolchain. You are prompted once for an admin login secret.
+
+Pin a specific release instead of the latest:
 
 ```bash
-sudo ./scripts/install.sh --with-systemd
+curl -fsSL https://raw.githubusercontent.com/furious-fury/HostForge/main/scripts/bootstrap-ubuntu.sh | sudo HOSTFORGE_VERSION=v0.9.0 bash
 ```
+
+## Prerequisites
+
+The bootstrapper installs everything it needs. It expects:
+
+- Ubuntu 24.04
+- Root access
+- Ports 80, 443, and 5432 free
+
+## Installing from source
+
+To run unreleased code — testing a branch, or developing against a real host — install from source instead. This mode clones the repository and builds on the server, so it also installs Go, Node.js, and git:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/furious-fury/HostForge/main/scripts/bootstrap-ubuntu.sh | sudo bash -s -- --from-source
+```
+
+To install into an existing checkout directly, `scripts/install.sh --with-systemd` builds from that tree, and `--download-release` installs a published build into it instead.
 
 The installer places binaries under `/usr/local/bin` by default. The systemd option creates the `hostforge` user, `/var/lib/hostforge`, `/etc/hostforge/hostforge.env`, and `hostforge-server.service`.
 

@@ -2,13 +2,13 @@
 
 This runbook applies to the current production installation:
 
-- Repository: `/opt/hostforge`
+- Install tree: `/opt/hostforge`
 - Service: `hostforge-server.service`
 - VPS IP: `169.58.1.87`
 - Public URL: `https://hostforge.mrfury.dev/`
 - HostForge listener: `127.0.0.1:8080` behind Caddy
 
-## Deploy a committed update
+## Update to the latest release
 
 SSH to the VPS as root, then run the fail-fast update helper:
 
@@ -17,34 +17,43 @@ cd /opt/hostforge
 ./scripts/vps-update-and-smoke.sh
 ```
 
+This downloads the latest published release — a checksum-verified prebuilt binary and UI — installs it, restarts the service, and smoke-tests the result. Nothing is compiled on the VPS.
+
+To install a specific release rather than the latest:
+
+```bash
+HOSTFORGE_VERSION=v0.9.0 ./scripts/vps-update-and-smoke.sh
+```
+
 The helper reads the platform domain saved during onboarding through the local authenticated HostForge API. `HF_SERVER_URL` is only needed as an override when onboarding is incomplete or when the smoke test must target a different public origin:
 
 ```bash
 HF_SERVER_URL="https://alternate-hostforge.example.com" ./scripts/vps-update-and-smoke.sh
 ```
 
-The currently deployed release predates this helper. For its first deployment only, restore the known generated artifact, pull the release, and then invoke the helper:
-
-```bash
-cd /opt/hostforge &&
-git restore -- web/tsconfig.app.tsbuildinfo &&
-git pull --ff-only origin main &&
-./scripts/vps-update-and-smoke.sh
-```
-
-Do not run the restore if `git status --short` shows unrelated tracked changes. Review those changes first.
-
 The helper:
 
-1. Restores only the known generated `web/tsconfig.app.tsbuildinfo` artifact when an older checkout still tracks it.
-2. Refuses to continue when any other tracked VPS changes exist.
-3. Pulls `main` with `--ff-only`, records the previous commit, and builds before restarting.
-4. Reads the management token from `/etc/hostforge/hostforge.env` without printing it and waits for the local authenticated API.
-5. Verifies the authenticated PostgreSQL gateway status reports the same enabled state configured in `/etc/hostforge/hostforge.env`; an omitted flag is checked as the disabled default.
-6. Uses the platform domain saved during onboarding unless `HF_SERVER_URL` explicitly overrides it, then waits for the public HTTPS origin.
-7. Runs the authenticated v2 API smoke, including array contracts, legacy-route absence, logout, and post-logout `401`.
+1. Records the running version from `/api/version` first, and prints it on every failure path as the rollback target.
+2. Resolves the release to install — `HOSTFORGE_VERSION` if set, otherwise the latest published tag.
+3. Downloads that release's tree beside `/opt/hostforge` and swaps it in only once it is complete, so a failed download leaves the working install untouched.
+4. Installs the prebuilt binary and UI, verifying the published SHA-256 before anything is moved into place.
+5. Reads the management token from `/etc/hostforge/hostforge.env` without printing it and waits for the local authenticated API.
+6. Verifies the authenticated PostgreSQL gateway status reports the same enabled state configured in `/etc/hostforge/hostforge.env`; an omitted flag is checked as the disabled default.
+7. Uses the platform domain saved during onboarding unless `HF_SERVER_URL` explicitly overrides it, then waits for the public HTTPS origin.
+8. Runs the authenticated v2 API smoke, including array contracts, legacy-route absence, logout, and post-logout `401`.
 
-`install.sh --with-systemd` keeps the existing `/etc/hostforge/hostforge.env` file. Do not run `bootstrap-ubuntu.sh` for routine updates; it is only for first-time VPS provisioning.
+`install.sh` keeps the existing `/etc/hostforge/hostforge.env` file. Do not run `bootstrap-ubuntu.sh` for routine updates; it is only for first-time VPS provisioning.
+
+## Update to unreleased code
+
+To test a branch on the VPS, the install tree must be a git checkout — that is what `bootstrap-ubuntu.sh --from-source` produces. Then:
+
+```bash
+cd /opt/hostforge
+HF_FROM_SOURCE=1 ./scripts/vps-update-and-smoke.sh
+```
+
+This pulls `main` with `--ff-only`, refuses to continue if tracked files were modified on the VPS, and builds from source. It requires git, Go, and Node on the host, which only `--from-source` installs.
 
 ## One-time Caddy layout migration
 
@@ -123,15 +132,16 @@ systemctl reload caddy
 systemctl restart hostforge-server
 ```
 
-For a manual update, keep every command connected with `&&` so execution stops after the first failure:
+For a manual update, without the smoke tests, keep every command connected with `&&` so execution stops after the first failure:
 
 ```bash
 cd /opt/hostforge &&
-git pull --ff-only origin main &&
-./scripts/install.sh --with-systemd &&
+./scripts/install.sh --with-systemd --download-release &&
 systemctl restart hostforge-server &&
 systemctl --no-pager --full status hostforge-server
 ```
+
+That installs the latest release into the existing tree. Set `HOSTFORGE_VERSION=vX.Y.Z` to choose a different one.
 
 After either path, hard-refresh the dashboard with `Ctrl+Shift+R`.
 
@@ -195,17 +205,36 @@ systemctl reload caddy
 systemctl restart hostforge-server
 ```
 
-If Git reports that `web/tsconfig.app.tsbuildinfo` would be overwritten, discard only that generated build artifact and retry the pull:
+## Rolling back
+
+Rolling back is the same operation aimed at the older release. The update helper prints the version it started from on every failure path; reinstall that:
 
 ```bash
 cd /opt/hostforge
-git restore -- web/tsconfig.app.tsbuildinfo
-git pull --ff-only origin main
+HOSTFORGE_VERSION=v0.8.0 ./scripts/vps-update-and-smoke.sh
 ```
 
-Do not use a broad restore command when other files are modified. Run `git status --short` and inspect unexpected VPS changes before discarding them.
+If the helper itself cannot run, install the older release directly and restart:
 
-To return the repository to the last known Git commit, identify the previous commit and check it out explicitly, rebuild, and restart:
+```bash
+cd /opt/hostforge
+HOSTFORGE_VERSION=v0.8.0 ./scripts/install.sh --with-systemd --download-release
+systemctl restart hostforge-server
+```
+
+Confirm which version is actually serving afterwards, rather than assuming:
+
+```bash
+curl -s http://127.0.0.1:8080/api/version
+```
+
+Published releases are listed at <https://github.com/furious-fury/HostForge/releases>.
+
+A rollback moves the binary and UI backwards; it does not migrate the database backwards. If the newer version applied a migration, restore the pre-migration snapshot as well — see the database-services drill above and `scripts/control-plane-restore.sh`. The server refuses to start against a database newer than the binary rather than running against a schema it does not understand.
+
+### Rolling back a source install
+
+For a checkout (`HF_FROM_SOURCE=1`), return it to the previous commit, rebuild, and restart:
 
 ```bash
 cd /opt/hostforge
@@ -215,4 +244,4 @@ git checkout <previous-good-commit>
 systemctl restart hostforge-server
 ```
 
-After recovery, switch back to `main` before applying a later fixed release.
+Switch back to `main` before applying a later fixed release.
