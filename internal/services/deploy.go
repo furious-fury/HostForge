@@ -652,9 +652,6 @@ func ValidateRailpackConfig(cfg *config.Config) error {
 	if strings.TrimSpace(cfg.RailpackArtifactsDir) == "" {
 		return fmt.Errorf("railpack is enabled but artifacts directory is required")
 	}
-	if cfg.RailpackBuildConcurrency <= 0 {
-		return fmt.Errorf("railpack build concurrency must be > 0")
-	}
 	if cfg.RailpackMinFreeDiskBytes <= 0 {
 		return fmt.Errorf("railpack minimum free disk bytes must be > 0")
 	}

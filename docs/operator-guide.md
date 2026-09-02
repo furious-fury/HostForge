@@ -37,6 +37,10 @@ settings.
   clean VPS before relying on a deployment path.
 - Do not enable `HOSTFORGE_RAILPACK_ENABLED=true` until the Railpack/BuildKit
   smoke test in [ADR 0001](./adr-0001-railpack-buildkit.md) passes.
+- `HOSTFORGE_DEPLOY_CONCURRENCY` bounds concurrent deploys from 1 to 8 and
+  defaults to 2. Deploys run on their own queue, separate from database
+  operations; `lock_key` already serializes builds of the same service and
+  environment, so this only buys cross-service parallelism.
 
 ## Managed database storage and backups
 

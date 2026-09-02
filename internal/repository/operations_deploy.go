@@ -22,6 +22,43 @@ import (
 // rows and no-ops), and can never reopen a deployment the handler — or an
 // operator's cancel — already made terminal.
 
+// DeployOperationKind is the operations.kind every deploy is queued under.
+const DeployOperationKind = "deploy"
+
+// EnqueueDeployOperationInput describes one deploy's operations-queue row.
+// LockKey is taken as given rather than computed from ServiceID and
+// EnvironmentID here: services.DeployLockKey is the one function that formats
+// it, also used as the git worktree scope, and repository cannot import
+// services without a cycle.
+type EnqueueDeployOperationInput struct {
+	DeploymentID  string
+	LockKey       string
+	ApplicationID string
+	ServiceID     string
+	EnvironmentID string
+	Actor         string
+	Priority      int
+}
+
+// EnqueueDeployOperation queues a deploy for the deploy runtime to claim.
+// DeploymentID is reused as the operation id -- the shared-primary-key
+// projection this file implements depends on the two matching exactly.
+// MaxAttempts is fixed at 1: an interrupted or exhausted deploy must fail,
+// never silently resume (ADR-0002 §4.3, §10).
+func (s *Store) EnqueueDeployOperation(ctx context.Context, in EnqueueDeployOperationInput) (Operation, error) {
+	return s.EnqueueOperation(ctx, NewOperationInput{
+		ID:            in.DeploymentID,
+		Kind:          DeployOperationKind,
+		LockKey:       in.LockKey,
+		MaxAttempts:   1,
+		Priority:      in.Priority,
+		ApplicationID: in.ApplicationID,
+		ServiceID:     in.ServiceID,
+		EnvironmentID: in.EnvironmentID,
+		Actor:         in.Actor,
+	})
+}
+
 // recordDeploymentStatusEventTx writes the platform_events row for a status
 // transition. Shared by UpdateDeploymentStatus and every projection below,
 // so the events timeline can never diverge from the status column — one

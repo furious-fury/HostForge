@@ -18,7 +18,6 @@ func validRailpackConfig() *config.Config {
 		BuildKitBin:              "buildctl",
 		BuildKitAddress:          "unix:///run/buildkit/buildkitd.sock",
 		RailpackArtifactsDir:     "/var/lib/hostforge/railpack",
-		RailpackBuildConcurrency: 1,
 		RailpackMinFreeDiskBytes: 10 * 1024 * 1024 * 1024,
 	}
 }
