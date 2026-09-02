@@ -10,6 +10,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/furious-fury/HostForge/internal/repository"
 )
 
 // Defaults match the timings the database operation worker has always used,
@@ -63,7 +65,14 @@ type Runtime struct {
 
 	mu      sync.Mutex
 	started bool
-	leases  map[string]string // operation id -> owner, for release on a timed-out drain
+	leases  map[string]heldLease // operation id -> what's needed to release it on a timed-out drain
+}
+
+// heldLease is what releaseHeldLeases needs about a claim it did not itself
+// make: who holds it, and whether giving the attempt back is even sound.
+type heldLease struct {
+	owner       string
+	maxAttempts int
 }
 
 func New(cfg Config) (*Runtime, error) {
@@ -85,7 +94,7 @@ func New(cfg Config) (*Runtime, error) {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultPollInterval
 	}
-	return &Runtime{cfg: cfg, registry: newRegistry(), leases: map[string]string{}}, nil
+	return &Runtime{cfg: cfg, registry: newRegistry(), leases: map[string]heldLease{}}, nil
 }
 
 // Register adds handlers. It must be called before Start.
@@ -151,11 +160,23 @@ func (r *Runtime) Start(stopCtx context.Context) error {
 
 // Wait blocks until every worker has stopped, or until ctx expires.
 //
-// On expiry it releases the leases of operations still running, so the next
-// startup recovers them immediately instead of waiting out a lease that will
-// never be renewed (ADR-0002 §20.1). The operations themselves are not
-// cancelled — the process is about to exit, and a half-applied operation is
-// better recovered than interrupted.
+// On expiry it releases the operations still running. Which way depends on
+// whether the operation can be retried at all (ADR-0002 §20.1):
+//
+//   - MaxAttempts > 1: deferred back to the queue, so the next startup
+//     recovers it immediately instead of waiting out a lease that will never
+//     be renewed.
+//   - MaxAttempts <= 1: completed as failed/interrupted instead. Deferring
+//     gives the attempt back (DeferOperation's whole point is that a
+//     deferral is not an attempt), so a non-resumable operation deferred
+//     here would be reclaimed and re-run on the next boot — which is exactly
+//     what a max_attempts=1 operation exists to forbid. Recording the
+//     interruption is the honest outcome: the operation did not finish, and
+//     it will not be retried.
+//
+// Either way the operation itself is not cancelled — the process is about to
+// exit, and a half-applied operation is better recovered or recorded than
+// interrupted mid-write.
 func (r *Runtime) Wait(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
@@ -173,14 +194,25 @@ func (r *Runtime) Wait(ctx context.Context) error {
 
 func (r *Runtime) releaseHeldLeases(ctx context.Context) {
 	r.mu.Lock()
-	held := make(map[string]string, len(r.leases))
-	for id, owner := range r.leases {
-		held[id] = owner
+	held := make(map[string]heldLease, len(r.leases))
+	for id, lease := range r.leases {
+		held[id] = lease
 	}
 	r.mu.Unlock()
 
-	for id, owner := range held {
-		if err := r.cfg.Store.DeferOperation(ctx, id, owner, 0); err != nil {
+	for id, lease := range held {
+		if lease.maxAttempts <= 1 {
+			if err := r.cfg.Store.CompleteOperation(ctx, repository.CompleteOperationInput{
+				ID: id, Owner: lease.owner, Status: "failed",
+				ErrorCode: "interrupted", ErrorMessage: "operation interrupted by shutdown",
+			}); err != nil {
+				r.cfg.Log.Warn("fail non-resumable operation on shutdown failed", "operation_id", id, "error", err)
+				continue
+			}
+			r.cfg.Log.Warn("operation interrupted by shutdown; not retried", "operation_id", id)
+			continue
+		}
+		if err := r.cfg.Store.DeferOperation(ctx, id, lease.owner, 0); err != nil {
 			r.cfg.Log.Warn("release operation lease on shutdown failed", "operation_id", id, "error", err)
 			continue
 		}
@@ -188,10 +220,10 @@ func (r *Runtime) releaseHeldLeases(ctx context.Context) {
 	}
 }
 
-func (r *Runtime) trackLease(id, owner string) {
+func (r *Runtime) trackLease(operation repository.Operation, owner string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.leases[id] = owner
+	r.leases[operation.ID] = heldLease{owner: owner, maxAttempts: operation.MaxAttempts}
 }
 
 func (r *Runtime) releaseLease(id string) {

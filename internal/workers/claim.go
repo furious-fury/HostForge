@@ -84,7 +84,7 @@ func (r *Runtime) execute(stopCtx context.Context, owner string, operation repos
 		}
 	}
 
-	r.trackLease(operation.ID, owner)
+	r.trackLease(operation, owner)
 	defer r.releaseLease(operation.ID)
 
 	leaseDone := make(chan struct{})
