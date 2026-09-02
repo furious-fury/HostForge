@@ -21,6 +21,48 @@ set -uo pipefail
 DATA_DIR="${HF_DATA_DIR:-/var/lib/hostforge}"
 PREFIX="${HF_PREFIX:-/usr/local}"
 INSTALL_DIR="${HF_INSTALL_DIR:-/opt/hostforge}"
+
+# This script rm -rf's the directories named above, and two of them can be
+# pointed anywhere by an environment variable. A typo or an unset variable
+# upstream should not be able to take out something else -- refuse anything
+# that is not clearly a dedicated HostForge directory.
+#
+# Deliberately duplicated in vps-update-and-smoke.sh rather than shared
+# through scripts/lib: an uninstaller is what you reach for when the install
+# is already broken, and it should not depend on the tree being intact.
+assert_removable_dir() {
+  local dir="$1" name="$2" trimmed
+  case "${dir}" in
+    /*) ;;
+    *)
+      echo "error: ${name} must be an absolute path, got '${dir}'" >&2
+      exit 2
+      ;;
+  esac
+  case "${dir}" in
+    *//*|*/./*|*/../*|*/..)
+      echo "error: ${name} must be a normalised path, got '${dir}'" >&2
+      exit 2
+      ;;
+  esac
+  trimmed="${dir%/}"
+  # At least two components: /opt/hostforge passes, /opt does not.
+  case "${trimmed#/}" in
+    */*) ;;
+    *)
+      echo "error: ${name} is too close to the filesystem root to delete: '${dir}'" >&2
+      exit 2
+      ;;
+  esac
+  case "${trimmed}" in
+    /usr/bin|/usr/lib|/usr/local|/usr/sbin|/usr/share|/var/lib|/var/log|/etc/caddy|/home/*/|/root/*/)
+      echo "error: ${name} names a shared system directory, refusing to delete: '${dir}'" >&2
+      exit 2
+      ;;
+  esac
+}
+assert_removable_dir "${INSTALL_DIR}" HF_INSTALL_DIR
+assert_removable_dir "${DATA_DIR}" HF_DATA_DIR
 CONFIRM="${HF_CONFIRM_UNINSTALL:-}"
 KEEP_DATA=0
 KEEP_USER=0
