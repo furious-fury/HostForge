@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -95,4 +96,16 @@ func (r *registry) register(handler Handler) error {
 func (r *registry) lookup(kind string) (Handler, bool) {
 	handler, ok := r.handlers[strings.TrimSpace(kind)]
 	return handler, ok
+}
+
+// kinds returns every registered kind, sorted for a stable claim query and a
+// stable log line. Called once, after registration is frozen by Start, so
+// there is no need to guard it against concurrent Register calls.
+func (r *registry) kinds() []string {
+	out := make([]string, 0, len(r.handlers))
+	for kind := range r.handlers {
+		out = append(out, kind)
+	}
+	sort.Strings(out)
+	return out
 }

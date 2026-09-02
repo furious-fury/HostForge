@@ -90,8 +90,6 @@ type Config struct {
 	BuildKitAddress string
 	// RailpackArtifactsDir keeps generated plans outside source worktrees.
 	RailpackArtifactsDir string
-	// RailpackBuildConcurrency bounds concurrent BuildKit solves.
-	RailpackBuildConcurrency int
 	// RailpackMinFreeDiskBytes is the admission threshold for future build workers.
 	RailpackMinFreeDiskBytes int64
 	// DatabaseMinFreeDiskBytes blocks database provisioning, backup, and restore
@@ -110,6 +108,13 @@ type Config struct {
 	AppContainerPidsLimit int64
 	// DatabaseOperationConcurrency bounds concurrent persistent-resource jobs.
 	DatabaseOperationConcurrency int
+	// DeployConcurrency bounds concurrent deploys, run by their own
+	// workers.Runtime separate from database operations (ADR-0002 phase 2).
+	// lock_key already serializes builds of the same service+environment, so
+	// this only buys cross-service parallelism; deploy concurrency was
+	// effectively unbounded before this queue existed, so the default is 2
+	// rather than 1.
+	DeployConcurrency int
 	// DatabaseTransferMaxPerHour bounds queued backup and restore operations.
 	DatabaseTransferMaxPerHour int
 	// ControlPlaneSnapshotIntervalMinutes controls how often a VACUUM INTO
@@ -248,8 +253,6 @@ const (
 	BuildKitAddressEnv = "HOSTFORGE_BUILDKIT_ADDRESS"
 	// RailpackArtifactsDirEnv overrides temporary generated-plan storage.
 	RailpackArtifactsDirEnv = "HOSTFORGE_RAILPACK_ARTIFACTS_DIR"
-	// RailpackBuildConcurrencyEnv bounds active Railpack BuildKit solves.
-	RailpackBuildConcurrencyEnv = "HOSTFORGE_RAILPACK_BUILD_CONCURRENCY"
 	// RailpackMinFreeDiskBytesEnv gates future builds under disk pressure.
 	RailpackMinFreeDiskBytesEnv = "HOSTFORGE_RAILPACK_MIN_FREE_DISK_BYTES"
 	// DatabaseMinFreeDiskBytesEnv reserves host storage for database safety.
@@ -262,6 +265,8 @@ const (
 	AppContainerPidsLimitEnv = "HOSTFORGE_APP_CONTAINER_PIDS_LIMIT"
 	// DatabaseOperationConcurrencyEnv bounds concurrent database operation workers.
 	DatabaseOperationConcurrencyEnv = "HOSTFORGE_DATABASE_OPERATION_CONCURRENCY"
+	// DeployConcurrencyEnv bounds concurrent deploys.
+	DeployConcurrencyEnv = "HOSTFORGE_DEPLOY_CONCURRENCY"
 	// DatabaseTransferMaxPerHourEnv rate-limits backup and restore queue admission.
 	DatabaseTransferMaxPerHourEnv = "HOSTFORGE_DATABASE_TRANSFER_MAX_PER_HOUR"
 	// ControlPlaneSnapshotIntervalMinutesEnv sets the scheduled control-plane
@@ -467,10 +472,6 @@ func Load(dataDirFlag string) (*Config, error) {
 	if railpackArtifactsDir == "" {
 		railpackArtifactsDir = filepath.Join(abs, "railpack")
 	}
-	railpackBuildConcurrency, err := envInt(RailpackBuildConcurrencyEnv, 1)
-	if err != nil {
-		return nil, err
-	}
 	railpackMinFreeDiskBytes, err := envInt64(RailpackMinFreeDiskBytesEnv, 10*1024*1024*1024)
 	if err != nil {
 		return nil, err
@@ -506,6 +507,13 @@ func Load(dataDirFlag string) (*Config, error) {
 	}
 	if databaseOperationConcurrency < 1 || databaseOperationConcurrency > 8 {
 		return nil, fmt.Errorf("%s must be between 1 and 8", DatabaseOperationConcurrencyEnv)
+	}
+	deployConcurrency, err := envInt(DeployConcurrencyEnv, 2)
+	if err != nil {
+		return nil, err
+	}
+	if deployConcurrency < 1 || deployConcurrency > 8 {
+		return nil, fmt.Errorf("%s must be between 1 and 8", DeployConcurrencyEnv)
 	}
 	databaseTransferMaxPerHour, err := envInt(DatabaseTransferMaxPerHourEnv, 60)
 	if err != nil {
@@ -622,13 +630,13 @@ func Load(dataDirFlag string) (*Config, error) {
 		BuildKitBin:                         buildKitBin,
 		BuildKitAddress:                     buildKitAddress,
 		RailpackArtifactsDir:                railpackArtifactsDir,
-		RailpackBuildConcurrency:            railpackBuildConcurrency,
 		RailpackMinFreeDiskBytes:            railpackMinFreeDiskBytes,
 		DatabaseMinFreeDiskBytes:            databaseMinFreeDiskBytes,
 		AppContainerMemoryLimitBytes:        appContainerMemoryLimitBytes,
 		AppContainerCPULimitMillis:          appContainerCPULimitMillis,
 		AppContainerPidsLimit:               appContainerPidsLimit,
 		DatabaseOperationConcurrency:        databaseOperationConcurrency,
+		DeployConcurrency:                   deployConcurrency,
 		DatabaseTransferMaxPerHour:          databaseTransferMaxPerHour,
 		ControlPlaneSnapshotIntervalMinutes: controlPlaneSnapshotIntervalMinutes,
 		ControlPlaneSnapshotRetentionDays:   controlPlaneSnapshotRetentionDays,

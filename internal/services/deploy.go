@@ -74,6 +74,54 @@ func recordDeployObs(ctx context.Context, log *slog.Logger, job DeployJob, step,
 	})
 }
 
+// stepBoundary reports whether ctx has already been cancelled. If so it
+// tears down cleanup (a candidate container, when one already exists),
+// resolves the deployment through markFailed -- which already routes
+// ctx.Err() != nil to CancelDeployment rather than a plain failure -- records
+// the cancellation on a context detached from ctx (ctx is cancelled here by
+// definition, and a write scoped to it would fail before ever reaching the
+// database), and returns an error that unwraps to ctx.Err().
+//
+// Call this before starting any phase a cancel should be able to stop.
+// CheckoutCommit and HeadCommit take no context argument at all, so this is
+// the only thing that can stop them; even where the next call does respect
+// ctx, a cancel landing in the gap between two steps would otherwise be
+// silently absorbed by whichever step happens to run next. There are
+// deliberately no boundaries once cutover begins (ActivateServiceDeployment
+// onward) -- a half-applied cutover that leaves the previous container torn
+// down and the new one unrouted is worse than a slow one.
+func (job DeployJob) stepBoundary(ctx context.Context, log *slog.Logger, markFailed func(error), cleanup func(string), step string, started time.Time) error {
+	if ctx.Err() == nil {
+		return nil
+	}
+	if cleanup != nil {
+		cleanup("cancelled before " + step)
+	}
+	e := ErrCode("deploy_cancelled", fmt.Errorf("deploy cancelled before %s: %w", step, ctx.Err()))
+	markFailed(e)
+	recordDeployObs(context.WithoutCancel(ctx), log, job, step, "cancelled", started, time.Since(started).Milliseconds(), "deploy_cancelled")
+	return e
+}
+
+// cleanupCandidateContainer stops and removes a deploy's candidate container
+// and marks its row REMOVED. Runs on a context detached from ctx, with its
+// own timeout: ctx is frequently already cancelled by the time this is
+// called -- that is exactly when a cancelled deploy needs it to run -- and
+// StopAndRemove or the status write would otherwise fail before ever
+// reaching the daemon or the database, leaving a running container with a
+// RUNNING row that nothing ever cleans up.
+func cleanupCandidateContainer(ctx context.Context, log *slog.Logger, dockerClient *mobyclient.Client, store *repository.Store, containerID, containerRowID, reason string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if stopErr := docker.StopAndRemove(cleanupCtx, dockerClient, containerID); stopErr != nil {
+		log.Warn("failed to remove candidate container", "reason", reason, "docker_container_id", ShortID(containerID), "error", stopErr)
+		return
+	}
+	if err := store.UpdateContainerStatus(cleanupCtx, containerRowID, "REMOVED"); err != nil {
+		log.Warn("failed to mark candidate container removed", "container_row_id", containerRowID, "error", err)
+	}
+}
+
 // ExecuteDeploy runs clone/build/run/health/cutover for a prepared deployment.
 // authResolver is required for private GitHub repositories.
 func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, authResolver GitAuthResolver) (result DeployResult, err error) {
@@ -136,6 +184,10 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	defer logFile.Close()
 	combinedOut := io.MultiWriter(os.Stdout, logFile)
 
+	if err := job.stepBoundary(ctx, log, markFailed, nil, "clone", time.Now()); err != nil {
+		return DeployResult{}, err
+	}
+
 	t0 := time.Now()
 	log.Info("deploy step", "step", "clone_start", "repo_url", redact.RepoURLForLog(job.RepoURL), "worktree", job.Worktree)
 	_, _ = fmt.Fprintf(combinedOut, "hostforge: cloning url=%s worktree=%s\n", redact.RepoURLForLog(job.RepoURL), job.Worktree)
@@ -155,6 +207,10 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		recordDeployObs(ctx, log, job, "clone", "failed", t0, ms, FirstPublicCode(e))
 		return DeployResult{}, e
 	}
+	if err := job.stepBoundary(ctx, log, markFailed, nil, "checkout", time.Now()); err != nil {
+		return DeployResult{}, err
+	}
+
 	if requestedCommit := strings.TrimSpace(job.Deployment.CommitHash); requestedCommit != "" {
 		if err := git.CheckoutCommit(job.Worktree, requestedCommit); err != nil {
 			e := ErrCode("commit_checkout_failed", err)
@@ -198,6 +254,10 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	extraEnv, err := buildDockerEnvForJob(ctx, log, store, job, sealer)
 	if err != nil {
 		markFailed(err)
+		return DeployResult{}, err
+	}
+
+	if err := job.stepBoundary(ctx, log, markFailed, nil, "railpack_build", time.Now()); err != nil {
 		return DeployResult{}, err
 	}
 
@@ -259,6 +319,10 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		recordDeployObs(ctx, log, job, buildStep, "ok", t1, msRailpack, "")
 	}
 
+	if err := job.stepBoundary(ctx, log, markFailed, nil, "container_start", time.Now()); err != nil {
+		return DeployResult{}, err
+	}
+
 	tRun := time.Now()
 	environmentNetwork := docker.EnvironmentNetworkName(job.environmentID())
 	if _, err := docker.EnsureEnvironmentNetwork(ctx, dockerClient, job.Target.Application.ID, job.environmentID()); err != nil {
@@ -308,13 +372,11 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	recordDeployObs(ctx, log, job, "container_start", "ok", tRun, time.Since(tRun).Milliseconds(), "")
 
 	cleanupCandidate := func(reason string) {
-		if stopErr := docker.StopAndRemove(ctx, dockerClient, containerID); stopErr != nil {
-			log.Warn("failed to remove candidate container", "reason", reason, "docker_container_id", ShortID(containerID), "error", stopErr)
-			return
-		}
-		if err := store.UpdateContainerStatus(ctx, candidateContainer.ID, "REMOVED"); err != nil {
-			log.Warn("failed to mark candidate container removed", "container_row_id", candidateContainer.ID, "error", err)
-		}
+		cleanupCandidateContainer(ctx, log, dockerClient, store, containerID, candidateContainer.ID, reason)
+	}
+
+	if err := job.stepBoundary(ctx, log, markFailed, cleanupCandidate, "health_check", time.Now()); err != nil {
+		return DeployResult{}, err
 	}
 
 	t2 := time.Now()
@@ -330,6 +392,10 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	msHealth := time.Since(t2).Milliseconds()
 	log.Info("deploy step", "step", "health_check_end", "status", "ok", "host_port", hostPortValue, "duration_ms", msHealth)
 	recordDeployObs(ctx, log, job, "health_check", "ok", t2, msHealth, "")
+
+	if err := job.stepBoundary(ctx, log, markFailed, cleanupCandidate, "platform_domain", time.Now()); err != nil {
+		return DeployResult{}, err
+	}
 
 	platformDomain, platformDomainCreated, err := store.EnsurePlatformServiceDomain(ctx, job.Target.Application.ID, job.Target.Environment.ID, job.Target.Service.ID)
 	if err != nil {
@@ -351,6 +417,16 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 			Message:       "Platform domain generated",
 			Detail:        platformDomain.DomainName,
 		})
+	}
+
+	// This is the last point a cancel can still stop the deploy: once
+	// deployments flips to SUCCESS, cutover begins and there are no more
+	// boundaries. Without this check a cancel arriving after the health
+	// check but before this write was silently overwritten by SUCCESS —
+	// CancelDeployment's guard only matches a non-terminal row, so cancel
+	// requests processed in this window used to have no effect at all.
+	if err := job.stepBoundary(ctx, log, markFailed, cleanupCandidate, "cutover", time.Now()); err != nil {
+		return DeployResult{}, err
 	}
 
 	// Caddy resolves each domain to the latest SUCCESS deployment. Promote the
@@ -575,9 +651,6 @@ func ValidateRailpackConfig(cfg *config.Config) error {
 	}
 	if strings.TrimSpace(cfg.RailpackArtifactsDir) == "" {
 		return fmt.Errorf("railpack is enabled but artifacts directory is required")
-	}
-	if cfg.RailpackBuildConcurrency <= 0 {
-		return fmt.Errorf("railpack build concurrency must be > 0")
 	}
 	if cfg.RailpackMinFreeDiskBytes <= 0 {
 		return fmt.Errorf("railpack minimum free disk bytes must be > 0")

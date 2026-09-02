@@ -234,9 +234,24 @@ func runServer(log *slog.Logger, args []string) int {
 	}
 	services.StartDatabaseInstanceReconciliationLoop(shutdownCtx, log, store, envSealer, dockerClient)
 
+	// Built here, ahead of its usual place below the operations runtimes,
+	// because the deploy runtime's handler needs handler.newGitAuthResolver.
+	handler := &server{
+		log:            log,
+		cfg:            cfg,
+		store:          store,
+		webhookLimiter: webhookLimiter,
+		loginLimiter:   loginLimiter,
+		hostSampler:    hostSampler,
+		envSealer:      envSealer,
+		dockerClient:   dockerClient,
+	}
+
 	// Database operations run on the generic operations queue. The runtime
 	// recovers abandoned work as part of Start, before any worker begins, so
 	// the ordering between recovery and the workers cannot be got wrong.
+	// It owns that recovery for the process (deployRuntime below skips it),
+	// so it must start first.
 	operationsRuntime, err := workers.New(workers.Config{
 		Log:         log,
 		Store:       store,
@@ -257,22 +272,38 @@ func runServer(log *slog.Logger, args []string) int {
 		return 1
 	}
 
+	// Deploys get their own runtime and concurrency knob, separate from
+	// database operations (ADR-0002 phase 2): a stuck build must not starve
+	// database provisioning, and vice versa. SkipRecovery is set because
+	// recovery is process-wide and operationsRuntime, started above, already
+	// owns it.
+	deployRuntime, err := workers.New(workers.Config{
+		Log:          log,
+		Store:        store,
+		Concurrency:  cfg.DeployConcurrency,
+		SkipRecovery: true,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: deploy runtime: %v\n", err)
+		return 1
+	}
+	if err := deployRuntime.Register(services.NewDeployOperationHandler(
+		log, cfg, store, envSealer, dockerClient,
+		func(ctx context.Context) services.GitAuthResolver { return handler.newGitAuthResolver(ctx) },
+	)); err != nil {
+		fmt.Fprintf(os.Stderr, "error: register deploy operation handler: %v\n", err)
+		return 1
+	}
+	if err := deployRuntime.Start(shutdownCtx); err != nil {
+		fmt.Fprintf(os.Stderr, "error: start deploy runtime: %v\n", err)
+		return 1
+	}
+
 	services.StartDatabasePurgeLoop(shutdownCtx, log, store, dockerClient)
 	services.StartDatabaseBackupScheduleLoop(shutdownCtx, log, store, cfg.DatabaseTransferMaxPerHour)
 	services.StartDatabaseBackupRetentionLoop(shutdownCtx, log, store, envSealer)
 	gatewayWG := services.StartDatabaseGatewayOperationLoop(shutdownCtx, log, cfg, store, envSealer, dockerClient)
 	services.StartControlPlaneSnapshotLoop(shutdownCtx, log, cfg, store, envSealer)
-
-	handler := &server{
-		log:            log,
-		cfg:            cfg,
-		store:          store,
-		webhookLimiter: webhookLimiter,
-		loginLimiter:   loginLimiter,
-		hostSampler:    hostSampler,
-		envSealer:      envSealer,
-		dockerClient:   dockerClient,
-	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WebhookBasePath, handler.withRequestContext(handler.handleGitHubWebhook))
@@ -341,22 +372,17 @@ func runServer(log *slog.Logger, args []string) int {
 		log.Warn("shutdown: http listener did not drain cleanly", "error", err)
 	}
 
-	// Deploys run in goroutines detached from the request that launched them
-	// (webhook and manual/redeploy/rollback handlers all do this), so
-	// httpServer.Shutdown above — which only waits on active request
-	// handlers — does not wait for them. Wait on them explicitly instead, so
-	// an in-flight build isn't killed mid-step by a restart.
+	// Deploys are drained first: they are the long pole on the shared
+	// shutdown budget (a build can run minutes; a database operation rarely
+	// does), so giving them the deadline first leaves the least-loaded queue
+	// to absorb whatever time that costs the others. A claimed deploy runs
+	// on a context detached from shutdownCtx, same as a database operation,
+	// so it is drained rather than cancelled.
 	log.Info("shutdown: draining in-flight deploys")
-	deploysDone := make(chan struct{})
-	go func() {
-		handler.deployWG.Wait()
-		close(deploysDone)
-	}()
-	select {
-	case <-deploysDone:
+	if err := deployRuntime.Wait(drainCtx); err != nil {
+		log.Warn("shutdown: deploy drain timed out; leases released for recovery", "error", err)
+	} else {
 		log.Info("shutdown: deploys drained")
-	case <-drainCtx.Done():
-		log.Warn("shutdown: deploy drain timed out; exiting with deploys still in flight")
 	}
 
 	// Database and gateway operations are the same shape as deploys: a claimed
@@ -400,11 +426,8 @@ type server struct {
 	envSealer               *envcrypt.Sealer
 	appCache                *appClientHolder
 	githubRepoLister        githubRepositoryLister
-	deploymentCancelMu      sync.Mutex
 	databaseGatewayDomainMu sync.RWMutex
-	deploymentCancels       map[string]context.CancelFunc
 	dockerClient            *client.Client
-	deployWG                sync.WaitGroup
 }
 
 type githubPushPayload struct {
@@ -577,25 +600,16 @@ func (s *server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Error("matched service environment could not be resolved", "service_id", match.ServiceID, "environment_id", match.EnvironmentID, "error", resolveErr)
 			continue
 		}
+		// PrepareServiceDeploy enqueues the operation as its own last write;
+		// the deploy runtime claims and runs it. A push matching several
+		// service environments produces one deployment (and one enqueue)
+		// per match, all independent of each other.
 		job, prepareErr := services.PrepareServiceDeploy(r.Context(), s.cfg, s.store, target, "github_push", "github", strings.TrimSpace(payload.After), "")
 		if prepareErr != nil {
 			log.Error("failed to accept webhook deployment", "service_id", match.ServiceID, "environment_id", match.EnvironmentID, "error", prepareErr)
 			continue
 		}
 		deploymentIDs = append(deploymentIDs, job.Deployment.ID)
-		ctx, cancel := context.WithCancel(context.Background())
-		s.registerDeploymentCancel(job.Deployment.ID, cancel)
-		deployLog := log.With("service_id", match.ServiceID, "environment_id", match.EnvironmentID, "deployment_id", job.Deployment.ID, "repo_url", redact.RepoURLForLog(repoURL), "branch", branch)
-		s.deployWG.Add(1)
-		go func(job services.DeployJob, deployLog *slog.Logger) {
-			defer s.deployWG.Done()
-			defer s.unregisterDeploymentCancel(job.Deployment.ID)
-			bg := obs.WithStore(ctx, s.store)
-			_, execErr := services.ExecuteDeploy(bg, deployLog, s.cfg, s.store, job, s.envSealer, s.dockerClient, s.newGitAuthResolver(context.Background()))
-			if execErr != nil && !errors.Is(execErr, context.Canceled) {
-				deployLog.Error("async webhook deployment failed", "error", execErr)
-			}
-		}(job, deployLog)
 	}
 	if len(deploymentIDs) == 0 {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{

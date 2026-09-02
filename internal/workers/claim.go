@@ -23,6 +23,7 @@ func (r *Runtime) run(stopCtx context.Context, owner string) {
 				Owner:       owner,
 				Lease:       r.cfg.Lease,
 				MinPriority: r.cfg.MinPriority,
+				Kinds:       r.kinds,
 			})
 			if errors.Is(err, sql.ErrNoRows) {
 				break
@@ -83,7 +84,7 @@ func (r *Runtime) execute(stopCtx context.Context, owner string, operation repos
 		}
 	}
 
-	r.trackLease(operation.ID, owner)
+	r.trackLease(operation, owner)
 	defer r.releaseLease(operation.ID)
 
 	leaseDone := make(chan struct{})

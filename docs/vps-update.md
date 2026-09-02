@@ -144,6 +144,7 @@ install -m 0600 -o root -g root /var/lib/hostforge/hostforge.db "/var/lib/hostfo
 grep -q '^HOSTFORGE_ENV_ENCRYPTION_KEY=' /etc/hostforge/hostforge.env
 grep -q '^HOSTFORGE_DATABASE_MIN_FREE_DISK_BYTES=' /etc/hostforge/hostforge.env || printf '%s\n' 'HOSTFORGE_DATABASE_MIN_FREE_DISK_BYTES=5368709120' >> /etc/hostforge/hostforge.env
 grep -q '^HOSTFORGE_DATABASE_OPERATION_CONCURRENCY=' /etc/hostforge/hostforge.env || printf '%s\n' 'HOSTFORGE_DATABASE_OPERATION_CONCURRENCY=1' >> /etc/hostforge/hostforge.env
+grep -q '^HOSTFORGE_DEPLOY_CONCURRENCY=' /etc/hostforge/hostforge.env || printf '%s\n' 'HOSTFORGE_DEPLOY_CONCURRENCY=2' >> /etc/hostforge/hostforge.env
 grep -q '^HOSTFORGE_DATABASE_TRANSFER_MAX_PER_HOUR=' /etc/hostforge/hostforge.env || printf '%s\n' 'HOSTFORGE_DATABASE_TRANSFER_MAX_PER_HOUR=60' >> /etc/hostforge/hostforge.env
 ```
 

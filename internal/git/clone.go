@@ -13,10 +13,19 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
-// WorktreeDir returns a deterministic directory name segment for repoURL and branch.
-// branch may be empty (remote default).
-func WorktreeDir(repoURL, branch string) string {
-	h := sha256.Sum256([]byte(repoURL + "\n" + branch))
+// WorktreeDir returns a deterministic directory name segment for scope,
+// repoURL, and branch. branch may be empty (remote default).
+//
+// scope exists to keep concurrent deploys from sharing a clone. Before it,
+// this hashed only repoURL and branch, so two services deploying the same
+// repo on the same branch — or one service deployed to two environments
+// tracking the same branch — shared one directory and ran git clone,
+// checkout, and pull concurrently in it. Callers pass the same scope they
+// use as the deploy's serialisation key, so the two stay aligned: work that
+// can run concurrently gets its own worktree, work that cannot already
+// shares a lock.
+func WorktreeDir(scope, repoURL, branch string) string {
+	h := sha256.Sum256([]byte(scope + "\n" + repoURL + "\n" + branch))
 	return hex.EncodeToString(h[:16])
 }
 

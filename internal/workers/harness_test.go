@@ -104,13 +104,62 @@ func (h *testRuntime) start() {
 
 func (h *testRuntime) enqueue(id, lockKey string) repository.Operation {
 	h.t.Helper()
+	return h.enqueueKind(id, "test_kind", lockKey)
+}
+
+func (h *testRuntime) enqueueKind(id, kind, lockKey string) repository.Operation {
+	h.t.Helper()
 	operation, err := h.store.EnqueueOperation(context.Background(), repository.NewOperationInput{
-		ID: id, Kind: "test_kind", LockKey: lockKey, ServiceID: "svc-1",
+		ID: id, Kind: kind, LockKey: lockKey, ServiceID: "svc-1",
 	})
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	return operation
+}
+
+// newSharedTestStore opens a store two runtimes can share, for tests that
+// need to prove one runtime does not observe or disturb another's claims.
+func newSharedTestStore(t *testing.T) *repository.Store {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "hostforge.sqlite")
+	db, err := database.OpenSQLite(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return repository.New(db)
+}
+
+// newRuntimeOverStore builds a runtime against an existing store, for tests
+// with more than one runtime sharing one table.
+func newRuntimeOverStore(t *testing.T, store *repository.Store, handler *recordingHandler, opts ...runtimeOption) *testRuntime {
+	t.Helper()
+	cfg := Config{
+		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store:        store,
+		Concurrency:  1,
+		PollInterval: 10 * time.Millisecond,
+		LeaseRefresh: 20 * time.Millisecond,
+		Lease:        2 * time.Second,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	runtime, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler != nil {
+		if err := runtime.Register(handler); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return &testRuntime{t: t, store: store, runtime: runtime, handler: handler}
+}
+
+func withSkipRecovery() runtimeOption {
+	return func(cfg *Config) { cfg.SkipRecovery = true }
 }
 
 // awaitStatus polls until the operation reaches want, or fails the test.

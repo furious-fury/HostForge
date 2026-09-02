@@ -221,6 +221,13 @@ type ClaimOptions struct {
 	MinPriority int
 	// Now is the clock. Zero means time.Now().
 	Now time.Time
+	// Kinds restricts the claim to these operation kinds. Empty means claim
+	// any kind. Required whenever more than one workers.Runtime shares this
+	// table: without it, a runtime whose handlers only cover one domain
+	// claims another domain's work, finds no handler for it, and fails it as
+	// operation_kind_not_registered instead of leaving it for the runtime
+	// that actually owns it.
+	Kinds []string
 }
 
 // ClaimNextOperation atomically claims the highest-priority runnable
@@ -257,8 +264,7 @@ func (s *Store) ClaimNextOperation(ctx context.Context, opts ClaimOptions) (Oper
 	}
 	defer tx.Rollback()
 
-	var id string
-	if err := tx.QueryRowContext(ctx, `
+	query := `
 		SELECT o.id FROM operations o
 		WHERE o.status='queued'
 		  AND (o.available_at='' OR o.available_at<=?)
@@ -267,9 +273,22 @@ func (s *Store) ClaimNextOperation(ctx context.Context, opts ClaimOptions) (Oper
 		  AND NOT EXISTS (
 		    SELECT 1 FROM operations running
 		    WHERE running.status='running' AND running.lock_key=o.lock_key
-		  )
+		  )`
+	args := []any{now, opts.MinPriority}
+	if len(opts.Kinds) > 0 {
+		placeholders := make([]string, len(opts.Kinds))
+		for i, kind := range opts.Kinds {
+			placeholders[i] = "?"
+			args = append(args, kind)
+		}
+		query += ` AND o.kind IN (` + strings.Join(placeholders, ",") + `)`
+	}
+	query += `
 		ORDER BY o.priority DESC,o.created_at,o.id
-		LIMIT 1`, now, opts.MinPriority).Scan(&id); err != nil {
+		LIMIT 1`
+
+	var id string
+	if err := tx.QueryRowContext(ctx, query, args...).Scan(&id); err != nil {
 		return Operation{}, err
 	}
 
@@ -287,6 +306,9 @@ func (s *Store) ClaimNextOperation(ctx context.Context, opts ClaimOptions) (Oper
 		return Operation{}, sql.ErrNoRows
 	}
 	if err := projectOperationClaim(ctx, tx, id, owner, leaseExpires, now); err != nil {
+		return Operation{}, err
+	}
+	if err := projectDeployClaimTx(ctx, tx, id, now); err != nil {
 		return Operation{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -339,15 +361,61 @@ func (s *Store) RenewOperationLease(ctx context.Context, id, owner string, lease
 	return strings.TrimSpace(cancelRequested) != "", nil
 }
 
-// RequestOperationCancellation asks the worker running an operation to stop
-// at its next step boundary. Queued operations are cancelled outright, since
-// nothing is running to observe the request.
-func (s *Store) RequestOperationCancellation(ctx context.Context, id string) error {
+// RequestOperationCancellation asks a running operation to stop at its next
+// step boundary. A queued operation is cancelled outright, in the same
+// transaction, since nothing is running to observe a request set on it —
+// which is also why this has to be a transaction rather than the one
+// UPDATE the running branch alone would need: the queued branch is a full
+// terminal transition, and it has to carry its projections with it, the
+// same as CompleteOperation does.
+//
+// Returns whether anything changed, so a caller — a deployment cancel
+// endpoint, say — can tell "no operation to cancel" from "cancellation
+// requested".
+func (s *Store) RequestOperationCancellation(ctx context.Context, id string) (bool, error) {
+	id = strings.TrimSpace(id)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.ExecContext(ctx, `
 		UPDATE operations SET cancel_requested_at=?,updated_at=?
-		WHERE id=? AND status='running' AND cancel_requested_at=''`, now, now, strings.TrimSpace(id))
-	return err
+		WHERE id=? AND status='running' AND cancel_requested_at=''`, now, now, id)
+	if err != nil {
+		return false, err
+	}
+	if count, _ := result.RowsAffected(); count == 1 {
+		return true, tx.Commit()
+	}
+
+	result, err = tx.ExecContext(ctx, `
+		UPDATE operations
+		SET status='cancelled',progress_step='cancelled',progress_percent=0,
+		    completed_at=?,cancel_requested_at=?,updated_at=?
+		WHERE id=? AND status='queued'`, now, now, now, id)
+	if err != nil {
+		return false, err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		// Neither running nor queued: already terminal, or unknown. Nothing
+		// to cancel.
+		return false, tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE database_operations
+		SET status='cancelled',progress_step='cancelled',progress_percent=0,
+		    completed_at=?,lease_owner='',lease_expires_at='',updated_at=?
+		WHERE id=?`, now, now, id); err != nil {
+		return false, err
+	}
+	if err := projectDeployCompleteTx(ctx, tx, id, "cancelled", "", now); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 // RequestServiceOperationCancellation marks every running operation for a
@@ -406,6 +474,9 @@ func (s *Store) DeferOperation(ctx context.Context, id, owner string, retryAfter
 		    attempt_count=MAX(attempt_count-1,0),
 		    lease_owner='',lease_expires_at='',updated_at=?
 		WHERE id=?`, stamp, id); err != nil {
+		return err
+	}
+	if err := projectDeployDeferTx(ctx, tx, id, stamp); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -470,6 +541,9 @@ func (s *Store) CompleteOperation(ctx context.Context, in CompleteOperationInput
 		strings.TrimSpace(in.ErrorCode), strings.TrimSpace(in.ErrorMessage), now, now, id); err != nil {
 		return err
 	}
+	if err := projectDeployCompleteTx(ctx, tx, id, in.Status, strings.TrimSpace(in.ErrorMessage), now); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -513,6 +587,13 @@ func (s *Store) RecoverOperations(ctx context.Context, at time.Time) (requeued i
 		WHERE id IN (`+exhausted+`)`, now, now); err != nil {
 		return 0, 0, err
 	}
+	// The count from this is deliberately not folded into failed below: every
+	// exhausted deploy operation is also a row the operations-table UPDATE
+	// just below counts, so adding it in would double-count. It exists to
+	// project the outcome onto deployments, not to size the return value.
+	if _, err = projectExhaustedDeploysTx(ctx, tx, exhausted, now); err != nil {
+		return 0, 0, err
+	}
 	failResult, err := tx.ExecContext(ctx, `
 		UPDATE operations
 		SET status='failed',progress_step='interrupted',
@@ -550,6 +631,18 @@ func (s *Store) RecoverOperations(ctx context.Context, at time.Time) (requeued i
 		return 0, 0, err
 	}
 	requeued, _ = requeueResult.RowsAffected()
+
+	// Runs last, once operations has fully settled for this pass: any
+	// deployment still non-terminal with no live operation at all — never
+	// enqueued, or from before this table existed — is failed here. This is
+	// genuinely additional to requeued/failed above (those only ever see
+	// deployments that do have an operations row) and folds into failed
+	// without double-counting anything.
+	orphaned, err := sweepOrphanedDeploymentsTx(ctx, tx, now)
+	if err != nil {
+		return 0, 0, err
+	}
+	failed += orphaned
 
 	if err = tx.Commit(); err != nil {
 		return 0, 0, err

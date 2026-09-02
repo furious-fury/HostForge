@@ -44,8 +44,8 @@ func TestCancellationLandsAtAStepBoundary(t *testing.T) {
 	// Record a progress step, as a real handler would mid-operation, so the
 	// test can prove it is preserved rather than blanked on cancellation.
 	h.exec(`UPDATE operations SET progress_step='restoring_volume',progress_percent=40 WHERE id=?`, operation.ID)
-	if err := h.store.RequestOperationCancellation(ctx, operation.ID); err != nil {
-		t.Fatal(err)
+	if changed, err := h.store.RequestOperationCancellation(ctx, operation.ID); err != nil || !changed {
+		t.Fatalf("RequestOperationCancellation: changed=%v err=%v", changed, err)
 	}
 
 	cancelled := h.awaitStatus(operation.ID, "cancelled")
