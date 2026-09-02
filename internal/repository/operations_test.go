@@ -181,8 +181,8 @@ func TestRenewOperationLeaseReportsCancellation(t *testing.T) {
 		t.Fatal("cancellation reported before it was requested")
 	}
 
-	if err := store.RequestOperationCancellation(ctx, operation.ID); err != nil {
-		t.Fatal(err)
+	if changed, err := store.RequestOperationCancellation(ctx, operation.ID); err != nil || !changed {
+		t.Fatalf("RequestOperationCancellation: changed=%v err=%v", changed, err)
 	}
 	cancelRequested, err = store.RenewOperationLease(ctx, operation.ID, "worker-a", time.Minute)
 	if err != nil {

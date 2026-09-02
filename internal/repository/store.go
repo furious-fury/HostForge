@@ -33,13 +33,15 @@ type AttachContainerInput struct {
 }
 
 func (s *Store) UpdateDeploymentStatus(ctx context.Context, deploymentID, status, errorMessage string) error {
+	deploymentID = strings.TrimSpace(deploymentID)
+	errorMessage = strings.TrimSpace(errorMessage)
 	now := time.Now().UTC().Format(time.RFC3339)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE deployments SET status=?,error_message=?,updated_at=? WHERE id=?`, status, strings.TrimSpace(errorMessage), now, strings.TrimSpace(deploymentID))
+	result, err := tx.ExecContext(ctx, `UPDATE deployments SET status=?,error_message=?,updated_at=? WHERE id=?`, status, errorMessage, now, deploymentID)
 	if err != nil {
 		return fmt.Errorf("update deployment status: %w", err)
 	}
@@ -47,14 +49,8 @@ func (s *Store) UpdateDeploymentStatus(ctx context.Context, deploymentID, status
 	if count == 0 {
 		return sql.ErrNoRows
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO platform_events(application_id,service_id,environment_id,deployment_id,event_type,status,actor,message,detail,created_at)
-		SELECT COALESCE(svc.application_id,''),d.service_id,d.environment_id,d.id,
-		       'deployment',?,COALESCE(d.actor,''),'Deployment ' || lower(?),?,?
-		FROM deployments d JOIN services svc ON svc.id=d.service_id WHERE d.id=?`,
-		status, status, strings.TrimSpace(errorMessage), now, strings.TrimSpace(deploymentID))
-	if err != nil {
-		return fmt.Errorf("record deployment status event: %w", err)
+	if err := recordDeploymentStatusEventTx(ctx, tx, deploymentID, status, errorMessage, now); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
