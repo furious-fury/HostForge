@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
+# Update a HostForge install to a published release, then smoke-test it.
+#
+#   sudo ./scripts/vps-update-and-smoke.sh                  # latest release
+#   HOSTFORGE_VERSION=v0.9.0 sudo ./scripts/vps-update-and-smoke.sh
+#   HF_FROM_SOURCE=1 sudo ./scripts/vps-update-and-smoke.sh # rebuild a checkout
+#
+# Rolling back is the same operation aimed at the older tag: this script
+# prints the version it upgraded from on every failure path, so recovery is
+# HOSTFORGE_VERSION=<that> re-run.
 set -euo pipefail
 
 REPO_DIR="${HF_REPO_DIR:-/opt/hostforge}"
 ENV_FILE="${HF_ENV_FILE:-/etc/hostforge/hostforge.env}"
 SERVICE="${HF_SERVICE_NAME:-hostforge-server}"
 REF="${HF_UPDATE_REF:-main}"
+GITHUB_REPO="furious-fury/HostForge"
+FROM_SOURCE="${HF_FROM_SOURCE:-0}"
 HF_SERVER_URL="${HF_SERVER_URL:-}"
 HF_LOCAL_SERVER_URL="${HF_LOCAL_SERVER_URL:-}"
 
@@ -49,12 +60,18 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "error: run this update helper as root" >&2
   exit 1
 fi
-for tool in git systemctl curl awk tr; do
+for tool in systemctl curl awk tr tar; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
     echo "error: ${tool} is required" >&2
     exit 1
   fi
 done
+# Only a source update needs git; a release update fetches over HTTPS, and
+# the host may legitimately not have git installed at all.
+if [[ "${FROM_SOURCE}" == "1" ]] && ! command -v git >/dev/null 2>&1; then
+  echo "error: git is required for HF_FROM_SOURCE=1" >&2
+  exit 1
+fi
 if command -v jq >/dev/null 2>&1; then
   json_tool="jq"
 elif command -v python3 >/dev/null 2>&1; then
@@ -63,8 +80,12 @@ else
   echo "error: jq or python3 is required to read the saved platform domain" >&2
   exit 1
 fi
-if [[ ! -d "${REPO_DIR}/.git" ]]; then
-  echo "error: ${REPO_DIR} is not a Git checkout" >&2
+if [[ "${FROM_SOURCE}" == "1" && ! -d "${REPO_DIR}/.git" ]]; then
+  echo "error: HF_FROM_SOURCE=1 requires ${REPO_DIR} to be a Git checkout" >&2
+  exit 1
+fi
+if [[ ! -f "${REPO_DIR}/scripts/install.sh" ]]; then
+  echo "error: ${REPO_DIR} does not contain scripts/install.sh" >&2
   exit 1
 fi
 if [[ ! -r "${ENV_FILE}" ]]; then
@@ -96,40 +117,97 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cd "${REPO_DIR}"
-current_branch="$(git branch --show-current)"
-if [[ "${current_branch}" != "${REF}" ]]; then
-  echo "error: ${REPO_DIR} is on ${current_branch:-a detached HEAD}, expected ${REF}" >&2
-  exit 1
+# The version already running is the rollback anchor. It comes from the
+# server rather than the filesystem because that is the version actually
+# being served; a half-finished earlier update could leave the tree and the
+# running binary disagreeing, and the binary is the one users are hitting.
+previous_version="$(curl --silent --fail --max-time 5 "${HF_LOCAL_SERVER_URL%/}/api/version" 2>/dev/null |
+  sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+previous_version="${previous_version:-unknown}"
+
+resolve_release_tag() {
+  if [[ -n "${HOSTFORGE_VERSION:-}" ]]; then
+    printf '%s' "${HOSTFORGE_VERSION}"
+    return
+  fi
+  local tag
+  tag="$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" |
+    sed -n 's/^ *"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
+  if [[ -z "${tag}" ]]; then
+    echo "error: could not resolve the latest HostForge release from the GitHub API." >&2
+    echo "Pin one with HOSTFORGE_VERSION=vX.Y.Z, or update a checkout with HF_FROM_SOURCE=1." >&2
+    exit 1
+  fi
+  printf '%s' "${tag}"
+}
+
+if [[ "${FROM_SOURCE}" == "1" ]]; then
+  cd "${REPO_DIR}"
+  current_branch="$(git branch --show-current)"
+  if [[ "${current_branch}" != "${REF}" ]]; then
+    echo "error: ${REPO_DIR} is on ${current_branch:-a detached HEAD}, expected ${REF}" >&2
+    exit 1
+  fi
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "error: tracked VPS changes must be reviewed before updating" >&2
+    git status --short >&2
+    exit 1
+  fi
+  echo "Updating ${REPO_DIR} from origin/${REF}..."
+  git pull --ff-only origin "${REF}"
+  target_version="$(git rev-parse --short HEAD)"
+  echo "Building and installing ${target_version}..."
+  ./scripts/install.sh --with-systemd
+else
+  target_version="$(resolve_release_tag)"
+  echo "Updating ${REPO_DIR} to ${target_version}..."
+  # Staged beside REPO_DIR, not in /tmp: the swap below has to be a rename on
+  # one filesystem. Across devices mv degrades to copy-then-delete, which can
+  # fail halfway and leave no install tree at all.
+  parent_dir="$(dirname "${REPO_DIR}")"
+  install -d -m 0755 "${parent_dir}"
+  tmp_dir="$(mktemp -d "${parent_dir}/.hostforge-update.XXXXXX")"
+  old_dir="${REPO_DIR}.replaced.$$"
+  if ! curl -fsSL "https://github.com/${GITHUB_REPO}/archive/refs/tags/${target_version}.tar.gz" |
+    tar -xz -C "${tmp_dir}"; then
+    rm -rf "${tmp_dir}"
+    echo "error: could not download the HostForge ${target_version} source archive." >&2
+    echo "previous version: ${previous_version}" >&2
+    exit 1
+  fi
+  extracted="$(find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  if [[ -z "${extracted}" || ! -f "${extracted}/scripts/install.sh" ]]; then
+    rm -rf "${tmp_dir}"
+    echo "error: the HostForge ${target_version} archive did not contain scripts/install.sh." >&2
+    echo "previous version: ${previous_version}" >&2
+    exit 1
+  fi
+  # Move the old tree aside rather than deleting it outright, so an
+  # interrupted swap leaves something to recover from. This script is usually
+  # running out of that very directory; renaming is safe where deleting the
+  # file bash is still reading is needlessly close to the edge.
+  if [[ -d "${REPO_DIR}" ]]; then
+    mv "${REPO_DIR}" "${old_dir}"
+  fi
+  if ! mv "${extracted}" "${REPO_DIR}"; then
+    [[ -d "${old_dir}" ]] && mv "${old_dir}" "${REPO_DIR}"
+    rm -rf "${tmp_dir}"
+    echo "error: could not install the ${target_version} tree at ${REPO_DIR}." >&2
+    echo "previous version: ${previous_version}" >&2
+    exit 1
+  fi
+  rm -rf "${tmp_dir}" "${old_dir}"
+  cd "${REPO_DIR}"
+  echo "Installing ${target_version}..."
+  HOSTFORGE_VERSION="${target_version}" ./scripts/install.sh --with-systemd --download-release
 fi
-previous_commit="$(git rev-parse HEAD)"
-
-# Older releases tracked this generated file. Discard only that known artifact.
-if git ls-files --error-unmatch web/tsconfig.app.tsbuildinfo >/dev/null 2>&1 &&
-  ! git diff --quiet -- web/tsconfig.app.tsbuildinfo; then
-  echo "Restoring generated web/tsconfig.app.tsbuildinfo before update..."
-  git restore -- web/tsconfig.app.tsbuildinfo
-fi
-
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "error: tracked VPS changes must be reviewed before updating" >&2
-  git status --short >&2
-  exit 1
-fi
-
-echo "Updating ${REPO_DIR} from origin/${REF}..."
-git pull --ff-only origin "${REF}"
-current_commit="$(git rev-parse HEAD)"
-
-echo "Building and installing commit ${current_commit}..."
-./scripts/install.sh --with-systemd
 
 echo "Restarting ${SERVICE}..."
 systemctl restart "${SERVICE}"
 if ! systemctl is-active --quiet "${SERVICE}"; then
   echo "error: ${SERVICE} did not become active" >&2
   systemctl --no-pager --full status "${SERVICE}" >&2 || true
-  echo "previous commit: ${previous_commit}" >&2
+  echo "previous version: ${previous_version}" >&2
   exit 1
 fi
 
@@ -148,7 +226,7 @@ done
 if [[ "${local_ready}" -ne 1 ]]; then
   echo "error: local HostForge API did not become ready" >&2
   journalctl -u "${SERVICE}" -n 100 --no-pager >&2 || true
-  echo "previous commit: ${previous_commit}" >&2
+  echo "previous version: ${previous_version}" >&2
   exit 1
 fi
 
@@ -213,7 +291,7 @@ done
 if [[ "${public_ready}" -ne 1 ]]; then
   echo "error: public HostForge origin did not become ready" >&2
   journalctl -u "${SERVICE}" -n 100 --no-pager >&2 || true
-  echo "previous commit: ${previous_commit}" >&2
+  echo "previous version: ${previous_version}" >&2
   exit 1
 fi
 
@@ -227,4 +305,4 @@ bash ./scripts/database-services-vps-audit.sh
 unset api_token
 
 systemctl --no-pager --full status "${SERVICE}"
-echo "HostForge update and smoke complete: ${previous_commit} -> ${current_commit}"
+echo "HostForge update and smoke complete: ${previous_version} -> ${target_version}"

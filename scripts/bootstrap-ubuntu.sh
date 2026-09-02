@@ -177,8 +177,14 @@ resolve_release_tag() {
 # is an ordinary GET and is not subject to it. It is also the same request
 # shape that fetched this script.
 fetch_source_tree() {
-  local tag="$1" tmp extracted
-  tmp="$(mktemp -d)"
+  local tag="$1" parent tmp extracted old
+  # Staged beside INSTALL_DIR so the swap below is a rename on one
+  # filesystem. From /tmp it could be a cross-device copy, which can fail
+  # halfway and leave the host with no install tree at all.
+  parent="$(dirname "${INSTALL_DIR}")"
+  install -d -m 0755 "${parent}"
+  tmp="$(mktemp -d "${parent}/.hostforge-install.XXXXXX")"
+  old="${INSTALL_DIR}.replaced.$$"
   echo "Downloading HostForge ${tag} source..."
   if ! curl -fsSL "https://github.com/${GITHUB_REPO}/archive/refs/tags/${tag}.tar.gz" \
     | tar -xz -C "${tmp}"; then
@@ -192,13 +198,20 @@ fetch_source_tree() {
     echo "error: the HostForge ${tag} source archive did not contain scripts/install.sh." >&2
     exit 1
   fi
-  # Replace the old tree only once the new one is known good, so a failed
-  # download never leaves the host without an installer. Data lives in
-  # /var/lib/hostforge and /etc/hostforge and is untouched by this.
-  rm -rf "${INSTALL_DIR}"
-  install -d -m 0755 "$(dirname "${INSTALL_DIR}")"
-  mv "${extracted}" "${INSTALL_DIR}"
-  rm -rf "${tmp}"
+  # Replace the old tree only once the new one is known good, and move it
+  # aside rather than deleting it, so an interrupted swap leaves something to
+  # recover from. Data lives in /var/lib/hostforge and /etc/hostforge and is
+  # untouched by any of this.
+  if [[ -d "${INSTALL_DIR}" ]]; then
+    mv "${INSTALL_DIR}" "${old}"
+  fi
+  if ! mv "${extracted}" "${INSTALL_DIR}"; then
+    [[ -d "${old}" ]] && mv "${old}" "${INSTALL_DIR}"
+    rm -rf "${tmp}"
+    echo "error: could not install the ${tag} tree at ${INSTALL_DIR}." >&2
+    exit 1
+  fi
+  rm -rf "${tmp}" "${old}"
 }
 
 if [[ "${FROM_SOURCE}" -eq 1 ]]; then
