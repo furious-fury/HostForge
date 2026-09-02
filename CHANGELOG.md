@@ -9,6 +9,8 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-02
+
 ### Added
 
 - A generic operations queue, and a worker runtime that runs jobs off it.
@@ -18,6 +20,16 @@ changes, since the API has not yet reached 1.0 stability.
 - Interrupted operations are now recovered as part of starting the runtime,
   before any worker runs, rather than by a separate loop that had to be
   called first.
+- Deploys run on the operations queue too, on their own worker pool sized by
+  `HOSTFORGE_DEPLOY_CONCURRENCY` (1-8, default 2). Deploys of the same service
+  and environment still run one at a time; different services now run in
+  parallel.
+- Installs and upgrades come from published releases: a checksum-verified
+  prebuilt binary and UI, downloaded over HTTPS. `HOSTFORGE_VERSION=vX.Y.Z`
+  pins a specific release. Building from source is still available with
+  `--from-source`.
+- `scripts/uninstall.sh`, the counterpart to the installer, removing the
+  service, binaries, configuration, data, and install tree.
 
 ### Changed
 
@@ -29,6 +41,19 @@ changes, since the API has not yet reached 1.0 stability.
 - Shutdown drains in-flight database operations instead of cancelling them,
   and releases their leases if the drain deadline passes so the next start
   recovers immediately.
+- **Cancelling a deploy now works regardless of which process started it.**
+  Cancellation went through an in-memory map, so only the process that
+  launched a deploy could stop it, and a restart lost the ability entirely.
+- Installing no longer requires git, Go, or Node on the host. None were ever
+  needed to *run* HostForge: deploys clone in-process, and application builds
+  happen inside Docker. They are installed only for `--from-source`.
+- Upgrades are identified by release version rather than git commit, and roll
+  back by reinstalling the previous version.
+
+### Removed
+
+- `HOSTFORGE_RAILPACK_BUILD_CONCURRENCY`. It was parsed and validated but
+  bounded nothing; `HOSTFORGE_DEPLOY_CONCURRENCY` is the knob that does.
 
 ### Fixed
 
@@ -45,6 +70,20 @@ changes, since the API has not yet reached 1.0 stability.
 - The database operation claim and the per-instance admission checks had no
   supporting index and scanned the whole table.
 - A persistent database error made the gateway worker spin without yielding.
+- Deploys now stop at step boundaries when cancelled, instead of running to
+  completion, and no longer leave the half-built container running.
+- A deploy cancelled between its health check and being marked successful was
+  overwritten as successful anyway.
+- Two services sharing a repository and branch, or one service deployed to two
+  environments, shared a git worktree and could run concurrent checkouts in
+  it. Worktrees are now per service and environment.
+- Two deploys of the same repository and branch starting in the same second
+  produced identical image tags and container names.
+- Interrupted deploys are recorded as failed rather than silently re-run on
+  the next start.
+- The installer's admin-secret prompt read from the same stream the piped
+  script was arriving on, so what it compared was script text rather than
+  what was typed -- reporting a mismatch for two identical entries.
 
 ## [0.8.0] - 2026-08-30
 
