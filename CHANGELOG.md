@@ -9,6 +9,8 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-09-03
+
 ### Fixed
 
 - **Restarting the server reported in-flight deploys as build failures.** The
