@@ -9,6 +9,8 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-09-03
+
 ### Fixed
 
 - **A deploy killed ungracefully left its container running forever.** When the
