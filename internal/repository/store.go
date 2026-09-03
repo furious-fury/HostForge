@@ -175,6 +175,58 @@ func (s *Store) UpdateContainerStatus(ctx context.Context, containerID, status s
 	return err
 }
 
+// SweepableContainer is a still-RUNNING container row whose deployment ended
+// in a terminal state and is not the one currently serving its binding -- the
+// signature of a container a crash left behind. The Docker id and the identity
+// fields let the caller inspect the container and confirm ownership before it
+// removes anything.
+type SweepableContainer struct {
+	ContainerRowID    string
+	DockerContainerID string
+	DeploymentID      string
+	ServiceID         string
+	EnvironmentID     string
+}
+
+// ListSweepableDeployContainers returns RUNNING application-container rows whose
+// deployment is terminal (FAILED or CANCELLED) and is not the active deployment
+// for its service and environment. That is exactly the residue an ungracefully
+// killed deploy leaves: AttachContainer writes the row RUNNING right after the
+// container starts (internal/services/deploy.go), so a process killed before
+// cutover leaves the row RUNNING while recovery fails the deployment -- yet the
+// container keeps running because a SIGKILL runs no cleanup.
+//
+// The status filter alone is nearly sufficient: active_deployment_id is only
+// ever set to a deployment that reached cutover, which requires SUCCESS, so a
+// terminal deployment is never the active one. The explicit inequality is kept
+// as a guard on that invariant, cheap against the status index.
+func (s *Store) ListSweepableDeployContainers(ctx context.Context) ([]SweepableContainer, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id,c.docker_container_id,c.deployment_id,d.service_id,d.environment_id
+		FROM containers c
+		JOIN deployments d ON d.id=c.deployment_id
+		LEFT JOIN service_environments se
+		  ON se.service_id=d.service_id AND se.environment_id=d.environment_id
+		WHERE c.status='RUNNING'
+		  AND c.docker_container_id<>''
+		  AND d.status IN ('FAILED','CANCELLED')
+		  AND (se.active_deployment_id IS NULL OR se.active_deployment_id<>c.deployment_id)
+		ORDER BY c.created_at`)
+	if err != nil {
+		return nil, fmt.Errorf("list sweepable deploy containers: %w", err)
+	}
+	defer rows.Close()
+	out := []SweepableContainer{}
+	for rows.Next() {
+		var item SweepableContainer
+		if err := rows.Scan(&item.ContainerRowID, &item.DockerContainerID, &item.DeploymentID, &item.ServiceID, &item.EnvironmentID); err != nil {
+			return nil, fmt.Errorf("scan sweepable deploy container: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func isUniqueConstraint(err error) bool {
 	if err == nil {
 		return false
