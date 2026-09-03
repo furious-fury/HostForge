@@ -371,13 +371,20 @@ func runServer(log *slog.Logger, args []string) int {
 	if err := httpServer.Shutdown(drainCtx); err != nil {
 		log.Warn("shutdown: http listener did not drain cleanly", "error", err)
 	}
-
 	// Deploys are drained first: they are the long pole on the shared
 	// shutdown budget (a build can run minutes; a database operation rarely
 	// does), so giving them the deadline first leaves the least-loaded queue
 	// to absorb whatever time that costs the others. A claimed deploy runs
 	// on a context detached from shutdownCtx, same as a database operation,
 	// so it is drained rather than cancelled.
+	//
+	// That detachment is necessary but not sufficient: the process tree has
+	// to survive the signal too. This depends on the systemd unit setting
+	// KillMode=mixed (scripts/install.sh). Under systemd's default,
+	// control-group, the SIGTERM that begins this shutdown also reaches the
+	// railpack and buildctl children the deploy spawned, so the deploy this
+	// drain exists to protect is already dead when the drain starts -- and
+	// it reports its child's "signal: terminated" as a build failure.
 	log.Info("shutdown: draining in-flight deploys")
 	if err := deployRuntime.Wait(drainCtx); err != nil {
 		log.Warn("shutdown: deploy drain timed out; leases released for recovery", "error", err)
