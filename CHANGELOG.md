@@ -9,6 +9,8 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-09-04
+
 ### Added
 
 - **Deploy images are garbage collected.** Every deploy builds an image and
