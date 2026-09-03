@@ -272,6 +272,20 @@ func runServer(log *slog.Logger, args []string) int {
 		return 1
 	}
 
+	// Sweep containers a killed deploy left running. This must sit here, in
+	// the one slot between the two Starts: operation recovery (run inside the
+	// Start above) has settled every deployment's status and each binding's
+	// active_deployment_id, so an orphan is now identifiable -- but the deploy
+	// runtime below is not claiming yet, so a new deploy's candidate container,
+	// legitimately not the active one during its own build, cannot be mistaken
+	// for an orphan and reaped mid-build. Best-effort: a sweep failure is
+	// logged, never fatal to startup.
+	if removed, err := services.SweepOrphanedDeployContainers(shutdownCtx, log, store, dockerClient); err != nil {
+		log.Warn("orphan container sweep failed", "error", err)
+	} else if removed > 0 {
+		log.Info("swept orphaned deploy containers at startup", "removed", removed)
+	}
+
 	// Deploys get their own runtime and concurrency knob, separate from
 	// database operations (ADR-0002 phase 2): a stuck build must not starve
 	// database provisioning, and vice versa. SkipRecovery is set because

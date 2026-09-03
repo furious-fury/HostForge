@@ -9,6 +9,20 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A deploy killed ungracefully left its container running forever.** When the
+  server was hard-killed (SIGKILL, OOM, power loss) during a deploy, the
+  application container it had started kept running. Startup recovery marked
+  the deployment interrupted, but nothing reaped the container, so it held its
+  memory and host port until an operator removed it by hand. Startup now sweeps
+  these: a container whose deployment ended terminal and is not the one serving
+  its binding is stopped and removed, after its ownership labels are confirmed.
+  The live container, an in-flight build, and non-application containers are
+  never touched. The sweep runs after recovery settles deployment state and
+  before deploys resume, so a new build's own container is never mistaken for
+  an orphan.
+
 ## [0.9.5] - 2026-09-03
 
 ### Fixed
