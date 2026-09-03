@@ -9,7 +9,21 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
-## [0.9.1] - 2026-09-03
+## [0.9.2] - 2026-09-03
+
+### Fixed
+
+- **Registering the platform domain failed with "Caddy could not apply the
+  permanent platform route".** The route HostForge writes for the domain
+  carried a bare `tls` directive, which Caddy 2.11 rejects, so validation
+  failed and the snippet was rolled back. The permanent route now emits no
+  `tls` directive at all and lets automatic HTTPS obtain a publicly trusted
+  certificate for the hostname; the raw-IP bootstrap route names Caddy's
+  internal CA explicitly, since no public CA issues for an IP address.
+
+  This is the same defect fixed in the installer script in 0.9.1. That fix
+  corrected the script that writes the route at install time and missed the
+  code that rewrites it afterwards.
 
 ### Fixed
 
