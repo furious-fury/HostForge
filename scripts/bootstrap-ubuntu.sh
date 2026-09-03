@@ -66,7 +66,11 @@ apt-get update
 # git is deliberately absent: a release install fetches over plain HTTPS and
 # never invokes it. Source mode installs it below, alongside the toolchains
 # only that mode needs.
-apt-get install -y acl ca-certificates curl gnupg iproute2 ufw fail2ban snapd
+# sqlite3 is the read-only CLI the acceptance and maintenance scripts use to
+# inspect hostforge.db (operations-queue-acceptance.sh). The server itself
+# needs no such package -- it uses a pure-Go SQLite driver -- so this is for
+# the operator's toolkit, not the runtime.
+apt-get install -y acl ca-certificates curl gnupg iproute2 ufw fail2ban snapd sqlite3
 if [[ -n "$(ss -H -ltn 'sport = :5432')" ]]; then
   echo "error: TCP/5432 is already occupied; remove or reconfigure the existing listener before installing HostForge." >&2
   exit 1
@@ -245,6 +249,10 @@ if [[ ! -f "${INSTALL_DIR}/web/dist/index.html" ]]; then
 fi
 
 usermod -aG docker hostforge
+# Append only when absent, so re-running the bootstrapper does not stack a
+# second copy of this block onto hostforge.env. HOSTFORGE_RAILPACK_ENABLED is
+# the block's sentinel.
+if ! grep -q '^HOSTFORGE_RAILPACK_ENABLED=' /etc/hostforge/hostforge.env 2>/dev/null; then
 cat >>/etc/hostforge/hostforge.env <<EOF
 
 # Provisioned build runtime (pinned by bootstrap-ubuntu.sh).
@@ -262,6 +270,7 @@ HOSTFORGE_DEPLOY_CONCURRENCY=2
 HOSTFORGE_DATABASE_GATEWAYS_ENABLED=false
 HOSTFORGE_DATABASE_GATEWAY_OPERATION_CONCURRENCY=1
 EOF
+fi
 # Bootstrap ingress is the sole public control-plane listener. Caddy obtains an
 # IP-address certificate before HostForge is started; there is no HTTP fallback.
 PUBLIC_IP="$(curl -4fsS https://api.ipify.org)"
@@ -302,6 +311,10 @@ cat >/etc/caddy/Caddyfile <<EOF
 import /etc/caddy/hostforge.d/control-plane.caddy
 import /etc/caddy/hostforge.d/routes.caddy
 EOF
+# Sentinel-guarded like the block above: a re-run must not append a second
+# copy. Re-bootstrapping an already-provisioned host is unsupported (clear the
+# env first); this only prevents an accidental re-run from corrupting the file.
+if ! grep -q '^HOSTFORGE_BOOTSTRAP_ENABLED=' /etc/hostforge/hostforge.env 2>/dev/null; then
 cat >>/etc/hostforge/hostforge.env <<EOF
 HOSTFORGE_BOOTSTRAP_ENABLED=true
 HOSTFORGE_BOOTSTRAP_PUBLIC_IP=${PUBLIC_IP}
@@ -314,6 +327,7 @@ HOSTFORGE_CADDY_STORAGE_ROOT=/var/lib/caddy/.local/share/caddy
 HOSTFORGE_SYNC_CADDY=true
 HOSTFORGE_SESSION_COOKIE_SECURE=true
 EOF
+fi
 caddy validate --config /etc/caddy/Caddyfile
 systemctl restart caddy
 # A successful TLS handshake is the certificate-provisioning gate. Do not start

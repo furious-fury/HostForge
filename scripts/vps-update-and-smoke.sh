@@ -301,8 +301,14 @@ if [[ -z "${HF_SERVER_URL}" ]]; then
     exit 1
   fi
   if [[ -z "${platform_domain}" ]]; then
-    echo "error: onboarding has no saved platform domain; set HF_SERVER_URL for this update" >&2
-    exit 1
+    # The release install above already succeeded; only the public smoke test
+    # needs an onboarded box, and this one is not onboarded yet. That is not a
+    # failed update -- report the version change and stop cleanly. Set
+    # HF_SERVER_URL to force the public smoke test against a known origin.
+    echo "Onboarding has no saved platform domain, so the public smoke test is skipped."
+    echo "The release install succeeded: ${previous_version} -> ${target_version}."
+    echo "Set HF_SERVER_URL=https://<domain> to run the public smoke test."
+    exit 0
   fi
   HF_SERVER_URL="https://${platform_domain}"
   echo "Using the saved onboarding domain: ${HF_SERVER_URL}"
