@@ -408,8 +408,28 @@ WorkingDirectory=${REPO_ROOT}
 ExecStart=${SERVER_BIN} -data-dir ${DATA_DIR}
 Restart=on-failure
 RestartSec=5
+# Signal only the main process on stop. systemd's default (control-group)
+# SIGTERMs every process in the cgroup, which includes the railpack and
+# buildctl children a deploy spawns -- so a restart killed the build at the
+# same instant it asked the server to shut down, and cmd/server's deploy
+# drain was left draining something already dead. The deploy then surfaced
+# its child's "signal: terminated" as railpack_build_failed, sending
+# operators to debug a build that never actually broke.
+#
+# With mixed, the children outlive the SIGTERM and the drain can finish a
+# short build; anything still running when the drain gives up is marked
+# interrupted, and systemd SIGKILLs the stragglers at TimeoutStopSec.
+KillMode=mixed
+# Stated rather than defaulted, so it is visibly larger than the drain budget
+# (HOSTFORGE_SHUTDOWN_TIMEOUT_SECONDS, 30s). If this ever drops below that,
+# systemd kills the process mid-drain and the drain becomes decorative again.
+TimeoutStopSec=60
 NoNewPrivileges=true
 PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT
 
 [Install]
 WantedBy=multi-user.target

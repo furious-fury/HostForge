@@ -11,6 +11,18 @@ changes, since the API has not yet reached 1.0 stability.
 
 ### Fixed
 
+- **Restarting the server reported in-flight deploys as build failures.** The
+  systemd unit set no `KillMode`, so systemd's default sent SIGTERM to every
+  process in the cgroup — including the `railpack` and `buildctl` children a
+  deploy had spawned. The build died at the same instant the server was asked
+  to shut down, and the deploy surfaced its child's `signal: terminated` as
+  `railpack_build_failed`, sending operators to debug a build that had not
+  broken. It also meant the shutdown drain, which exists so deploys are
+  finished rather than interrupted, had never worked for deploys: what it was
+  draining was already dead. The unit now uses `KillMode=mixed`, so only the
+  server receives the signal and the drain can do its job. A deploy still
+  running when the drain gives up is recorded as `interrupted`.
+
 - **Cancelling a deploy erased the record of where it stopped.** Every
   observability write carried the context of the operation it described, so
   cancelling a deploy also cancelled the inserts documenting it — the driver
