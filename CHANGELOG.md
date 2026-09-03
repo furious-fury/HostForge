@@ -9,6 +9,22 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-09-03
+
+### Fixed
+
+- **Cancelling a deploy did nothing for up to 30 seconds, and the deploy then
+  overwrote the cancellation.** A running operation only checked for a
+  cancellation request when it renewed its lease, so a cancel could sit
+  unnoticed for a full lease interval — long enough for a health check and
+  cutover to finish. Cancellation is now watched on its own one-second
+  ticker, separate from lease renewal.
+- **A cancelled deployment could be moved back out of CANCELLED.** Because
+  the cancellation is written while the deploy is still running, work still in
+  flight could overwrite it — producing a row that was cancelled and failed at
+  once, or, had the health check passed, putting a cancelled deploy into
+  production as SUCCESS. CANCELLED is now final.
+
 ## [0.9.2] - 2026-09-03
 
 ### Fixed
