@@ -9,6 +9,18 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cancelling a deploy erased the record of where it stopped.** Every
+  observability write carried the context of the operation it described, so
+  cancelling a deploy also cancelled the inserts documenting it — the driver
+  rejected them and the only trace left was a warning in the journal. A
+  cancelled deploy is precisely when those rows matter: they are the sole
+  evidence of which step it reached and how long the teardown took.
+  Observability writes are now detached from the work they observe, under
+  their own short timeout. The same defect dropped the sample for any HTTP
+  request whose client disconnected.
+
 ## [0.9.3] - 2026-09-03
 
 ### Fixed
