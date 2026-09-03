@@ -9,6 +9,24 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-09-03
+
+### Fixed
+
+- **The installer aborted partway through, and 0.9.4 could not be installed
+  at all.** The `KillMode` change in 0.9.4 was spliced into `install.sh` in a
+  way that duplicated the closing lines of the systemd unit's here-document.
+  The second copy fell outside the here-document and the shell tried to run
+  it, so the script exited with `[Install]: command not found` immediately
+  after writing the unit — before `systemctl daemon-reload`, before enabling
+  the service, and before the rest of the install. Upgrades stopped with the
+  new binary in place but the service never reloaded; fresh installs of 0.9.4
+  failed outright.
+
+  `bash -n` accepted the file, because `[Install]` is a syntactically valid
+  command. The unit-writing block is now verified by executing it and
+  inspecting what it produces, which is what catches this class of defect.
+
 ## [0.9.4] - 2026-09-03
 
 ### Fixed
