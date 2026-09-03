@@ -12,6 +12,42 @@ set -euo pipefail
 
 REPO_DIR="${HF_REPO_DIR:-/opt/hostforge}"
 ENV_FILE="${HF_ENV_FILE:-/etc/hostforge/hostforge.env}"
+
+# A release update replaces REPO_DIR wholesale and deletes what it displaced,
+# and REPO_DIR is operator-supplied. Refuse anything that is not clearly a
+# dedicated HostForge directory. Kept in step with the copy in uninstall.sh,
+# which stays self-contained on purpose.
+assert_removable_dir() {
+  local dir="$1" name="$2" trimmed
+  case "${dir}" in
+    /*) ;;
+    *)
+      echo "error: ${name} must be an absolute path, got '${dir}'" >&2
+      exit 2
+      ;;
+  esac
+  case "${dir}" in
+    *//*|*/./*|*/../*|*/..)
+      echo "error: ${name} must be a normalised path, got '${dir}'" >&2
+      exit 2
+      ;;
+  esac
+  trimmed="${dir%/}"
+  case "${trimmed#/}" in
+    */*) ;;
+    *)
+      echo "error: ${name} is too close to the filesystem root to replace: '${dir}'" >&2
+      exit 2
+      ;;
+  esac
+  case "${trimmed}" in
+    /usr/bin|/usr/lib|/usr/local|/usr/sbin|/usr/share|/var/lib|/var/log|/etc/caddy|/home/*/|/root/*/)
+      echo "error: ${name} names a shared system directory, refusing to replace: '${dir}'" >&2
+      exit 2
+      ;;
+  esac
+}
+assert_removable_dir "${REPO_DIR}" HF_REPO_DIR
 SERVICE="${HF_SERVICE_NAME:-hostforge-server}"
 REF="${HF_UPDATE_REF:-main}"
 GITHUB_REPO="furious-fury/HostForge"
