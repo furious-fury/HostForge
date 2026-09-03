@@ -9,6 +9,27 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-03
+
+### Fixed
+
+- **The bootstrap installer could not finish on a fresh host.** The generated
+  Caddy route used a bare `tls` directive, which Caddy 2.11 rejects, so
+  `caddy validate` failed and the installer stopped before starting
+  HostForge — leaving an enabled service that had never run. It now uses
+  `tls internal`, which is also the accurate description: a raw IP address
+  cannot be issued a publicly trusted certificate, so browsers will warn until
+  a real domain is configured.
+- The installer's certificate check verified the chain on a certificate issued
+  by Caddy's own internal CA, which can never validate. It would have failed
+  every attempt against a healthy Caddy and aborted the install.
+- **Connecting the GitHub App appeared to do nothing.** GitHub returns a
+  one-time manifest code in the URL, and the onboarding screen waited for a
+  second, easily missed click before spending it. Navigating away or
+  refreshing discarded the code silently, leaving an App on GitHub that
+  HostForge had no credentials for. The exchange now happens on arrival, with
+  a retry offered if it fails.
+
 ## [0.9.0] - 2026-09-02
 
 ### Added
