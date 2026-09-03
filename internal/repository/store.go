@@ -41,7 +41,18 @@ func (s *Store) UpdateDeploymentStatus(ctx context.Context, deploymentID, status
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE deployments SET status=?,error_message=?,updated_at=? WHERE id=?`, status, errorMessage, now, deploymentID)
+	// CANCELLED is final. An operator's cancellation is written synchronously
+	// by CancelDeployment while the deploy is still running, and the deploy
+	// only learns it was cancelled at its next step boundary -- so without
+	// this guard the work still in flight overwrites the cancellation with
+	// whatever it went on to conclude. Observed on a real host: a cancelled
+	// deploy finished its health check and rewrote the row as FAILED, leaving
+	// cancelled_at set alongside an error message. Had the health check
+	// passed it would have cut over and written SUCCESS instead, putting a
+	// cancelled deploy into production.
+	result, err := tx.ExecContext(ctx,
+		`UPDATE deployments SET status=?,error_message=?,updated_at=? WHERE id=? AND status<>?`,
+		status, errorMessage, now, deploymentID, models.DeploymentCancelled)
 	if err != nil {
 		return fmt.Errorf("update deployment status: %w", err)
 	}
