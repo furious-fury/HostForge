@@ -117,6 +117,14 @@ type Config struct {
 	DeployConcurrency int
 	// DatabaseTransferMaxPerHour bounds queued backup and restore operations.
 	DatabaseTransferMaxPerHour int
+	// ImageRetentionPerBinding is how many recent SUCCESS deploy images to keep
+	// per service and environment, on top of anything in use or in flight.
+	// Rollback rebuilds from source, so this is a churn buffer, not a
+	// correctness requirement.
+	ImageRetentionPerBinding int
+	// ImageGCIntervalSeconds is how often the image garbage collector runs.
+	// Zero disables it.
+	ImageGCIntervalSeconds int
 	// ControlPlaneSnapshotIntervalMinutes controls how often a VACUUM INTO
 	// snapshot of hostforge.db is taken (ADR-0002 §17.2), independent of
 	// migrations. 0 disables the scheduled loop.
@@ -269,6 +277,12 @@ const (
 	DeployConcurrencyEnv = "HOSTFORGE_DEPLOY_CONCURRENCY"
 	// DatabaseTransferMaxPerHourEnv rate-limits backup and restore queue admission.
 	DatabaseTransferMaxPerHourEnv = "HOSTFORGE_DATABASE_TRANSFER_MAX_PER_HOUR"
+	// ImageRetentionPerBindingEnv sets how many recent SUCCESS deploy images to
+	// keep per binding.
+	ImageRetentionPerBindingEnv = "HOSTFORGE_IMAGE_RETENTION_PER_BINDING"
+	// ImageGCIntervalSecondsEnv sets the image garbage collector cadence; 0
+	// disables it.
+	ImageGCIntervalSecondsEnv = "HOSTFORGE_IMAGE_GC_INTERVAL_SECONDS"
 	// ControlPlaneSnapshotIntervalMinutesEnv sets the scheduled control-plane
 	// snapshot interval in minutes. 0 disables the loop.
 	ControlPlaneSnapshotIntervalMinutesEnv = "HOSTFORGE_CONTROL_PLANE_SNAPSHOT_INTERVAL_MINUTES"
@@ -536,6 +550,20 @@ func Load(dataDirFlag string) (*Config, error) {
 	if controlPlaneSnapshotRetentionDays < 1 || controlPlaneSnapshotRetentionDays > 3650 {
 		return nil, fmt.Errorf("%s must be between 1 and 3650", ControlPlaneSnapshotRetentionDaysEnv)
 	}
+	imageRetentionPerBinding, err := envInt(ImageRetentionPerBindingEnv, 3)
+	if err != nil {
+		return nil, err
+	}
+	if imageRetentionPerBinding < 0 || imageRetentionPerBinding > 1000 {
+		return nil, fmt.Errorf("%s must be between 0 and 1000", ImageRetentionPerBindingEnv)
+	}
+	imageGCIntervalSeconds, err := envInt(ImageGCIntervalSecondsEnv, 3600)
+	if err != nil {
+		return nil, err
+	}
+	if imageGCIntervalSeconds < 0 {
+		return nil, fmt.Errorf("%s must be >= 0 (0 disables the loop)", ImageGCIntervalSecondsEnv)
+	}
 	controlPlaneSnapshotDir := strings.TrimSpace(os.Getenv(ControlPlaneSnapshotDirEnv))
 	if controlPlaneSnapshotDir == "" {
 		controlPlaneSnapshotDir = filepath.Join(abs, "control-plane-snapshots")
@@ -638,6 +666,8 @@ func Load(dataDirFlag string) (*Config, error) {
 		DatabaseOperationConcurrency:        databaseOperationConcurrency,
 		DeployConcurrency:                   deployConcurrency,
 		DatabaseTransferMaxPerHour:          databaseTransferMaxPerHour,
+		ImageRetentionPerBinding:            imageRetentionPerBinding,
+		ImageGCIntervalSeconds:              imageGCIntervalSeconds,
 		ControlPlaneSnapshotIntervalMinutes: controlPlaneSnapshotIntervalMinutes,
 		ControlPlaneSnapshotRetentionDays:   controlPlaneSnapshotRetentionDays,
 		ControlPlaneSnapshotDir:             controlPlaneSnapshotDir,

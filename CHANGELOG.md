@@ -9,6 +9,19 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+### Added
+
+- **Deploy images are garbage collected.** Every deploy builds an image and
+  nothing ever removed one, so a host's disk filled over time. A background
+  reconciler now removes deploy images no deployment still needs, keeping the
+  live and in-flight images plus a few recent successful builds per service and
+  environment (`HOSTFORGE_IMAGE_RETENTION_PER_BINDING`, default 3). Removal does
+  not force: an image the daemon still reports as in use is left alone, so the
+  database keep-set and Docker's own reference counting both have to agree
+  before anything is deleted. Cadence is `HOSTFORGE_IMAGE_GC_INTERVAL_SECONDS`
+  (default 3600; 0 disables). Rollback rebuilds from source rather than reusing
+  a stored image, so retention is a churn buffer, not a rollback requirement.
+
 ## [0.9.6] - 2026-09-03
 
 ### Fixed
