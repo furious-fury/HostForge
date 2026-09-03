@@ -112,17 +112,48 @@ func (r *Runtime) execute(stopCtx context.Context, owner string, operation repos
 	}
 }
 
-// holdLease renews the lease until the operation finishes, and cancels it if
-// the lease is lost or cancellation is requested. Renewal and the
-// cancellation check are one query, so the two facts are always consistent.
+// holdLease keeps a claim alive and watches for cancellation.
+//
+// These are two jobs on two clocks, and conflating them was a bug. Renewing
+// a lease is a transaction with two UPDATEs and belongs on the lease cadence
+// (30s by default). Noticing that an operator pressed cancel is a single
+// indexed read, and putting it on that same 30s tick meant a cancelled
+// deploy kept working for up to half a minute -- long enough for a whole
+// health check and cutover to complete, so the operation finished normally
+// and overwrote the cancellation the operator could already see in the UI.
 func (r *Runtime) holdLease(operationCtx context.Context, cancel context.CancelFunc, owner, id string, log logger) {
-	ticker := time.NewTicker(r.cfg.LeaseRefresh)
-	defer ticker.Stop()
+	renew := time.NewTicker(r.cfg.LeaseRefresh)
+	defer renew.Stop()
+	watch := time.NewTicker(r.cfg.CancelPoll)
+	defer watch.Stop()
+
+	stopForCancellation := func() {
+		log.Info("cancellation requested; stopping at the next step boundary")
+		cancel()
+	}
+
 	for {
 		select {
 		case <-operationCtx.Done():
 			return
-		case <-ticker.C:
+		case <-watch.C:
+			cancelRequested, err := r.cfg.Store.OperationCancellationRequested(operationCtx, id)
+			if err != nil {
+				if operationCtx.Err() != nil {
+					return
+				}
+				// Not fatal: the lease renewal below is the authority on
+				// whether this worker still owns the operation, and it
+				// reports cancellation too. A failed poll costs latency,
+				// not correctness.
+				log.Warn("cancellation check failed", "error", err)
+				continue
+			}
+			if cancelRequested {
+				stopForCancellation()
+				return
+			}
+		case <-renew.C:
 			cancelRequested, err := r.cfg.Store.RenewOperationLease(operationCtx, id, owner, r.cfg.Lease)
 			if err != nil {
 				if operationCtx.Err() != nil {
@@ -133,8 +164,7 @@ func (r *Runtime) holdLease(operationCtx context.Context, cancel context.CancelF
 				return
 			}
 			if cancelRequested {
-				log.Info("cancellation requested; stopping at the next step boundary")
-				cancel()
+				stopForCancellation()
 				return
 			}
 		}
@@ -171,5 +201,6 @@ func errorCode(err error) string {
 // logger already scoped to the operation.
 type logger interface {
 	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
 	Error(msg string, args ...any)
 }

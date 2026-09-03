@@ -14,6 +14,7 @@ import (
 type Store interface {
 	ClaimNextOperation(ctx context.Context, opts repository.ClaimOptions) (repository.Operation, error)
 	RenewOperationLease(ctx context.Context, id, owner string, lease time.Duration) (cancelRequested bool, err error)
+	OperationCancellationRequested(ctx context.Context, id string) (bool, error)
 	DeferOperation(ctx context.Context, id, owner string, retryAfter time.Duration) error
 	CompleteOperation(ctx context.Context, in repository.CompleteOperationInput) error
 	RecoverOperations(ctx context.Context, at time.Time) (requeued int64, failed int64, err error)

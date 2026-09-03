@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -356,6 +357,31 @@ func (s *Store) RenewOperationLease(ctx context.Context, id, owner string, lease
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(cancelRequested) != "", nil
+}
+
+// OperationCancellationRequested reports whether a cancellation has been
+// requested for a running operation.
+//
+// This exists so a worker can watch for cancellation far more often than it
+// renews its lease. RenewOperationLease also reports this, but it is a
+// transaction with two UPDATEs, so it belongs on the lease cadence
+// (30 seconds) rather than the cadence at which an operator expects "stop"
+// to mean stop. This is a single indexed read by primary key.
+//
+// A missing operation reports false rather than an error: the caller is a
+// polling loop, and an operation deleted mid-flight is not a cancellation.
+func (s *Store) OperationCancellationRequested(ctx context.Context, id string) (bool, error) {
+	var cancelRequested string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT cancel_requested_at FROM operations WHERE id=? AND status='running'`,
+		strings.TrimSpace(id)).Scan(&cancelRequested)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
 		return false, err
 	}
 	return strings.TrimSpace(cancelRequested) != "", nil

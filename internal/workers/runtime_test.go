@@ -265,6 +265,9 @@ func (stubStore) ClaimNextOperation(context.Context, repository.ClaimOptions) (r
 func (stubStore) RenewOperationLease(context.Context, string, string, time.Duration) (bool, error) {
 	return false, nil
 }
+func (stubStore) OperationCancellationRequested(context.Context, string) (bool, error) {
+	return false, nil
+}
 func (stubStore) DeferOperation(context.Context, string, string, time.Duration) error { return nil }
 func (stubStore) CompleteOperation(context.Context, repository.CompleteOperationInput) error {
 	return nil

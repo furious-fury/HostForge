@@ -20,6 +20,10 @@ const (
 	defaultLease        = 2 * time.Minute
 	defaultLeaseRefresh = 30 * time.Second
 	defaultPollInterval = 2 * time.Second
+	// Cancellation is observed on its own clock, not the lease clock. One
+	// second keeps "stop" responsive without meaningfully adding load: it is
+	// a primary-key read per running operation.
+	defaultCancelPoll = time.Second
 )
 
 // Config configures a Runtime. Only Store and Concurrency are required.
@@ -29,9 +33,16 @@ type Config struct {
 	Concurrency int
 
 	// Lease is how long a claim is held; LeaseRefresh how often it is
-	// renewed, which is also how often cancellation is observed.
+	// renewed.
 	Lease        time.Duration
 	LeaseRefresh time.Duration
+
+	// CancelPoll is how often a running operation is checked for a
+	// cancellation request. Deliberately far shorter than LeaseRefresh:
+	// renewing a lease is a transaction, but noticing a cancellation is one
+	// indexed read, and an operator pressing cancel should not wait a lease
+	// interval to be heard.
+	CancelPoll time.Duration
 
 	// PollInterval is how long a worker waits after finding the queue empty.
 	PollInterval time.Duration
@@ -90,6 +101,9 @@ func New(cfg Config) (*Runtime, error) {
 	}
 	if cfg.LeaseRefresh <= 0 {
 		cfg.LeaseRefresh = defaultLeaseRefresh
+	}
+	if cfg.CancelPoll <= 0 {
+		cfg.CancelPoll = defaultCancelPoll
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultPollInterval

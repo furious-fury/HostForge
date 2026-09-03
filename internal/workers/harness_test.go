@@ -70,6 +70,10 @@ func withPollInterval(d time.Duration) runtimeOption {
 	return func(cfg *Config) { cfg.PollInterval = d }
 }
 
+func withCancelPoll(d time.Duration) runtimeOption {
+	return func(cfg *Config) { cfg.CancelPoll = d }
+}
+
 func newTestRuntime(t *testing.T, handler *recordingHandler, opts ...runtimeOption) *testRuntime {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "hostforge.sqlite")
