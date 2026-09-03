@@ -78,9 +78,9 @@ func recordDeployObs(ctx context.Context, log *slog.Logger, job DeployJob, step,
 // tears down cleanup (a candidate container, when one already exists),
 // resolves the deployment through markFailed -- which already routes
 // ctx.Err() != nil to CancelDeployment rather than a plain failure -- records
-// the cancellation on a context detached from ctx (ctx is cancelled here by
-// definition, and a write scoped to it would fail before ever reaching the
-// database), and returns an error that unwraps to ctx.Err().
+// the cancellation (obs detaches observability writes itself, so a ctx that
+// is cancelled here by definition still reaches the database), and returns
+// an error that unwraps to ctx.Err().
 //
 // Call this before starting any phase a cancel should be able to stop.
 // CheckoutCommit and HeadCommit take no context argument at all, so this is
@@ -99,7 +99,7 @@ func (job DeployJob) stepBoundary(ctx context.Context, log *slog.Logger, markFai
 	}
 	e := ErrCode("deploy_cancelled", fmt.Errorf("deploy cancelled before %s: %w", step, ctx.Err()))
 	markFailed(e)
-	recordDeployObs(context.WithoutCancel(ctx), log, job, step, "cancelled", started, time.Since(started).Milliseconds(), "deploy_cancelled")
+	recordDeployObs(ctx, log, job, step, "cancelled", started, time.Since(started).Milliseconds(), "deploy_cancelled")
 	return e
 }
 

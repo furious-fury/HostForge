@@ -13,6 +13,7 @@ import (
 	"github.com/furious-fury/HostForge/internal/database"
 	"github.com/furious-fury/HostForge/internal/dockertest"
 	"github.com/furious-fury/HostForge/internal/models"
+	"github.com/furious-fury/HostForge/internal/obs"
 	"github.com/furious-fury/HostForge/internal/repository"
 )
 
@@ -158,5 +159,49 @@ func TestCleanupCandidateContainerRunsOnAnAlreadyCancelledContext(t *testing.T) 
 	}
 	if got.Status != "REMOVED" {
 		t.Fatalf("container status = %q, want REMOVED", got.Status)
+	}
+}
+
+// The step boundary is only useful if the record of it survives. Every
+// observability write inherited the deploy's own context, so cancelling a
+// deploy also cancelled the write describing where it stopped: on a real
+// host this showed up as "insert deploy_step: context canceled" for both
+// health_check and deploy_total, leaving a cancelled deploy with no trace of
+// how far it got. This drives the real store through the real SQLite driver
+// -- the one that rejected those inserts -- rather than a fake that would
+// happily accept a cancelled context.
+func TestStepBoundaryRecordsTheCancellationDespiteTheCancelledContext(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "hostforge.sqlite")
+	db, err := database.OpenSQLite(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := repository.New(db)
+
+	job := DeployJob{
+		Deployment: models.Deployment{ID: "dep-obs-1"},
+		Target: &DeployTarget{
+			Service:     repository.Service{ID: "svc-1"},
+			Environment: repository.Environment{ID: "env-1"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(obs.WithStore(context.Background(), store))
+	cancel()
+
+	if err := job.stepBoundary(ctx, slog.Default(), func(error) {}, nil, "health_check", time.Now()); err == nil {
+		t.Fatal("stepBoundary returned nil on a cancelled context")
+	}
+
+	rows, err := store.ListDeployStepsByDeployment(context.Background(), "dep-obs-1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("deploy_steps rows = %d, want 1: the cancellation record was discarded along with the deploy", len(rows))
+	}
+	if rows[0].Step != "health_check" || rows[0].Status != "cancelled" {
+		t.Fatalf("recorded step = %q/%q, want health_check/cancelled", rows[0].Step, rows[0].Status)
 	}
 }
