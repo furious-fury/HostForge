@@ -431,10 +431,6 @@ PrivateTmp=true
 WantedBy=multi-user.target
 UNIT
 
-[Install]
-WantedBy=multi-user.target
-UNIT
-
 if getent group docker >/dev/null 2>&1; then
   echo "Adding hostforge to docker group (restart hostforge-server after first deploy setup if needed)..."
   usermod -aG docker hostforge 2>/dev/null || true
