@@ -175,6 +175,58 @@ func (s *Store) UpdateContainerStatus(ctx context.Context, containerID, status s
 	return err
 }
 
+// ListRetainedImageRefs returns the set of deploy image refs that must survive
+// image garbage collection. An image is retained when any of these holds:
+//
+//   - a container that is not REMOVED references its deployment (the live
+//     container, or an in-flight deploy's candidate -- the race a GC must never
+//     lose, since it would delete an image a deploy is about to cut over to),
+//   - its deployment is QUEUED or BUILDING (in flight, container maybe not yet
+//     created),
+//   - it is among the newest `retain` SUCCESS deployments for its service and
+//     environment (the rollback/redeploy buffer).
+//
+// Rollback rebuilds from the source commit rather than reusing a stored image
+// (see cmd/server handleDeploymentRollbackV2), so the buffer is a churn and
+// race margin, not a correctness requirement -- `retain` can be small, and 0
+// keeps only the in-use and in-flight images.
+func (s *Store) ListRetainedImageRefs(ctx context.Context, retain int) (map[string]struct{}, error) {
+	if retain < 0 {
+		retain = 0
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT d.image_ref
+		FROM deployments d
+		JOIN containers c ON c.deployment_id=d.id
+		WHERE c.status<>'REMOVED' AND d.image_ref<>''
+		UNION
+		SELECT image_ref FROM deployments
+		WHERE status IN ('QUEUED','BUILDING') AND image_ref<>''
+		UNION
+		SELECT d.image_ref
+		FROM deployments d
+		WHERE d.status='SUCCESS' AND d.image_ref<>''
+		  AND (
+		    SELECT COUNT(*) FROM deployments d2
+		    WHERE d2.service_id=d.service_id AND d2.environment_id=d.environment_id
+		      AND d2.status='SUCCESS'
+		      AND (d2.created_at>d.created_at OR (d2.created_at=d.created_at AND d2.id>d.id))
+		  ) < ?`, retain)
+	if err != nil {
+		return nil, fmt.Errorf("list retained image refs: %w", err)
+	}
+	defer rows.Close()
+	keep := map[string]struct{}{}
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			return nil, fmt.Errorf("scan retained image ref: %w", err)
+		}
+		keep[ref] = struct{}{}
+	}
+	return keep, rows.Err()
+}
+
 // SweepableContainer is a still-RUNNING container row whose deployment ended
 // in a terminal state and is not the one currently serving its binding -- the
 // signature of a container a crash left behind. The Docker id and the identity

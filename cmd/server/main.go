@@ -318,6 +318,7 @@ func runServer(log *slog.Logger, args []string) int {
 	services.StartDatabaseBackupRetentionLoop(shutdownCtx, log, store, envSealer)
 	gatewayWG := services.StartDatabaseGatewayOperationLoop(shutdownCtx, log, cfg, store, envSealer, dockerClient)
 	services.StartControlPlaneSnapshotLoop(shutdownCtx, log, cfg, store, envSealer)
+	services.StartImageGarbageCollectionLoop(shutdownCtx, log, store, dockerClient, cfg.ImageRetentionPerBinding, time.Duration(cfg.ImageGCIntervalSeconds)*time.Second)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WebhookBasePath, handler.withRequestContext(handler.handleGitHubWebhook))

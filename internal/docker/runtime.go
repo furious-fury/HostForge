@@ -213,6 +213,62 @@ func RemoveImage(ctx context.Context, cli *client.Client, imageRef string) error
 	return nil
 }
 
+// ImageSummary is the subset of a Docker image record the GC reconciler needs:
+// its content-addressable id and every tag pointing at it. Declared here so the
+// moby image type does not leak into services.
+type ImageSummary struct {
+	ID       string
+	RepoTags []string
+}
+
+// ListImagesByRepoPrefix returns images that carry at least one tag whose
+// repository starts with prefix (e.g. "hostforge/"). The daemon-side reference
+// filter does the coarse selection; the Go pass keeps only the matching tags,
+// so a summary never reports a tag from some unrelated repository the image
+// also happens to carry.
+func ListImagesByRepoPrefix(ctx context.Context, cli *client.Client, prefix string) ([]ImageSummary, error) {
+	result, err := cli.ImageList(ctx, client.ImageListOptions{
+		Filters: client.Filters{}.Add("reference", prefix+"*"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list images: %w", err)
+	}
+	summaries := make([]ImageSummary, 0, len(result.Items))
+	for _, item := range result.Items {
+		var tags []string
+		for _, tag := range item.RepoTags {
+			if strings.HasPrefix(tag, prefix) {
+				tags = append(tags, tag)
+			}
+		}
+		if len(tags) == 0 {
+			continue
+		}
+		summaries = append(summaries, ImageSummary{ID: item.ID, RepoTags: tags})
+	}
+	return summaries, nil
+}
+
+// RemoveImageIfUnused deletes one image tag without forcing. Unlike RemoveImage,
+// it defers to the daemon's own reference counting: an image still used by a
+// container comes back as a conflict, which is reported as removed=false with no
+// error, so the caller treats it as "kept" rather than a failure. That is the
+// safe default for a garbage collector -- forcing would untag an image out from
+// under a container the keep-set failed to account for. A tag already gone
+// (concurrent deploy churn) is likewise not an error.
+func RemoveImageIfUnused(ctx context.Context, cli *client.Client, imageRef string) (removed bool, err error) {
+	if _, err := cli.ImageRemove(ctx, imageRef, client.ImageRemoveOptions{Force: false, PruneChildren: true}); err != nil {
+		if errdefs.IsNotFound(err) {
+			return false, nil
+		}
+		if errdefs.IsConflict(err) || strings.Contains(strings.ToLower(err.Error()), "is being used") {
+			return false, nil
+		}
+		return false, fmt.Errorf("remove image %s: %w", imageRef, err)
+	}
+	return true, nil
+}
+
 // LogStreamOptions controls container log streaming behavior.
 type LogStreamOptions struct {
 	Follow     bool
