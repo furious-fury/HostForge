@@ -61,6 +61,10 @@ func (s *server) handleServiceDomains(w http.ResponseWriter, r *http.Request, ap
 				writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": mapDomainValidationError(err)})
 				return
 			}
+			if err := s.validateDomainCaddySyntax(r.Context(), req.DomainName); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_domain_config", "message": err.Error()})
+				return
+			}
 			item, err := s.store.CreateServiceDomain(r.Context(), applicationID, environmentID, req.ServiceID, req.DomainName)
 			if errors.Is(err, repository.ErrEnvironmentNotFound) {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "service_environment_not_found"})
@@ -96,6 +100,10 @@ func (s *server) handleServiceDomains(w http.ResponseWriter, r *http.Request, ap
 		}
 		if err := dnsops.ValidateDomainName(req.DomainName); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": mapDomainValidationError(err)})
+			return
+		}
+		if err := s.validateDomainCaddySyntax(r.Context(), req.DomainName); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "invalid_domain_config", "message": err.Error()})
 			return
 		}
 		item, err := s.store.UpdateServiceDomain(r.Context(), applicationID, environmentID, domainID, req.DomainName, req.ServiceID)

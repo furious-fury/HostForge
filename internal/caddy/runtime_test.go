@@ -1,6 +1,7 @@
 package caddy
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -148,5 +149,90 @@ func TestReplaceManagedConfigRestoresSnippetWhenValidationFails(t *testing.T) {
 	}
 	if string(got) != "old.example.com {}\n" {
 		t.Fatalf("managed config was not restored: %q", got)
+	}
+}
+
+func TestValidateSiteBlockAcceptsAWellFormedDomain(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell stub")
+	}
+	bin := filepath.Join(t.TempDir(), "caddy")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSiteBlock(t.Context(), bin, "api.example.com", 3000); err != nil {
+		t.Fatalf("expected a well-formed domain to validate, got %v", err)
+	}
+}
+
+// A domain with no upstream yet (the common case at add time -- the target
+// service usually has no successful deployment) must still be checked for
+// syntax. hostPort <= 0 must not silently skip validation.
+func TestValidateSiteBlockValidatesEvenWithNoKnownUpstreamPort(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell stub")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "caddy")
+	captured := filepath.Join(dir, "captured.caddyfile")
+	// Copies whatever config validate was asked to check, so the test can
+	// assert a domain block was actually written -- not merely that the
+	// stub was invoked. Walks argv to find the value after --config,
+	// rather than assuming a fixed position (--adapter follows it).
+	script := "#!/bin/sh\nprev=\"\"\nfor a; do\n  if [ \"$prev\" = \"--config\" ]; then cfg=\"$a\"; fi\n  prev=\"$a\"\ndone\ncp \"$cfg\" " + captured + "\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	_ = ValidateSiteBlock(t.Context(), bin, "no-upstream-yet.example.com", 0)
+	got, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("validate was not invoked with a config file: %v", err)
+	}
+	if !strings.Contains(string(got), "no-upstream-yet.example.com") {
+		t.Fatalf("rendered config missing the domain despite hostPort<=0:\n%s", got)
+	}
+}
+
+func TestValidateSiteBlockRejectionIsErrValidationFailed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell stub")
+	}
+	bin := filepath.Join(t.TempDir(), "caddy")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'parse error' >&2\nexit 1\n"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	err := ValidateSiteBlock(t.Context(), bin, "bad domain", 3000)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("error does not wrap ErrValidationFailed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "parse error") {
+		t.Fatalf("validator output not preserved in error: %v", err)
+	}
+}
+
+func TestSyncValidationFailureIsErrValidationFailed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell stub")
+	}
+	dir := t.TempDir()
+	root := filepath.Join(dir, "Caddyfile")
+	if err := os.WriteFile(root, []byte(""), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "caddy")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 1\n"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Sync(t.Context(), SyncOptions{
+		CaddyBin: bin, GeneratedPath: filepath.Join(dir, "hostforge.caddy"), RootConfig: root,
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("a validate failure from Sync must wrap ErrValidationFailed so callers can tell it apart from a reload failure: %v", err)
 	}
 }

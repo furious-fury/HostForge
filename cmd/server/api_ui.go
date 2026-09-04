@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/furious-fury/HostForge/internal/caddy"
 	"github.com/furious-fury/HostForge/internal/dnsops"
 	"github.com/furious-fury/HostForge/internal/git"
 	"github.com/furious-fury/HostForge/internal/services"
@@ -85,6 +87,19 @@ func (s *server) notifyDomainChanged() {
 		return
 	}
 	s.routeNotifier.Notify()
+}
+
+// validateDomainCaddySyntax rejects a hostname Caddy itself would refuse,
+// synchronously and before it is ever persisted (ADR-0002 §19.3 item 1) --
+// a typo is rejected by the operator who made it, not discovered later as
+// a fleet-wide reconcile failure that could implicate an unrelated domain.
+// Skipped when no Caddy root config is configured: there is nothing to
+// validate against, matching every other Caddy-gated path in this file.
+func (s *server) validateDomainCaddySyntax(ctx context.Context, domainName string) error {
+	if strings.TrimSpace(s.cfg.CaddyRootConfig) == "" {
+		return nil
+	}
+	return caddy.ValidateSiteBlock(ctx, s.cfg.CaddyBin, domainName, 0)
 }
 
 func firstNonEmpty(values ...string) string {

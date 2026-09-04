@@ -3,6 +3,7 @@ package caddy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,14 @@ import (
 	"sort"
 	"strings"
 )
+
+// ErrValidationFailed marks a Sync failure as a rejected config -- content
+// Caddy itself refused (a malformed hostname, a conflicting site block) --
+// as opposed to a reload failure, which means the config was valid but
+// applying it failed for an unrelated reason (Caddy not running, a process
+// error). Callers use errors.Is to tell the two apart: only the former
+// implicates a specific domain (ADR-0002 §19.2).
+var ErrValidationFailed = errors.New("caddy: config rejected by validate")
 
 // Route maps a domain to a local upstream host port.
 type Route struct {
@@ -51,7 +60,7 @@ func Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
 		return SyncResult{}, err
 	}
 	if err := ValidateRoot(ctx, bin, opts.RootConfig); err != nil {
-		return SyncResult{GeneratedPath: opts.GeneratedPath}, fmt.Errorf("caddy validate: %w", err)
+		return SyncResult{GeneratedPath: opts.GeneratedPath}, fmt.Errorf("%w: %w", ErrValidationFailed, err)
 	}
 	if err := runCaddy(ctx, bin, "reload", "--config", opts.RootConfig); err != nil {
 		// `caddy reload` talks to the admin API (default :2019). When no daemon is running yet,
@@ -113,6 +122,48 @@ func isCaddyAdminUnreachable(err error) bool {
 	}
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "connection refused") && strings.Contains(s, "2019")
+}
+
+// ValidateSiteBlock validates one route as a complete, standalone Caddyfile --
+// no root import, no other domains. It exists so a typo is rejected
+// synchronously, by the operator who made it, with a useful message,
+// instead of surfacing later as a fleet-wide reconcile failure that
+// implicates whichever domain happens to sort last (ADR-0002 §19.3 item 1).
+// The temp file is removed on return; nothing it writes is durable.
+//
+// Built directly rather than through RenderConfig: that renderer drops any
+// route with hostPort <= 0, which describes most domains at add time -- the
+// target service usually has no successful deployment yet. `caddy validate`
+// never dials the upstream, only parses the Caddyfile, so an unresolved port
+// stands in as a syntactic placeholder without weakening the check.
+func ValidateSiteBlock(ctx context.Context, caddyBin, domain string, hostPort int) error {
+	bin := strings.TrimSpace(caddyBin)
+	if bin == "" {
+		bin = "caddy"
+	}
+	domain = strings.TrimSpace(domain)
+	port := hostPort
+	if port <= 0 {
+		port = 1
+	}
+	content := fmt.Sprintf("%s {\n    reverse_proxy 127.0.0.1:%d\n}\n", domain, port)
+	tmp, err := os.CreateTemp("", ".hostforge-caddy-validate-*.caddyfile")
+	if err != nil {
+		return fmt.Errorf("create temp validation file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp validation file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp validation file: %w", err)
+	}
+	if err := runCaddy(ctx, bin, "validate", "--config", tmpPath, "--adapter", "caddyfile"); err != nil {
+		return fmt.Errorf("%w: %w", ErrValidationFailed, err)
+	}
+	return nil
 }
 
 // ValidateRoot runs `caddy validate` against an existing root Caddyfile (no reload, no snippet write).
