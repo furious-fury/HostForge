@@ -25,7 +25,7 @@ type DeleteDatabaseRuntimeResult struct {
 
 // DeleteDatabaseServiceAndRuntime removes only the database containers and then
 // starts the retained-volume window. Named volumes are deliberately untouched.
-func DeleteDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, serviceID, actor string) (DeleteDatabaseRuntimeResult, error) {
+func DeleteDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, serviceID, actor string, routeNotifier RouteNotifier) (DeleteDatabaseRuntimeResult, error) {
 	service, err := store.GetService(ctx, serviceID)
 	if err != nil {
 		return DeleteDatabaseRuntimeResult{}, err
@@ -64,7 +64,7 @@ func DeleteDatabaseServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg 
 				return DeleteDatabaseRuntimeResult{}, ErrCode("database_gateway_revocation_unavailable", errors.New("gateway configuration and encryption key are required to revoke external access"))
 			}
 			for _, instance := range instances {
-				if err := revokePostgreSQLGatewayRouteForDeletion(ctx, log, cfg, store, sealer, client, instance); err != nil {
+				if err := revokePostgreSQLGatewayRouteForDeletion(ctx, log, cfg, store, sealer, client, instance, routeNotifier); err != nil {
 					return DeleteDatabaseRuntimeResult{}, ErrCode("database_gateway_revocation_failed", err)
 				}
 			}

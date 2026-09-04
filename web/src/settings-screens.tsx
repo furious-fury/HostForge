@@ -281,13 +281,12 @@ export function ApplicationSettings({ applicationID }: { applicationID: string }
   })
   const remove = useMutation({
     mutationFn: () => api.deleteApplication(applicationID),
-    onSuccess: async (result) => {
+    onSuccess: async () => {
       navigate("/applications", { replace: true })
       await queryClient.cancelQueries({ queryKey: queryKeys.application(applicationID) })
       queryClient.removeQueries({ queryKey: queryKeys.application(applicationID) })
       await queryClient.invalidateQueries({ queryKey: queryKeys.applications })
-      if (result.routing_warning) toast(`Application deleted, but Caddy routing cleanup needs attention: ${result.routing_warning.replaceAll("_", " ")}. Run route synchronization from Settings.`, { tone: "warning", duration: 15000 })
-      else toast("Application deleted.")
+      toast("Application deleted.")
     },
   })
   if (query.isPending) return <Loading />
@@ -344,7 +343,7 @@ export function ServiceSettings({ applicationID, serviceID }: { applicationID: s
     mutationFn: () => api.updateService(serviceID, draft),
     onSuccess: async () => { setDraft({}); await queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) }); await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }) },
   })
-  const remove = useMutation({ mutationFn: () => api.deleteService(serviceID, query.data?.service.service_type === "database" ? query.data.service.name : undefined), onSuccess: async (result) => { await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }); if (result.routing_warning) toast(`Service deleted, but Caddy routing cleanup needs attention: ${result.routing_warning.replaceAll("_", " ")}. Run route synchronization from Settings.`, { tone: "warning", duration: 15000 }); else toast("Service deleted."); navigate("/applications/" + applicationID + "/services", { replace: true }) } })
+  const remove = useMutation({ mutationFn: () => api.deleteService(serviceID, query.data?.service.service_type === "database" ? query.data.service.name : undefined), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.application(applicationID) }); toast("Service deleted."); navigate("/applications/" + applicationID + "/services", { replace: true }) } })
 	const createDatabaseBinding = useMutation({ mutationFn: ({ instanceID, consumerServiceID, variableKey, replaceExisting }: { instanceID: string; consumerServiceID: string; variableKey: string; replaceExisting: boolean }) => api.createDatabaseBinding(instanceID, { consumer_service_id: consumerServiceID, variable_key: variableKey, replace_existing: replaceExisting }), onSuccess: async () => { toast("Application connected. Redeploy it to receive the database URL."); await queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) }) } })
 	const updateDatabaseBinding = useMutation({ mutationFn: ({ bindingID, consumerServiceID, variableKey, replaceExisting }: { bindingID: string; consumerServiceID: string; variableKey: string; replaceExisting: boolean }) => api.updateDatabaseBinding(bindingID, { consumer_service_id: consumerServiceID, variable_key: variableKey, replace_existing: replaceExisting }), onSuccess: async () => { toast("Application connection updated. Redeploy it to apply the change."); await queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) }) } })
 	const deleteDatabaseBinding = useMutation({ mutationFn: (bindingID: string) => api.deleteDatabaseBinding(bindingID), onSuccess: async () => { toast("Application disconnected from this database."); await queryClient.invalidateQueries({ queryKey: queryKeys.service(serviceID) }) } })

@@ -22,6 +22,17 @@ const (
 	SSLStatusError   = "ERROR"
 )
 
+// Domain publication state (domains.publish_state), separate from
+// ssl_status. publish_state answers "is Caddy currently routing this
+// domain"; ssl_status answers "does a certificate exist for it". They used
+// to be the same field, which meant "no upstream yet" and "Caddy actually
+// failed" were indistinguishable.
+const (
+	PublishStatePublished   = "published"
+	PublishStateUnpublished = "unpublished"
+	PublishStateInvalid     = "invalid"
+)
+
 // GitHubAppMeta is non-sensitive metadata for the singleton GitHub App row.
 type GitHubAppMeta struct {
 	AppID     int64
@@ -114,6 +125,8 @@ type Domain struct {
 	SSLStatus        string
 	LastCertMessage  string // operator summary from optional cert poll (not ssl_status / route sync)
 	CertCheckedAtRaw string // RFC3339 from DB; empty if never polled
+	PublishState     string // published | unpublished | invalid -- is Caddy routing this domain
+	PublishError     string // validator output when PublishState is invalid; reconcile failure otherwise
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }

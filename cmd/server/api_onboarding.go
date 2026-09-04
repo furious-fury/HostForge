@@ -10,7 +10,6 @@ import (
 	"github.com/furious-fury/HostForge/internal/caddy"
 	"github.com/furious-fury/HostForge/internal/dnsops"
 	"github.com/furious-fury/HostForge/internal/repository"
-	platformservices "github.com/furious-fury/HostForge/internal/services"
 )
 
 type onboardingCompleteRequest struct {
@@ -112,10 +111,8 @@ func (s *server) handleOnboardingComplete(w http.ResponseWriter, r *http.Request
 	}
 	if created, provisionErr := s.store.EnsureActivePlatformServiceDomains(r.Context()); provisionErr != nil {
 		s.requestLog(r).Warn("provision existing platform share domains failed", "error", provisionErr)
-	} else if created > 0 {
-		if syncErr := platformservices.SyncCaddyRoutes(r.Context(), s.requestLog(r), s.cfg, s.store); syncErr != nil {
-			s.requestLog(r).Warn("sync existing platform share domains failed", "created", created, "error", syncErr)
-		}
+	} else if created > 0 && s.routeNotifier != nil {
+		s.routeNotifier.Notify()
 	}
 	_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "configuration", Status: "completed", Actor: "operator", Message: "Onboarding completed", Detail: domain})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "bootstrap_disabled": true, "platform_domain": domain})

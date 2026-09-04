@@ -9,6 +9,36 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+### Changed
+
+- **Caddy is no longer synced inline during a deploy.** A deploy's cutover
+  used to call Caddy synchronously: a reload failure rolled the service's
+  active deployment back to the previous one, marked the just-finished
+  deploy failed, and tore down a container that was running and passing
+  health checks -- all because of an edge-routing hiccup unrelated to
+  whether the deploy itself succeeded (ADR-0002 §5.1, §6.1). Deploys now
+  notify a background reconciler and move on; a domain with no published
+  route yet reads `unpublished`, not failed, and converges automatically
+  within one reconcile pass (interval via
+  `HOSTFORGE_CADDY_RECONCILE_INTERVAL_SECONDS`, default 30). The same fix
+  applies to domain create/update/delete, which no longer rolls back a
+  database write over a Caddy hiccup either.
+- **Certificate state and route state are no longer the same field.**
+  `ssl_status` used to mean three different things depending on which code
+  last wrote it: no upstream yet, a failed Caddy reload, or a successful
+  one. It is now owned by the certificate poller, which is the only thing
+  that actually inspects a certificate, and reflects only that. Whether
+  Caddy is currently routing a domain is the new `publish_state` column
+  (`published` / `unpublished` / `invalid`), independent of `ssl_status`.
+
+### Removed
+
+- The `caddy_sync` field on domain create/update/delete responses, and
+  `routing_warning` on application/service delete. Both reported a
+  synchronous Caddy outcome that no longer exists now that routing is
+  eventually consistent; a domain's own `publish_state` reports the current
+  state instead.
+
 ## [0.9.7] - 2026-09-04
 
 ### Added

@@ -29,6 +29,7 @@ type deployOperationHandler struct {
 	sealer          *envcrypt.Sealer
 	dockerClient    *mobyclient.Client
 	authResolverFor func(context.Context) GitAuthResolver
+	routeNotifier   RouteNotifier
 }
 
 // NewDeployOperationHandler builds the handler to register with the deploy
@@ -40,8 +41,11 @@ type deployOperationHandler struct {
 // at process startup -- before an operator has configured a GitHub App --
 // would permanently bake in "no app configured" for every deploy this
 // process ever runs, even after one is added later.
-func NewDeployOperationHandler(log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, authResolverFor func(context.Context) GitAuthResolver) workers.Handler {
-	return &deployOperationHandler{log: log, cfg: cfg, store: store, sealer: sealer, dockerClient: dockerClient, authResolverFor: authResolverFor}
+//
+// routeNotifier is asked to converge Caddy after every successful cutover
+// (ADR-0002 §5.1, §6.1); it may be nil in tests that do not exercise routing.
+func NewDeployOperationHandler(log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, authResolverFor func(context.Context) GitAuthResolver, routeNotifier RouteNotifier) workers.Handler {
+	return &deployOperationHandler{log: log, cfg: cfg, store: store, sealer: sealer, dockerClient: dockerClient, authResolverFor: authResolverFor, routeNotifier: routeNotifier}
 }
 
 func (h *deployOperationHandler) Kind() string { return repository.DeployOperationKind }
@@ -75,7 +79,7 @@ func (h *deployOperationHandler) Handle(ctx context.Context, op workers.Operatio
 	// loading (and caching) the GitHub App client is process lifetime, not
 	// this operation's, and must not be cancelled by this deploy's own lease
 	// or cancellation.
-	_, execErr := ExecuteDeploy(execCtx, log, h.cfg, h.store, job, h.sealer, h.dockerClient, h.authResolverFor(context.Background()))
+	_, execErr := ExecuteDeploy(execCtx, log, h.cfg, h.store, job, h.sealer, h.dockerClient, h.authResolverFor(context.Background()), h.routeNotifier)
 
 	// ExecuteDeploy already writes its own terminal status onto deployments,
 	// which the claim/complete projection (internal/repository/operations_deploy.go)

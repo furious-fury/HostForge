@@ -74,15 +74,9 @@ func (s *server) handleServiceDomains(w http.ResponseWriter, r *http.Request, ap
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "create_domain_failed"})
 				return
 			}
-			sync := s.caddySyncAfterDomainChange(r.Context(), s.requestLog(r))
-			if sync.Attempted && !sync.OK {
-				_ = s.store.DeleteServiceDomain(r.Context(), applicationID, environmentID, item.ID)
-				_ = s.caddySyncAfterDomainChange(r.Context(), s.requestLog(r))
-				writeJSON(w, http.StatusBadGateway, map[string]any{"status": "error", "error": "caddy_sync_failed", "caddy_sync": sync})
-				return
-			}
+			s.notifyDomainChanged()
 			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: applicationID, ServiceID: item.ServiceID, EnvironmentID: environmentID, EventType: "domain", Status: "created", Actor: "operator", Message: "Domain added", Detail: item.DomainName})
-			writeJSON(w, http.StatusCreated, map[string]any{"status": "created", "domain": item, "caddy_sync": sync})
+			writeJSON(w, http.StatusCreated, map[string]any{"status": "created", "domain": item})
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
 		}
@@ -117,15 +111,9 @@ func (s *server) handleServiceDomains(w http.ResponseWriter, r *http.Request, ap
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "update_domain_failed"})
 			return
 		}
-		sync := s.caddySyncAfterDomainChange(r.Context(), s.requestLog(r))
-		if sync.Attempted && !sync.OK {
-			_, _ = s.store.UpdateServiceDomain(r.Context(), applicationID, environmentID, domainID, existing.DomainName, existing.ServiceID)
-			_ = s.caddySyncAfterDomainChange(r.Context(), s.requestLog(r))
-			writeJSON(w, http.StatusBadGateway, map[string]any{"status": "error", "error": "caddy_sync_failed", "caddy_sync": sync})
-			return
-		}
+		s.notifyDomainChanged()
 		_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: applicationID, ServiceID: item.ServiceID, EnvironmentID: environmentID, EventType: "domain", Status: "updated", Actor: "operator", Message: "Domain updated", Detail: item.DomainName})
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "domain": item, "caddy_sync": sync})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "domain": item})
 	case http.MethodDelete:
 		if err := s.store.DeleteServiceDomain(r.Context(), applicationID, environmentID, domainID); err != nil {
 			if errors.Is(err, repository.ErrManagedDomain) {
@@ -135,17 +123,9 @@ func (s *server) handleServiceDomains(w http.ResponseWriter, r *http.Request, ap
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": "delete_domain_failed"})
 			return
 		}
-		sync := s.caddySyncAfterDomainChange(r.Context(), s.requestLog(r))
-		if sync.Attempted && !sync.OK {
-			if restoreErr := s.store.RestoreServiceDomain(r.Context(), existing); restoreErr != nil {
-				s.requestLog(r).Error("restore domain after caddy sync failure", "domain_id", existing.ID, "error", restoreErr)
-			}
-			_ = s.caddySyncAfterDomainChange(r.Context(), s.requestLog(r))
-			writeJSON(w, http.StatusBadGateway, map[string]any{"status": "error", "error": "caddy_sync_failed", "caddy_sync": sync})
-			return
-		}
+		s.notifyDomainChanged()
 		_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: applicationID, ServiceID: existing.ServiceID, EnvironmentID: environmentID, EventType: "domain", Status: "deleted", Actor: "operator", Message: "Domain removed", Detail: existing.DomainName})
-		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "domain_id": domainID, "caddy_sync": sync})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "domain_id": domainID})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
 	}

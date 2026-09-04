@@ -132,7 +132,6 @@ describe("operations screens", () => {
         created_at: "2026-07-01T00:00:00Z",
         updated_at: "2026-07-01T00:00:00Z",
       },
-      caddy_sync: { attempted: false, ok: false },
     })
 
     renderScreen(<DomainsScreen scope="service" applicationID={application.id} service={service.id} />)

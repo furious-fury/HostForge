@@ -13,8 +13,19 @@ import (
 	mobyclient "github.com/moby/moby/client"
 )
 
-type DeleteRuntimeResult struct {
-	CaddySyncError string
+type DeleteRuntimeResult struct{}
+
+// notifyCaddyAfterDelete asks the reconciler to converge after a delete
+// removes routes. Gated the same way the old synchronous sync was: an
+// operator can opt out of auto-sync on every mutation. Never fails -- Notify
+// cannot error, and routing is eventually consistent (ADR-0002 §6.1), so a
+// delete's HTTP response no longer carries a routing_warning: there is
+// nothing synchronous left to report a warning about.
+func notifyCaddyAfterDelete(cfg *config.Config, routeNotifier RouteNotifier) {
+	if routeNotifier == nil || (!cfg.SyncCaddy && !cfg.DomainSyncAfterMutate) {
+		return
+	}
+	routeNotifier.Notify()
 }
 
 func cleanupServiceRuntime(ctx context.Context, log *slog.Logger, store *repository.Store, dockerClient *mobyclient.Client, serviceID string) error {
@@ -70,20 +81,7 @@ func cleanupServiceRuntime(ctx context.Context, log *slog.Logger, store *reposit
 	return nil
 }
 
-func syncCaddyAfterDelete(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store) string {
-	if !cfg.SyncCaddy && !cfg.DomainSyncAfterMutate {
-		return ""
-	}
-	if err := SyncCaddyRoutes(ctx, log, cfg, store); err != nil {
-		if log != nil {
-			log.Error("caddy sync after delete failed", "error", err)
-		}
-		return FirstPublicCode(err)
-	}
-	return ""
-}
-
-func DeleteServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, dockerClient *mobyclient.Client, serviceID string) (DeleteRuntimeResult, error) {
+func DeleteServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, dockerClient *mobyclient.Client, serviceID string, routeNotifier RouteNotifier) (DeleteRuntimeResult, error) {
 	service, err := store.GetService(ctx, serviceID)
 	if err != nil {
 		return DeleteRuntimeResult{}, err
@@ -97,10 +95,11 @@ func DeleteServiceAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.
 	if err := store.DeleteService(ctx, serviceID); err != nil {
 		return DeleteRuntimeResult{}, err
 	}
-	return DeleteRuntimeResult{CaddySyncError: syncCaddyAfterDelete(ctx, log, cfg, store)}, nil
+	notifyCaddyAfterDelete(cfg, routeNotifier)
+	return DeleteRuntimeResult{}, nil
 }
 
-func DeleteApplicationAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, dockerClient *mobyclient.Client, applicationID string) (DeleteRuntimeResult, error) {
+func DeleteApplicationAndRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, dockerClient *mobyclient.Client, applicationID string, routeNotifier RouteNotifier) (DeleteRuntimeResult, error) {
 	environments, err := store.ListApplicationEnvironments(ctx, applicationID)
 	if err != nil {
 		return DeleteRuntimeResult{}, err
@@ -132,5 +131,6 @@ func DeleteApplicationAndRuntime(ctx context.Context, log *slog.Logger, cfg *con
 			}
 		}
 	}
-	return DeleteRuntimeResult{CaddySyncError: syncCaddyAfterDelete(ctx, log, cfg, store)}, nil
+	notifyCaddyAfterDelete(cfg, routeNotifier)
+	return DeleteRuntimeResult{}, nil
 }

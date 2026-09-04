@@ -22,17 +22,19 @@ type ServiceDomain struct {
 	SSLStatus        string `json:"ssl_status"`
 	LastCertMessage  string `json:"last_cert_message,omitempty"`
 	CertCheckedAtRaw string `json:"cert_checked_at,omitempty"`
+	PublishState     string `json:"publish_state"`
+	PublishError     string `json:"publish_error,omitempty"`
 	CreatedAt        string `json:"created_at"`
 	UpdatedAt        string `json:"updated_at"`
 }
 
 func scanServiceDomain(scanner interface{ Scan(...any) error }) (ServiceDomain, error) {
 	var item ServiceDomain
-	err := scanner.Scan(&item.ID, &item.ApplicationID, &item.EnvironmentID, &item.ServiceID, &item.DomainName, &item.Kind, &item.SSLStatus, &item.LastCertMessage, &item.CertCheckedAtRaw, &item.CreatedAt, &item.UpdatedAt)
+	err := scanner.Scan(&item.ID, &item.ApplicationID, &item.EnvironmentID, &item.ServiceID, &item.DomainName, &item.Kind, &item.SSLStatus, &item.LastCertMessage, &item.CertCheckedAtRaw, &item.PublishState, &item.PublishError, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
 
-const serviceDomainColumns = `id,application_id,environment_id,service_id,domain_name,kind,ssl_status,last_cert_message,cert_checked_at,created_at,updated_at`
+const serviceDomainColumns = `id,application_id,environment_id,service_id,domain_name,kind,ssl_status,last_cert_message,cert_checked_at,publish_state,publish_error,created_at,updated_at`
 
 func (s *Store) CreateServiceDomain(ctx context.Context, applicationID, environmentID, serviceID, domainName string) (ServiceDomain, error) {
 	applicationID = strings.TrimSpace(applicationID)
@@ -126,9 +128,9 @@ func (s *Store) UpdateServiceDomain(ctx context.Context, applicationID, environm
 		return ServiceDomain{}, ErrEnvironmentNotFound
 	}
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE domains SET domain_name=?,service_id=?,ssl_status=?,last_cert_message='',cert_checked_at='',updated_at=?
+		UPDATE domains SET domain_name=?,service_id=?,ssl_status=?,last_cert_message='',cert_checked_at='',publish_state=?,publish_error='',updated_at=?
 		WHERE id=? AND application_id=? AND environment_id=?`,
-		strings.TrimSpace(domainName), strings.TrimSpace(serviceID), models.SSLStatusPending, time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(id), strings.TrimSpace(applicationID), strings.TrimSpace(environmentID))
+		strings.TrimSpace(domainName), strings.TrimSpace(serviceID), models.SSLStatusPending, models.PublishStateUnpublished, time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(id), strings.TrimSpace(applicationID), strings.TrimSpace(environmentID))
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return ServiceDomain{}, ErrDuplicateDomain
@@ -165,11 +167,14 @@ func (s *Store) RestoreServiceDomain(ctx context.Context, item ServiceDomain) er
 	if item.Kind == "" {
 		item.Kind = "custom"
 	}
+	if item.PublishState == "" {
+		item.PublishState = models.PublishStateUnpublished
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO domains(id,application_id,environment_id,service_id,domain_name,kind,ssl_status,last_cert_message,cert_checked_at,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		INSERT INTO domains(id,application_id,environment_id,service_id,domain_name,kind,ssl_status,last_cert_message,cert_checked_at,publish_state,publish_error,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		item.ID, item.ApplicationID, item.EnvironmentID, item.ServiceID, item.DomainName, item.Kind, item.SSLStatus,
-		item.LastCertMessage, item.CertCheckedAtRaw, item.CreatedAt, item.UpdatedAt)
+		item.LastCertMessage, item.CertCheckedAtRaw, item.PublishState, item.PublishError, item.CreatedAt, item.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("restore service domain: %w", err)
 	}

@@ -63,8 +63,15 @@ func StartCaddyCertPollLoop(ctx context.Context, log *slog.Logger, cfg *config.C
 	}()
 }
 
-// PollCaddyCertObservations updates last_cert_message / cert_checked_at for each domain row.
-// It never changes ssl_status (route sync remains separate).
+// PollCaddyCertObservations updates last_cert_message / cert_checked_at for
+// each domain row, and now owns ssl_status too: it is the only signal in the
+// codebase that actually inspects a certificate, so it is the only thing
+// that should say whether one exists. This is a real split from
+// publish_state (internal/reconcile/caddy), which answers a different
+// question -- "is Caddy currently routing this domain" -- and is owned by
+// the reconciler. A domain can be published with no certificate yet
+// (ACME still pending) or have a valid certificate for a route that was
+// since unpublished; the two fields are allowed to disagree.
 func PollCaddyCertObservations(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store) error {
 	tickStart := time.Now()
 	domains, err := store.ListAllDomains(ctx)
@@ -82,10 +89,16 @@ func PollCaddyCertObservations(ctx context.Context, log *slog.Logger, cfg *confi
 		certRoot = filepath.Join(storageRoot, "certificates")
 	}
 	for _, d := range domains {
-		msg := buildCertObservationMessage(storageRoot, certRoot, d.DomainName, adminNote)
+		observation := observeCertificateFile(certRoot, d.DomainName)
+		msg := buildCertObservationMessage(storageRoot, observation, adminNote)
 		msg = truncateStr(msg, maxCertMessageLen)
 		if err := store.UpdateDomainCertObservation(ctx, d.ID, msg, now); err != nil && log != nil {
 			log.Warn("update cert observation", "domain_id", d.ID, "error", err)
+		}
+		if storageRoot != "" {
+			if err := store.UpdateDomainSSLStatus(ctx, d.ID, observation.sslStatus); err != nil && log != nil {
+				log.Warn("update domain ssl status", "domain_id", d.ID, "status", observation.sslStatus, "error", err)
+			}
 		}
 	}
 	dur := time.Since(tickStart).Milliseconds()
@@ -114,16 +127,21 @@ func recordCertPollObs(ctx context.Context, log *slog.Logger, started time.Time,
 	})
 }
 
-func buildCertObservationMessage(storageRoot, certRoot, domainName, adminNote string) string {
+// certFileObservation is what inspecting one domain's on-disk certificate
+// found: a human message for last_cert_message, and the ssl_status it
+// implies. sslStatus is only meaningful when storageRoot was configured;
+// PollCaddyCertObservations skips the ssl_status write otherwise.
+type certFileObservation struct {
+	message   string
+	sslStatus string
+}
+
+func buildCertObservationMessage(storageRoot string, observation certFileObservation, adminNote string) string {
 	var parts []string
 	if storageRoot == "" {
 		parts = append(parts, "storage: unset")
-	} else if certRoot != "" {
-		if m, ok := summarizeManagedCertFile(certRoot, domainName); ok {
-			parts = append(parts, m)
-		} else {
-			parts = append(parts, "storage: no_managed_leaf_pem")
-		}
+	} else {
+		parts = append(parts, observation.message)
 	}
 	if strings.TrimSpace(adminNote) != "" {
 		parts = append(parts, adminNote)
@@ -131,11 +149,19 @@ func buildCertObservationMessage(storageRoot, certRoot, domainName, adminNote st
 	return strings.Join(parts, "; ")
 }
 
-func summarizeManagedCertFile(certRoot, domain string) (string, bool) {
+// observeCertificateFile inspects the newest managed leaf certificate for
+// domain under certRoot and reports both a diagnostic message and the
+// ssl_status it implies. certRoot == "" (storage root unset) reports
+// PENDING -- there is no signal either way, and PENDING is the row's
+// pre-existing default, so this is a no-op status rather than a claim.
+func observeCertificateFile(certRoot, domain string) certFileObservation {
+	if certRoot == "" {
+		return certFileObservation{message: "", sslStatus: models.SSLStatusPending}
+	}
 	pattern := filepath.Join(certRoot, "*", domain, domain+".crt")
 	matches, err := filepath.Glob(pattern)
 	if err != nil || len(matches) == 0 {
-		return "", false
+		return certFileObservation{message: "storage: no_managed_leaf_pem", sslStatus: models.SSLStatusPending}
 	}
 	var best string
 	var bestMod time.Time
@@ -149,19 +175,19 @@ func summarizeManagedCertFile(certRoot, domain string) (string, bool) {
 		}
 	}
 	if best == "" {
-		return "", false
+		return certFileObservation{message: "storage: no_managed_leaf_pem", sslStatus: models.SSLStatusPending}
 	}
 	data, err := os.ReadFile(best)
 	if err != nil {
-		return fmt.Sprintf("storage: read_err path=%s", filepath.Base(best)), true
+		return certFileObservation{message: fmt.Sprintf("storage: read_err path=%s", filepath.Base(best)), sslStatus: models.SSLStatusError}
 	}
 	block, _ := pem.Decode(data)
 	if block == nil {
-		return "storage: invalid_pem", true
+		return certFileObservation{message: "storage: invalid_pem", sslStatus: models.SSLStatusError}
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return "storage: parse_cert_failed", true
+		return certFileObservation{message: "storage: parse_cert_failed", sslStatus: models.SSLStatusError}
 	}
 	exp := cert.NotAfter.UTC().Format(time.RFC3339)
 	iss := strings.TrimSpace(cert.Issuer.CommonName)
@@ -169,10 +195,13 @@ func summarizeManagedCertFile(certRoot, domain string) (string, bool) {
 		iss = "unknown_issuer"
 	}
 	msg := fmt.Sprintf("leaf_expires=%s issuer=%s", exp, iss)
+	if time.Now().After(cert.NotAfter) {
+		return certFileObservation{message: msg + " expired=true", sslStatus: models.SSLStatusError}
+	}
 	if time.Until(cert.NotAfter) < 14*24*time.Hour {
 		msg += " expiring_soon=true"
 	}
-	return msg, true
+	return certFileObservation{message: msg, sslStatus: models.SSLStatusActive}
 }
 
 func probeCaddyAdminConfig(ctx context.Context, cfg *config.Config) (string, error) {

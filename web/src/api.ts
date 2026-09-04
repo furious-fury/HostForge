@@ -508,14 +508,13 @@ export type DomainDTO = {
   ssl_status: "PENDING" | "ACTIVE" | "ERROR"
   last_cert_message?: string
   cert_checked_at?: string
+  // Whether Caddy is currently routing this domain, independent of
+  // ssl_status (ADR-0002 §6, §19). "invalid" is quarantined out of the
+  // fleet render until the row changes.
+  publish_state?: "published" | "unpublished" | "invalid"
+  publish_error?: string
   created_at: string
   updated_at: string
-}
-
-export type CaddySyncOutcomeDTO = {
-  attempted: boolean
-  ok: boolean
-  error?: string
 }
 
 export type DNSGuidanceDTO = {
@@ -533,7 +532,6 @@ export type DomainMutationDTO = {
   status: string
   domain?: DomainDTO
   domain_id?: string
-  caddy_sync: CaddySyncOutcomeDTO
 }
 
 export type DeleteOutcomeDTO = {

@@ -55,12 +55,13 @@ type databaseOperationHandler struct {
 	dataDir          string
 	minFreeDiskBytes int64
 	cfg              *config.Config
+	routeNotifier    RouteNotifier
 }
 
 // NewDatabaseOperationHandlers builds the handler set to register with the
 // operations runtime.
 func NewDatabaseOperationHandlers(log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer,
-	dockerClient *mobyclient.Client, dataDir string, minFreeDiskBytes int64, cfg *config.Config) []workers.Handler {
+	dockerClient *mobyclient.Client, dataDir string, minFreeDiskBytes int64, cfg *config.Config, routeNotifier RouteNotifier) []workers.Handler {
 	handlers := make([]workers.Handler, 0, len(databaseOperationKinds))
 	for _, operationType := range databaseOperationKinds {
 		handlers = append(handlers, &databaseOperationHandler{
@@ -72,6 +73,7 @@ func NewDatabaseOperationHandlers(log *slog.Logger, store *repository.Store, sea
 			dataDir:          dataDir,
 			minFreeDiskBytes: minFreeDiskBytes,
 			cfg:              cfg,
+			routeNotifier:    routeNotifier,
 		})
 	}
 	return handlers
@@ -86,7 +88,7 @@ func (h *databaseOperationHandler) Handle(ctx context.Context, op workers.Operat
 	}
 
 	processDatabaseOperation(ctx, h.log, h.store, h.sealer, h.dockerClient, operation,
-		h.dataDir, h.minFreeDiskBytes, h.cfg)
+		h.dataDir, h.minFreeDiskBytes, h.cfg, h.routeNotifier)
 
 	// processDatabaseOperation reports its own outcome, so by now the row
 	// should be terminal. Re-read it: if it is still running, the operation

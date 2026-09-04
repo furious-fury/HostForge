@@ -20,9 +20,7 @@ func (s *server) serviceEnvironmentStates(r *http.Request, service repository.Se
 	states := make([]map[string]any, 0, len(bindings))
 	onboarding, onboardingErr := s.store.GetOnboardingState(r.Context())
 	routeSyncNeeded := false
-	reconciledStateIndexes := make([]int, 0)
 	for _, binding := range bindings {
-		reconciled := false
 		state := map[string]any{
 			"environment_id": binding.EnvironmentID, "branch": binding.Branch, "auto_deploy": binding.AutoDeploy,
 			"desired_state": binding.DesiredState, "active_deployment_id": binding.ActiveDeploymentID,
@@ -55,7 +53,6 @@ func (s *server) serviceEnvironmentStates(r *http.Request, service repository.Se
 				} else if generated.DomainName != "" {
 					domains = []repository.ServiceDomain{generated}
 					routeSyncNeeded = routeSyncNeeded || created
-					reconciled = created
 				}
 			}
 		}
@@ -65,17 +62,13 @@ func (s *server) serviceEnvironmentStates(r *http.Request, service repository.Se
 			state["public_url_status"] = "ready"
 		}
 		states = append(states, state)
-		if reconciled {
-			reconciledStateIndexes = append(reconciledStateIndexes, len(states)-1)
-		}
 	}
-	if routeSyncNeeded {
-		if err := platformservices.SyncCaddyRoutes(r.Context(), s.requestLog(r), s.cfg, s.store); err != nil {
-			s.requestLog(r).Warn("sync reconciled platform domains failed", "service_id", service.ID, "error", err)
-			for _, index := range reconciledStateIndexes {
-				states[index]["public_url_status"] = "route_sync_failed"
-			}
-		}
+	// Route sync is a fire-and-forget reconcile notify, not a synchronous call
+	// (ADR-0002 §6.1): there is no error path left to downgrade
+	// public_url_status with. It stays "ready" and converges to published
+	// within one reconcile pass.
+	if routeSyncNeeded && s.routeNotifier != nil {
+		s.routeNotifier.Notify()
 	}
 	return states
 }
@@ -380,7 +373,7 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 					writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"status": "error", "error": "database_delete_confirmation_mismatch"})
 					return
 				}
-				result, err := platformservices.DeleteDatabaseServiceAndRuntime(r.Context(), s.log, s.cfg, s.store, s.envSealer, s.dockerClient, service.ID, "operator")
+				result, err := platformservices.DeleteDatabaseServiceAndRuntime(r.Context(), s.log, s.cfg, s.store, s.envSealer, s.dockerClient, service.ID, "operator", s.routeNotifier)
 				if err != nil {
 					writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": publicAPIError(err, "delete_database_service_failed")})
 					return
@@ -395,20 +388,13 @@ func (s *server) handleServices(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			result, err := platformservices.DeleteServiceAndRuntime(r.Context(), s.log, s.cfg, s.store, s.dockerClient, service.ID)
+			_, err := platformservices.DeleteServiceAndRuntime(r.Context(), s.log, s.cfg, s.store, s.dockerClient, service.ID, s.routeNotifier)
 			if err != nil {
 				writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": publicAPIError(err, "delete_service_failed")})
 				return
 			}
-			response := map[string]any{"status": "deleted"}
-			eventStatus, eventDetail := "deleted", service.Name
-			if result.CaddySyncError != "" {
-				response["routing_warning"] = result.CaddySyncError
-				eventStatus = "warning"
-				eventDetail += "; routing cleanup: " + result.CaddySyncError
-			}
-			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: service.ApplicationID, EventType: "service", Status: eventStatus, Actor: "operator", Message: "Service deleted", Detail: eventDetail})
-			writeJSON(w, http.StatusOK, response)
+			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: service.ApplicationID, EventType: "service", Status: "deleted", Actor: "operator", Message: "Service deleted", Detail: service.Name})
+			writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
 		}
