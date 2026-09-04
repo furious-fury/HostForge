@@ -38,7 +38,7 @@ func TestDeleteDatabaseServiceRetainsVolumeMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	result, err := DeleteDatabaseServiceAndRuntime(ctx, log, nil, store, nil, nil, created.Service.ID, "operator")
+	result, err := DeleteDatabaseServiceAndRuntime(ctx, log, nil, store, nil, nil, created.Service.ID, "operator", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestDeleteDatabaseServiceRejectsRunningOperation(t *testing.T) {
 	if _, err := store.UpdateDatabaseOperation(ctx, created.Operations[0].ID, "running", "image_pull", 40, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	_, err = DeleteDatabaseServiceAndRuntime(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, store, nil, nil, created.Service.ID, "operator")
+	_, err = DeleteDatabaseServiceAndRuntime(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, store, nil, nil, created.Service.ID, "operator", nil)
 	if err == nil || PublicCode(err) != "database_operation_in_progress" {
 		t.Fatalf("running database operation was not protected: %v", err)
 	}

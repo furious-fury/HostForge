@@ -54,7 +54,7 @@ func newTestHandler(t *testing.T, store *repository.Store, operationType string)
 // after it has been claimed, which is the worst place to discover it.
 func TestEveryClaimableOperationTypeHasAHandler(t *testing.T) {
 	t.Parallel()
-	handlers := NewDatabaseOperationHandlers(discardLogger(), nil, nil, nil, "", 0, nil)
+	handlers := NewDatabaseOperationHandlers(discardLogger(), nil, nil, nil, "", 0, nil, nil)
 
 	registered := map[string]bool{}
 	for _, handler := range handlers {

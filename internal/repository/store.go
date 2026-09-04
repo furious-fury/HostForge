@@ -288,7 +288,7 @@ func isUniqueConstraint(err error) bool {
 }
 
 func (s *Store) ListAllDomains(ctx context.Context) ([]models.Domain, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,application_id,environment_id,service_id,domain_name,kind,ssl_status,last_cert_message,cert_checked_at,created_at,updated_at FROM domains ORDER BY domain_name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,application_id,environment_id,service_id,domain_name,kind,ssl_status,last_cert_message,cert_checked_at,publish_state,publish_error,created_at,updated_at FROM domains ORDER BY domain_name`)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +297,7 @@ func (s *Store) ListAllDomains(ctx context.Context) ([]models.Domain, error) {
 	for rows.Next() {
 		var item models.Domain
 		var createdAt, updatedAt string
-		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.EnvironmentID, &item.ServiceID, &item.DomainName, &item.Kind, &item.SSLStatus, &item.LastCertMessage, &item.CertCheckedAtRaw, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.EnvironmentID, &item.ServiceID, &item.DomainName, &item.Kind, &item.SSLStatus, &item.LastCertMessage, &item.CertCheckedAtRaw, &item.PublishState, &item.PublishError, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = parseTime(createdAt)
@@ -321,10 +321,39 @@ func (s *Store) UpdateDomainSSLStatus(ctx context.Context, domainID, status stri
 	return err
 }
 
+// SetDomainPublishState records whether Caddy is currently routing one
+// domain. publishError carries the validator or reconcile failure message
+// when state is PublishStateInvalid or a reconcile attempt failed; callers
+// pass "" on a clean PublishStatePublished/PublishStateUnpublished write.
+func (s *Store) SetDomainPublishState(ctx context.Context, domainID, state, publishError string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE domains SET publish_state=?,publish_error=?,updated_at=? WHERE id=?`,
+		strings.TrimSpace(state), publishError, time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(domainID))
+	return err
+}
+
+// SetDomainsPublishState is the bulk form of SetDomainPublishState, used by
+// the reconciler to mark every route in one outcome (published or
+// unpublished) with a single statement rather than one UPDATE per domain.
+func (s *Store) SetDomainsPublishState(ctx context.Context, domainIDs []string, state string) error {
+	if len(domainIDs) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(domainIDs))
+	args := make([]any, 0, len(domainIDs)+2)
+	args = append(args, strings.TrimSpace(state), time.Now().UTC().Format(time.RFC3339))
+	for i, id := range domainIDs {
+		placeholders[i] = "?"
+		args = append(args, strings.TrimSpace(id))
+	}
+	query := `UPDATE domains SET publish_state=?,updated_at=? WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	_, err := s.db.ExecContext(ctx, query, args...)
+	return err
+}
+
 func (s *Store) ListDomainRoutes(ctx context.Context) ([]models.DomainRoute, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT d.id,d.application_id,d.environment_id,d.service_id,d.domain_name,d.kind,d.ssl_status,
-		       d.last_cert_message,d.cert_checked_at,d.created_at,d.updated_at,c.host_port
+		       d.last_cert_message,d.cert_checked_at,d.publish_state,d.publish_error,d.created_at,d.updated_at,c.host_port
 		FROM domains d
 		JOIN service_environments se ON se.service_id=d.service_id AND se.environment_id=d.environment_id
 		LEFT JOIN containers c ON c.deployment_id=se.active_deployment_id AND c.status='RUNNING'
@@ -338,7 +367,7 @@ func (s *Store) ListDomainRoutes(ctx context.Context) ([]models.DomainRoute, err
 		var item models.DomainRoute
 		var createdAt, updatedAt string
 		var hostPort sql.NullInt64
-		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.EnvironmentID, &item.ServiceID, &item.DomainName, &item.Kind, &item.SSLStatus, &item.LastCertMessage, &item.CertCheckedAtRaw, &createdAt, &updatedAt, &hostPort); err != nil {
+		if err := rows.Scan(&item.ID, &item.ApplicationID, &item.EnvironmentID, &item.ServiceID, &item.DomainName, &item.Kind, &item.SSLStatus, &item.LastCertMessage, &item.CertCheckedAtRaw, &item.PublishState, &item.PublishError, &createdAt, &updatedAt, &hostPort); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = parseTime(createdAt)

@@ -24,7 +24,7 @@ import (
 // StartDatabaseGatewayOperationLoop starts the gateway operation workers and
 // returns a WaitGroup that completes once they have all stopped. See
 // StartDatabaseOperationLoop for the drain contract; this loop follows it.
-func StartDatabaseGatewayOperationLoop(stopCtx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client) *sync.WaitGroup {
+func StartDatabaseGatewayOperationLoop(stopCtx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, routeNotifier RouteNotifier) *sync.WaitGroup {
 	var wg sync.WaitGroup
 	ctx := stopCtx
 	if cfg == nil || !cfg.DatabaseGatewaysEnabled {
@@ -57,7 +57,7 @@ func StartDatabaseGatewayOperationLoop(stopCtx context.Context, log *slog.Logger
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			runDatabaseGatewayWorker(stopCtx, log, cfg, store, sealer, dockerClient, workerID)
+			runDatabaseGatewayWorker(stopCtx, log, cfg, store, sealer, dockerClient, workerID, routeNotifier)
 		}()
 	}
 	wg.Add(1)
@@ -177,7 +177,7 @@ func reconcileDatabaseGatewayUsage(ctx context.Context, store *repository.Store,
 	return store.TouchDatabaseExternalCredentialUsage(ctx, roles, now)
 }
 
-func runDatabaseGatewayWorker(stopCtx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, workerID string) {
+func runDatabaseGatewayWorker(stopCtx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, workerID string, routeNotifier RouteNotifier) {
 	const leaseDuration = 2 * time.Minute
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -229,13 +229,13 @@ func runDatabaseGatewayWorker(stopCtx context.Context, log *slog.Logger, cfg *co
 				}
 			}
 		}()
-		processDatabaseGatewayOperation(operationCtx, log, cfg, store, sealer, dockerClient, operation)
+		processDatabaseGatewayOperation(operationCtx, log, cfg, store, sealer, dockerClient, operation, routeNotifier)
 		cancel()
 		<-leaseDone
 	}
 }
 
-func processDatabaseGatewayOperation(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, operation repository.DatabaseGatewayOperation) {
+func processDatabaseGatewayOperation(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, operation repository.DatabaseGatewayOperation, routeNotifier RouteNotifier) {
 	fail := func(code string, failure error) {
 		failure = safeDatabaseOperationError(failure)
 		_, _ = store.UpdateDatabaseGatewayOperation(context.WithoutCancel(ctx), operation.ID, "failed", "failed", operation.ProgressPercent, code, failure.Error())
@@ -257,7 +257,7 @@ func processDatabaseGatewayOperation(ctx context.Context, log *slog.Logger, cfg 
 	}
 	switch operation.OperationType {
 	case "provision_gateway":
-		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, nil, nil); err != nil {
+		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, routeNotifier, nil, nil); err != nil {
 			fail(FirstPublicCode(err), err)
 			return
 		}
@@ -269,7 +269,7 @@ func processDatabaseGatewayOperation(ctx context.Context, log *slog.Logger, cfg 
 		}
 		complete()
 	default:
-		if err := processPostgreSQLExternalConnectionOperation(ctx, log, cfg, store, sealer, client, operation); err != nil {
+		if err := processPostgreSQLExternalConnectionOperation(ctx, log, cfg, store, sealer, client, operation, routeNotifier); err != nil {
 			fail(FirstPublicCode(err), err)
 			return
 		}
@@ -305,7 +305,7 @@ func waitForDatabaseGatewayTLSMaterial(ctx context.Context, hostname, certificat
 	}
 }
 
-func ensurePostgreSQLGatewayDataPlane(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, includeConnections, excludeCredentials map[string]bool) error {
+func ensurePostgreSQLGatewayDataPlane(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, routeNotifier RouteNotifier, includeConnections, excludeCredentials map[string]bool) error {
 	endpoint, err := store.GetDatabaseGatewayEndpoint(ctx, "postgresql")
 	if err != nil {
 		return ErrCode("database_gateway_not_found", err)
@@ -327,8 +327,14 @@ func ensurePostgreSQLGatewayDataPlane(ctx context.Context, log *slog.Logger, cfg
 	if strings.TrimSpace(cfg.CaddyRootConfig) == "" {
 		return ErrCode("database_gateway_tls_unavailable", errors.New("Caddy root configuration is required"))
 	}
-	if err := SyncCaddyRoutes(ctx, log, cfg, store); err != nil {
-		return ErrCode("database_gateway_tls_unavailable", err)
+	// The reconciler already includes this hostname as a certificate-only
+	// site whenever the gateway endpoint is active (ADR-0002 §6, §5.1) --
+	// Notify only has to ask it to converge, not render anything itself.
+	// waitForDatabaseGatewayTLSMaterial below already polls disk for up to
+	// 90s, which is what actually waits for the reconcile-and-issue round
+	// trip to finish; it is not new latency this change introduces.
+	if routeNotifier != nil {
+		routeNotifier.Notify()
 	}
 	tlsMaterial, err := waitForDatabaseGatewayTLSMaterial(ctx, endpoint.Hostname, cfg.PostgreSQLGatewayCertificateFile, cfg.PostgreSQLGatewayKeyFile, cfg.CaddyStorageRoot, 90*time.Second, time.Second)
 	if err != nil {
@@ -506,7 +512,7 @@ func buildPostgreSQLGatewayRenderRequest(ctx context.Context, store *repository.
 	return request, activeRoutes, nil
 }
 
-func processPostgreSQLExternalConnectionOperation(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, operation repository.DatabaseGatewayOperation) error {
+func processPostgreSQLExternalConnectionOperation(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, operation repository.DatabaseGatewayOperation, routeNotifier RouteNotifier) error {
 	connection, err := store.GetDatabaseExternalConnection(ctx, operation.ConnectionID)
 	if err != nil {
 		return err
@@ -564,7 +570,7 @@ func processPostgreSQLExternalConnectionOperation(ctx context.Context, log *slog
 				_ = store.RevokeDatabaseExternalCredential(rollbackCtx, createdCredential.ID)
 			}
 			_ = adapter.RevokeRole(rollbackCtx, GatewayRevokeRoleRequest{ContainerID: instance.DockerContainerID, DatabaseName: internalCredential.DatabaseName, ApplicationOwnerRole: internalCredential.Username, AdminPassword: string(adminPassword), RoleName: createdCredential.RoleName})
-			_ = ensurePostgreSQLGatewayDataPlane(rollbackCtx, log, cfg, store, sealer, client, nil, nil)
+			_ = ensurePostgreSQLGatewayDataPlane(rollbackCtx, log, cfg, store, sealer, client, routeNotifier, nil, nil)
 		}()
 		material, err := adapter.ProvisionRole(ctx, GatewayRoleRequest{ContainerID: instance.DockerContainerID, DatabaseName: internalCredential.DatabaseName, ApplicationOwnerRole: internalCredential.Username, AdminPassword: string(adminPassword), RoleName: identity.RoleName, Password: password, PermissionProfile: connection.PermissionProfile})
 		if err != nil {
@@ -584,7 +590,7 @@ func processPostgreSQLExternalConnectionOperation(ctx context.Context, log *slog
 			return err
 		}
 		createdCredential = &credential
-		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, include, nil); err != nil {
+		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, routeNotifier, include, nil); err != nil {
 			return err
 		}
 		endpoint, _ := store.GetDatabaseGatewayEndpoint(ctx, "postgresql")
@@ -604,7 +610,7 @@ func processPostgreSQLExternalConnectionOperation(ctx context.Context, log *slog
 		newCredentialCommitted = true
 		rotationCompleted = true
 		if previousID != "" && operation.RequestedGracePeriodHours == 0 {
-			return retirePostgreSQLExternalCredential(ctx, log, cfg, store, sealer, client, connection, route, instance, internalCredential, adminPassword, *previousCredential)
+			return retirePostgreSQLExternalCredential(ctx, log, cfg, store, sealer, client, connection, route, instance, internalCredential, adminPassword, *previousCredential, routeNotifier)
 		}
 		return nil
 	}
@@ -634,7 +640,7 @@ func processPostgreSQLExternalConnectionOperation(ctx context.Context, log *slog
 				return err
 			}
 		}
-		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, include, nil); err != nil {
+		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, routeNotifier, include, nil); err != nil {
 			return err
 		}
 		if err := adapter.Terminate(ctx, GatewayTerminationRequest{RoleNames: roles}); err != nil {
@@ -681,7 +687,7 @@ func processPostgreSQLExternalConnectionOperation(ctx context.Context, log *slog
 		if err := disablePostgreSQLRoles(ctx, runtime, instance, internalCredential, adminPassword, roles); err != nil {
 			return err
 		}
-		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, nil, nil); err != nil {
+		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, routeNotifier, nil, nil); err != nil {
 			return err
 		}
 		if err := adapter.Terminate(ctx, GatewayTerminationRequest{RoleNames: roles}); err != nil {
@@ -693,7 +699,7 @@ func processPostgreSQLExternalConnectionOperation(ctx context.Context, log *slog
 		if err := disablePostgreSQLRoles(ctx, runtime, instance, internalCredential, adminPassword, roles); err != nil {
 			return err
 		}
-		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, nil, nil); err != nil {
+		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, routeNotifier, nil, nil); err != nil {
 			return err
 		}
 		if err := adapter.Terminate(ctx, GatewayTerminationRequest{RoleNames: roles}); err != nil {
@@ -716,7 +722,7 @@ func processPostgreSQLExternalConnectionOperation(ctx context.Context, log *slog
 		if err != nil {
 			return err
 		}
-		return retirePostgreSQLExternalCredential(ctx, log, cfg, store, sealer, client, connection, route, instance, internalCredential, adminPassword, credential)
+		return retirePostgreSQLExternalCredential(ctx, log, cfg, store, sealer, client, connection, route, instance, internalCredential, adminPassword, credential, routeNotifier)
 	default:
 		return ErrCode("database_gateway_operation_not_implemented", fmt.Errorf("operation type %s", operation.OperationType))
 	}
@@ -731,12 +737,12 @@ func currentExternalCredential(connection repository.DatabaseExternalConnection)
 	return nil
 }
 
-func retirePostgreSQLExternalCredential(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, connection repository.DatabaseExternalConnection, route repository.DatabaseGatewayRoute, instance repository.DatabaseInstance, internalCredential repository.DatabaseCredential, adminPassword []byte, credential repository.DatabaseExternalCredential) error {
+func retirePostgreSQLExternalCredential(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, connection repository.DatabaseExternalConnection, route repository.DatabaseGatewayRoute, instance repository.DatabaseInstance, internalCredential repository.DatabaseCredential, adminPassword []byte, credential repository.DatabaseExternalCredential, routeNotifier RouteNotifier) error {
 	runtime := &DockerPostgreSQLGatewayRuntime{Client: client}
 	if err := disablePostgreSQLRoles(ctx, runtime, instance, internalCredential, adminPassword, []string{credential.RoleName}); err != nil {
 		return err
 	}
-	if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, map[string]bool{connection.ID: true}, map[string]bool{credential.ID: true}); err != nil {
+	if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, routeNotifier, map[string]bool{connection.ID: true}, map[string]bool{credential.ID: true}); err != nil {
 		return err
 	}
 	endpoint, err := store.GetDatabaseGatewayEndpoint(ctx, "postgresql")
@@ -813,7 +819,7 @@ func cleanupUnusedPostgreSQLGatewayRoute(ctx context.Context, store *repository.
 // retained database container is removed. Role denial and removal happen first,
 // so stale proxy configuration cannot preserve database access if reconciliation
 // is temporarily blocked by DNS or certificate availability.
-func revokePostgreSQLGatewayRouteForDeletion(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, instance repository.DatabaseInstance) error {
+func revokePostgreSQLGatewayRouteForDeletion(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, instance repository.DatabaseInstance, routeNotifier RouteNotifier) error {
 	route, err := store.GetDatabaseGatewayRouteByInstance(ctx, instance.ID)
 	if errors.Is(err, repository.ErrDatabaseGatewayRouteNotFound) {
 		return nil
@@ -874,14 +880,14 @@ func revokePostgreSQLGatewayRouteForDeletion(ctx context.Context, log *slog.Logg
 		}
 	}
 	if endpointErr == nil {
-		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, nil, nil); err != nil && log != nil {
+		if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, routeNotifier, nil, nil); err != nil && log != nil {
 			log.Warn("gateway config reconciliation deferred after fail-closed database deletion revocation", "instance_id", instance.ID, "error", err)
 		}
 	}
 	return cleanupUnusedPostgreSQLGatewayRoute(ctx, store, client, route)
 }
 
-func pausePostgreSQLGatewayRoute(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, instance repository.DatabaseInstance) error {
+func pausePostgreSQLGatewayRoute(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, instance repository.DatabaseInstance, routeNotifier RouteNotifier) error {
 	route, err := store.GetDatabaseGatewayRouteByInstance(ctx, instance.ID)
 	if errors.Is(err, repository.ErrDatabaseGatewayRouteNotFound) {
 		return nil
@@ -904,7 +910,7 @@ func pausePostgreSQLGatewayRoute(ctx context.Context, log *slog.Logger, cfg *con
 	if err := store.SetDatabaseGatewayRouteState(ctx, route.ID, "disabled", "disabled", "", ""); err != nil {
 		return err
 	}
-	if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, nil, nil); err != nil {
+	if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, routeNotifier, nil, nil); err != nil {
 		_ = store.SetDatabaseGatewayRouteState(context.WithoutCancel(ctx), route.ID, "active", "failed", "database_gateway_route_pause_failed", err.Error())
 		return err
 	}
@@ -935,7 +941,7 @@ func pausePostgreSQLGatewayRoute(ctx context.Context, log *slog.Logger, cfg *con
 	return nil
 }
 
-func resumePostgreSQLGatewayRoute(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, instanceID string) error {
+func resumePostgreSQLGatewayRoute(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, sealer *envcrypt.Sealer, client *mobyclient.Client, instanceID string, routeNotifier RouteNotifier) error {
 	route, err := store.GetDatabaseGatewayRouteByInstance(ctx, instanceID)
 	if errors.Is(err, repository.ErrDatabaseGatewayRouteNotFound) {
 		return nil
@@ -960,7 +966,7 @@ func resumePostgreSQLGatewayRoute(ctx context.Context, log *slog.Logger, cfg *co
 	if err := store.SetDatabaseGatewayRouteState(ctx, route.ID, "active", "pending", "", ""); err != nil {
 		return err
 	}
-	if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, nil, nil); err != nil {
+	if err := ensurePostgreSQLGatewayDataPlane(ctx, log, cfg, store, sealer, client, routeNotifier, nil, nil); err != nil {
 		_ = store.SetDatabaseGatewayRouteState(context.WithoutCancel(ctx), route.ID, "disabled", "failed", "database_gateway_route_resume_failed", err.Error())
 		return err
 	}

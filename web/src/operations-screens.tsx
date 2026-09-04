@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { APIError, api, queryKeys, type CaddySyncOutcomeDTO, type DNSGuidanceDTO } from "@/api"
+import { APIError, api, queryKeys, type DNSGuidanceDTO } from "@/api"
 import {
   ActivityIcon,
   ArrowSquareOutIcon,
@@ -250,12 +250,12 @@ export function DomainsScreen({ scope, applicationID, service = "" }: { scope: "
   const createMutation = useMutation({
     mutationFn: () => api.createDomain(applicationID, environment.id, { domain_name: domainName, service_id: targetService!.id }),
     onMutate: () => setDomainNotice(""),
-    onSuccess: async (response) => { const message = domainSyncMessage(`${domainName} added`, response.caddy_sync); toast(message); setDomainNotice(message); setDomainName(""); setAdding(false); await queryClient.invalidateQueries({ queryKey: domainQueryKey }) },
+    onSuccess: async () => { const message = domainChangeMessage(`${domainName} added`); toast(message); setDomainNotice(message); setDomainName(""); setAdding(false); await queryClient.invalidateQueries({ queryKey: domainQueryKey }) },
   })
   const deleteMutation = useMutation({
     mutationFn: (domainID: string) => api.deleteDomain(applicationID, environment.id, domainID),
     onMutate: () => setDomainNotice(""),
-    onSuccess: async (response) => { const message = domainSyncMessage("Domain removed", response.caddy_sync); toast(message); setDomainNotice(message); await queryClient.invalidateQueries({ queryKey: domainQueryKey }) },
+    onSuccess: async () => { const message = domainChangeMessage("Domain removed"); toast(message); setDomainNotice(message); await queryClient.invalidateQueries({ queryKey: domainQueryKey }) },
   })
   const updateMutation = useMutation({
     mutationFn: () => {
@@ -264,7 +264,7 @@ export function DomainsScreen({ scope, applicationID, service = "" }: { scope: "
       return api.updateDomain(applicationID, environment.id, editingID, { domain_name: editingName, service_id: serviceID })
     },
     onMutate: () => setDomainNotice(""),
-    onSuccess: async (response) => { const message = domainSyncMessage(`${editingName} updated`, response.caddy_sync); toast(message); setDomainNotice(message); setEditingID(""); setEditingName(""); setEditingServiceName(""); await queryClient.invalidateQueries({ queryKey: domainQueryKey }) },
+    onSuccess: async () => { const message = domainChangeMessage(`${editingName} updated`); toast(message); setDomainNotice(message); setEditingID(""); setEditingName(""); setEditingServiceName(""); await queryClient.invalidateQueries({ queryKey: domainQueryKey }) },
   })
   const dnsCheckMutation = useMutation({
     mutationFn: () => api.domains(applicationID, environment.id, scopedServiceID, undefined, true),
@@ -328,20 +328,17 @@ function DNSGuidance({ guidance }: { guidance: DNSGuidanceDTO }) {
   </Panel>
 }
 
-function domainSyncMessage(action: string, sync: CaddySyncOutcomeDTO) {
-  if (sync.attempted && sync.ok) return `${action}; Caddy routes validated and reloaded.`
-  if (!sync.attempted) return `${action}; automatic Caddy synchronization is disabled or not configured.`
-  return `${action}; Caddy synchronization did not complete.`
+// Route sync is a fire-and-forget reconcile notify (ADR-0002 §6.1), so
+// there is no synchronous outcome left to report: the domain change itself
+// already committed, and it converges to a live route within one reconcile
+// pass rather than failing or rolling back on a Caddy hiccup.
+function domainChangeMessage(action: string) {
+  return `${action}; Caddy routing updates automatically.`
 }
 
 function domainMutationError(error: unknown) {
   if (error instanceof APIError) {
     if (error.code === "managed_domain") return "HostForge share URLs are managed automatically. Add a custom domain instead."
-    if (error.code === "caddy_sync_failed") {
-      const sync = error.details?.caddy_sync as Partial<CaddySyncOutcomeDTO> | undefined
-      const reason = sync?.error ? ` (${sync.error.replaceAll("_", " ")})` : ""
-      return `The domain change was rolled back because Caddy validation or synchronization failed${reason}. Existing routing remains unchanged.`
-    }
     return error.message.replaceAll("_", " ")
   }
   return error instanceof Error ? error.message : "The domain operation failed."

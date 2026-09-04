@@ -89,7 +89,7 @@ func TestGatewayWorkerBacksOffOnPersistentClaimError(t *testing.T) {
 	go func() {
 		defer close(done)
 		runDatabaseGatewayWorker(stopCtx, slog.New(counter), &config.Config{}, store,
-			newWorkerTestSealer(t), nil, "worker-test")
+			newWorkerTestSealer(t), nil, "worker-test", nil)
 	}()
 
 	select {

@@ -125,6 +125,11 @@ type Config struct {
 	// ImageGCIntervalSeconds is how often the image garbage collector runs.
 	// Zero disables it.
 	ImageGCIntervalSeconds int
+	// CaddyReconcileIntervalSeconds is the periodic tick that reconverges Caddy
+	// routes even with no notify (self-healing after a failed reload or a
+	// manual edit, ADR-0002 §6.2). Zero disables the periodic tick; the
+	// notify-driven path still runs.
+	CaddyReconcileIntervalSeconds int
 	// ControlPlaneSnapshotIntervalMinutes controls how often a VACUUM INTO
 	// snapshot of hostforge.db is taken (ADR-0002 §17.2), independent of
 	// migrations. 0 disables the scheduled loop.
@@ -283,6 +288,9 @@ const (
 	// ImageGCIntervalSecondsEnv sets the image garbage collector cadence; 0
 	// disables it.
 	ImageGCIntervalSecondsEnv = "HOSTFORGE_IMAGE_GC_INTERVAL_SECONDS"
+	// CaddyReconcileIntervalSecondsEnv sets the periodic Caddy reconcile tick;
+	// 0 disables it (notify-driven reconciles still run).
+	CaddyReconcileIntervalSecondsEnv = "HOSTFORGE_CADDY_RECONCILE_INTERVAL_SECONDS"
 	// ControlPlaneSnapshotIntervalMinutesEnv sets the scheduled control-plane
 	// snapshot interval in minutes. 0 disables the loop.
 	ControlPlaneSnapshotIntervalMinutesEnv = "HOSTFORGE_CONTROL_PLANE_SNAPSHOT_INTERVAL_MINUTES"
@@ -564,6 +572,13 @@ func Load(dataDirFlag string) (*Config, error) {
 	if imageGCIntervalSeconds < 0 {
 		return nil, fmt.Errorf("%s must be >= 0 (0 disables the loop)", ImageGCIntervalSecondsEnv)
 	}
+	caddyReconcileIntervalSeconds, err := envInt(CaddyReconcileIntervalSecondsEnv, 30)
+	if err != nil {
+		return nil, err
+	}
+	if caddyReconcileIntervalSeconds < 0 {
+		return nil, fmt.Errorf("%s must be >= 0 (0 disables the periodic tick)", CaddyReconcileIntervalSecondsEnv)
+	}
 	controlPlaneSnapshotDir := strings.TrimSpace(os.Getenv(ControlPlaneSnapshotDirEnv))
 	if controlPlaneSnapshotDir == "" {
 		controlPlaneSnapshotDir = filepath.Join(abs, "control-plane-snapshots")
@@ -668,6 +683,7 @@ func Load(dataDirFlag string) (*Config, error) {
 		DatabaseTransferMaxPerHour:          databaseTransferMaxPerHour,
 		ImageRetentionPerBinding:            imageRetentionPerBinding,
 		ImageGCIntervalSeconds:              imageGCIntervalSeconds,
+		CaddyReconcileIntervalSeconds:       caddyReconcileIntervalSeconds,
 		ControlPlaneSnapshotIntervalMinutes: controlPlaneSnapshotIntervalMinutes,
 		ControlPlaneSnapshotRetentionDays:   controlPlaneSnapshotRetentionDays,
 		ControlPlaneSnapshotDir:             controlPlaneSnapshotDir,

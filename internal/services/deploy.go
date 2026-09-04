@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/furious-fury/HostForge/internal/builder"
-	"github.com/furious-fury/HostForge/internal/caddy"
 	"github.com/furious-fury/HostForge/internal/config"
 	"github.com/furious-fury/HostForge/internal/crypto/envcrypt"
 	"github.com/furious-fury/HostForge/internal/docker"
@@ -58,6 +57,16 @@ type DeployResult struct {
 type GitAuthResolver interface {
 	ResolveInstallationAuth(context.Context, int64) (git.AuthOptions, error)
 }
+
+// RouteNotifier asks the Caddy reconciler to converge soon. Implemented by
+// *reconcilecaddy.Reconciler; declared here rather than imported concretely
+// so the deploy path does not depend on the reconciler package (avoids an
+// import cycle risk and keeps ExecuteDeploy testable with a stub). Notify
+// never blocks and the deploy path never checks an error: a deploy is
+// complete once its container is healthy and the binding is switched, and
+// routing converges on its own, eventually consistent schedule (ADR-0002
+// §6.1).
+type RouteNotifier interface{ Notify() }
 
 func recordDeployObs(ctx context.Context, log *slog.Logger, job DeployJob, step, status string, started time.Time, durMs int64, errCode string) {
 	obs.RecordDeployStep(ctx, log, models.DeployStepRecord{
@@ -124,7 +133,7 @@ func cleanupCandidateContainer(ctx context.Context, log *slog.Logger, dockerClie
 
 // ExecuteDeploy runs clone/build/run/health/cutover for a prepared deployment.
 // authResolver is required for private GitHub repositories.
-func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, authResolver GitAuthResolver) (result DeployResult, err error) {
+func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store, job DeployJob, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, authResolver GitAuthResolver, routeNotifier RouteNotifier) (result DeployResult, err error) {
 	deployStart := time.Now()
 	log = log.With("service_id", job.serviceID(), "environment_id", job.environmentID(), "deployment_id", job.Deployment.ID)
 	defer func() {
@@ -439,7 +448,6 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		return DeployResult{}, e
 	}
 
-	previousActiveDeploymentID := job.Target.Binding.ActiveDeploymentID
 	if err := store.ActivateServiceDeployment(ctx, job.Target.Service.ID, job.Target.Environment.ID, job.Deployment.ID); err != nil {
 		e := ErrCode("active_deployment_update_failed", err)
 		markFailed(e)
@@ -447,35 +455,14 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		return DeployResult{}, e
 	}
 
-	shouldSyncCaddy := cfg.SyncCaddy
-	if !shouldSyncCaddy {
-		serviceDomains, err := store.ListServiceDomains(ctx, job.Target.Application.ID, job.Target.Environment.ID, job.Target.Service.ID)
-		if err != nil {
-			_ = store.ActivateServiceDeployment(ctx, job.Target.Service.ID, job.Target.Environment.ID, previousActiveDeploymentID)
-			e := ErrCode("domain_lookup_failed", err)
-			markFailed(e)
-			cleanupCandidate("domain lookup failure")
-			return DeployResult{}, e
-		}
-		shouldSyncCaddy = len(serviceDomains) > 0
-	}
-	if shouldSyncCaddy {
-		t3 := time.Now()
-		if err := SyncCaddyRoutes(ctx, log, cfg, store); err != nil {
-			if restoreErr := store.ActivateServiceDeployment(ctx, job.Target.Service.ID, job.Target.Environment.ID, previousActiveDeploymentID); restoreErr != nil {
-				log.Error("failed to restore previous active deployment", "error", restoreErr)
-			}
-			e := ErrCode("caddy_sync_failed", err)
-			markFailed(e)
-			cleanupCandidate("caddy sync failure")
-			ms := time.Since(t3).Milliseconds()
-			log.Info("deploy step", "step", "caddy_sync_end", "status", "failed", "duration_ms", ms)
-			recordDeployObs(ctx, log, job, "caddy_sync", "failed", t3, ms, FirstPublicCode(e))
-			return DeployResult{}, e
-		}
-		msCaddy := time.Since(t3).Milliseconds()
-		log.Info("deploy step", "step", "caddy_sync_end", "status", "ok", "duration_ms", msCaddy)
-		recordDeployObs(ctx, log, job, "caddy_sync", "ok", t3, msCaddy, "")
+	// Caddy is no longer synced inline (ADR-0002 §5.1, §6.1). This deploy is
+	// done the moment the binding is switched: it is a control-plane state
+	// change, not a routing outcome, and nothing after this point can fail
+	// it or roll the binding back. Notify never blocks and never errors --
+	// the reconciler converges routing on its own schedule, and a domain
+	// with no published route yet reads unpublished, not failed.
+	if routeNotifier != nil {
+		routeNotifier.Notify()
 	}
 
 	if job.PreviousContainer.DockerContainerID != "" && job.PreviousContainer.DockerContainerID != containerID {
@@ -496,60 +483,6 @@ func ExecuteDeploy(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	}
 	log.Info("deploy finished", "deployment_id", result.DeploymentID, "image", result.ImageRef, "docker_container_id", ShortID(result.ContainerID), "url", result.URL, "duration_ms_total", time.Since(deployStart).Milliseconds())
 	return result, nil
-}
-
-// SyncCaddyRoutes regenerates HostForge-managed routes and updates ssl_status per outcome.
-func SyncCaddyRoutes(ctx context.Context, log *slog.Logger, cfg *config.Config, store *repository.Store) error {
-	syncStart := time.Now()
-	domainRoutes, err := store.ListDomainRoutes(ctx)
-	if err != nil {
-		return ErrCode("caddy_domain_routes_load_failed", err)
-	}
-	var routes []caddy.Route
-	var activeDomainIDs []string
-	var certificateDomains []string
-	for _, domainRoute := range domainRoutes {
-		if domainRoute.HostPort <= 0 {
-			log.Warn("domain has no successful deployment upstream yet", "domain", domainRoute.DomainName)
-			if err := store.UpdateDomainSSLStatus(ctx, domainRoute.ID, models.SSLStatusError); err != nil {
-				log.Warn("failed to update domain ssl status", "domain_id", domainRoute.ID, "status", models.SSLStatusError, "error", err)
-			}
-			continue
-		}
-		routes = append(routes, caddy.Route{
-			Domain:   domainRoute.DomainName,
-			HostPort: domainRoute.HostPort,
-		})
-		activeDomainIDs = append(activeDomainIDs, domainRoute.ID)
-	}
-	if endpoint, endpointErr := store.GetDatabaseGatewayEndpoint(ctx, "postgresql"); endpointErr == nil && endpoint.DesiredStatus == "active" {
-		certificateDomains = append(certificateDomains, endpoint.Hostname)
-	}
-	syncRes, err := caddy.Sync(ctx, caddy.SyncOptions{
-		CaddyBin:           cfg.CaddyBin,
-		GeneratedPath:      cfg.CaddyGeneratedPath,
-		RootConfig:         cfg.CaddyRootConfig,
-		Routes:             routes,
-		CertificateDomains: certificateDomains,
-	})
-	if err != nil {
-		for _, domainID := range activeDomainIDs {
-			if updateErr := store.UpdateDomainSSLStatus(ctx, domainID, models.SSLStatusError); updateErr != nil {
-				log.Warn("failed to update domain ssl status", "domain_id", domainID, "status", models.SSLStatusError, "error", updateErr)
-			}
-		}
-		return ErrCode("caddy_sync_failed", err)
-	}
-	if !syncRes.Applied {
-		log.Warn("caddy reload skipped (admin API unreachable); snippet written and validated. Start Caddy if it is stopped, or run caddy sync again after it is running to live-reload.")
-	}
-	for _, domainID := range activeDomainIDs {
-		if err := store.UpdateDomainSSLStatus(ctx, domainID, models.SSLStatusActive); err != nil {
-			log.Warn("failed to update domain ssl status", "domain_id", domainID, "status", models.SSLStatusActive, "error", err)
-		}
-	}
-	log.Info("caddy sync complete", "generated_path", cfg.CaddyGeneratedPath, "root_config", cfg.CaddyRootConfig, "routes", len(routes), "duration_ms", time.Since(syncStart).Milliseconds())
-	return nil
 }
 
 func ValidateRuntimeConfig(cfg *config.Config) error {

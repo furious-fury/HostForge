@@ -30,7 +30,7 @@ type DatabaseConnectionInput struct {
 	ReplaceExisting   bool
 }
 
-func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, operation repository.DatabaseOperation, fail func(string, error), gatewayCfg *config.Config) {
+func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, operation repository.DatabaseOperation, fail func(string, error), gatewayCfg *config.Config, routeNotifier RouteNotifier) {
 	job, err := store.GetDatabaseUpgradeJob(ctx, operation.ID)
 	if err != nil {
 		fail("database_upgrade_job_missing", err)
@@ -47,7 +47,7 @@ func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *reposi
 	}
 	if instance.ImageRef == job.TargetImageRef && instance.Status == "healthy" {
 		if gatewayCfg != nil {
-			resumeErr := resumePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, dockerClient, instance.ID)
+			resumeErr := resumePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, dockerClient, instance.ID, routeNotifier)
 			if resumeErr != nil {
 				fail("database_gateway_route_resume_failed", resumeErr)
 				return
@@ -115,7 +115,7 @@ func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *reposi
 		return
 	}
 	if databaseService.Engine == "postgresql" && gatewayCfg != nil {
-		if err := pausePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance); err != nil {
+		if err := pausePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance, routeNotifier); err != nil {
 			_ = store.UpdateDatabaseUpgradeJobStatus(ctx, operation.ID, "failed")
 			fail("database_gateway_route_pause_failed", err)
 			return
@@ -178,7 +178,7 @@ func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *reposi
 	}
 	if targetErr == nil {
 		if databaseService.Engine == "postgresql" && gatewayCfg != nil {
-			if resumeErr := resumePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance.ID); resumeErr != nil {
+			if resumeErr := resumePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance.ID, routeNotifier); resumeErr != nil {
 				_ = store.UpdateDatabaseUpgradeJobStatus(ctx, operation.ID, "failed")
 				fail("database_gateway_route_resume_failed", resumeErr)
 				return
@@ -207,7 +207,7 @@ func processDatabaseUpgrade(ctx context.Context, log *slog.Logger, store *reposi
 	}
 	_, _ = store.UpdateDatabaseInstanceState(context.WithoutCancel(ctx), instance.ID, repository.UpdateDatabaseInstanceStateInput{DockerContainerID: rollbackContainerID, DesiredState: "running", Status: "healthy", HealthMessage: "ready", HealthCheckedAt: time.Now().UTC()})
 	if databaseService.Engine == "postgresql" && gatewayCfg != nil {
-		if resumeErr := resumePostgreSQLGatewayRoute(rollbackCtx, log, gatewayCfg, store, sealer, client, instance.ID); resumeErr != nil && log != nil {
+		if resumeErr := resumePostgreSQLGatewayRoute(rollbackCtx, log, gatewayCfg, store, sealer, client, instance.ID, routeNotifier); resumeErr != nil && log != nil {
 			log.Error("database gateway route remained disabled after upgrade rollback", "instance_id", instance.ID, "error", resumeErr)
 		}
 	}
@@ -374,7 +374,7 @@ func PrepareManagedDatabase(ctx context.Context, store *repository.Store, sealer
 	return created, err
 }
 
-func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, operation repository.DatabaseOperation, dataDir string, minFreeDiskBytes int64, gatewayCfg *config.Config) {
+func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repository.Store, sealer *envcrypt.Sealer, dockerClient *mobyclient.Client, operation repository.DatabaseOperation, dataDir string, minFreeDiskBytes int64, gatewayCfg *config.Config, routeNotifier RouteNotifier) {
 	defer func() {
 		completed, err := store.GetDatabaseOperation(context.WithoutCancel(ctx), operation.ID)
 		if err != nil || (completed.Status != "success" && completed.Status != "failed" && completed.Status != "cancelled") {
@@ -442,10 +442,10 @@ func processDatabaseOperation(ctx context.Context, log *slog.Logger, store *repo
 		processDatabaseCredentialRotation(ctx, log, store, sealer, dockerClient, operation, fail)
 		return
 	case "upgrade":
-		processDatabaseUpgrade(ctx, log, store, sealer, dockerClient, operation, fail, gatewayCfg)
+		processDatabaseUpgrade(ctx, log, store, sealer, dockerClient, operation, fail, gatewayCfg, routeNotifier)
 		return
 	case "start", "stop", "restart":
-		processDatabaseRuntimeOperation(ctx, log, store, sealer, dockerClient, operation, fail, gatewayCfg)
+		processDatabaseRuntimeOperation(ctx, log, store, sealer, dockerClient, operation, fail, gatewayCfg, routeNotifier)
 		return
 	case "provision", "restore_deleted":
 	default:
@@ -1180,6 +1180,7 @@ func processDatabaseRuntimeOperation(
 	operation repository.DatabaseOperation,
 	fail func(string, error),
 	gatewayCfg *config.Config,
+	routeNotifier RouteNotifier,
 ) {
 	instance, err := store.GetDatabaseInstance(ctx, operation.DatabaseInstanceID)
 	if err != nil {
@@ -1212,7 +1213,7 @@ func processDatabaseRuntimeOperation(
 		return
 	}
 	if databaseService.Engine == "postgresql" && gatewayCfg != nil {
-		if err := pausePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance); err != nil {
+		if err := pausePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance, routeNotifier); err != nil {
 			fail("database_gateway_route_pause_failed", err)
 			return
 		}
@@ -1281,7 +1282,7 @@ func processDatabaseRuntimeOperation(
 		return
 	}
 	if databaseService.Engine == "postgresql" && gatewayCfg != nil {
-		if err := resumePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance.ID); err != nil {
+		if err := resumePostgreSQLGatewayRoute(ctx, log, gatewayCfg, store, sealer, client, instance.ID, routeNotifier); err != nil {
 			fail("database_gateway_route_resume_failed", err)
 			return
 		}

@@ -32,7 +32,7 @@ func TestApplyMigrationsCreatesFinalServiceSchema(t *testing.T) {
 
 	for table, columns := range map[string][]string{
 		"deployments":  {"service_id", "environment_id", "builder_kind", "trigger_kind", "rollback_of", "branch", "railpack_plan_json", "railpack_info_json"},
-		"domains":      {"application_id", "environment_id", "service_id", "kind", "last_cert_message", "cert_checked_at"},
+		"domains":      {"application_id", "environment_id", "service_id", "kind", "last_cert_message", "cert_checked_at", "publish_state", "publish_error"},
 		"deploy_steps": {"deployment_id", "service_id", "environment_id", "request_id"},
 	} {
 		for _, column := range columns {

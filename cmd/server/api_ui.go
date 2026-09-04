@@ -1,9 +1,7 @@
 package main
 
 import (
-	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,12 +11,6 @@ import (
 	"github.com/furious-fury/HostForge/internal/git"
 	"github.com/furious-fury/HostForge/internal/services"
 )
-
-type caddySyncOutcome struct {
-	Attempted bool   `json:"attempted"`
-	OK        bool   `json:"ok"`
-	Error     string `json:"error,omitempty"`
-}
 
 type repositoryBranchesResponse struct {
 	Status        string   `json:"status"`
@@ -82,24 +74,17 @@ func (s *server) handleRepositoryBranches(w http.ResponseWriter, r *http.Request
 	})
 }
 
-func (s *server) caddySyncAfterDomainChange(ctx context.Context, lg *slog.Logger) caddySyncOutcome {
-	out := caddySyncOutcome{}
-	if !s.cfg.DomainSyncAfterMutate || strings.TrimSpace(s.cfg.CaddyRootConfig) == "" {
-		return out
+// notifyDomainChanged asks the reconciler to converge after a domain
+// mutation. Fire-and-forget (ADR-0002 §6.1): the domain write already
+// committed, and nothing here can fail it or roll it back. A domain reads
+// unpublished (or invalid, ADR §19) until the next reconcile pass catches
+// up -- callers show that from the domain row itself, not from a
+// synchronous sync outcome.
+func (s *server) notifyDomainChanged() {
+	if !s.cfg.DomainSyncAfterMutate || strings.TrimSpace(s.cfg.CaddyRootConfig) == "" || s.routeNotifier == nil {
+		return
 	}
-	out.Attempted = true
-	if lg == nil {
-		lg = s.log
-	}
-	started := time.Now()
-	if err := services.SyncCaddyRoutes(ctx, lg, s.cfg, s.store); err != nil {
-		out.Error = publicAPIError(err, "caddy_sync_failed")
-		lg.Warn("caddy sync after domain change failed", "error", err, "public_code", out.Error, "duration_ms", time.Since(started).Milliseconds())
-		return out
-	}
-	out.OK = true
-	lg.Info("caddy sync after domain change complete", "duration_ms", time.Since(started).Milliseconds())
-	return out
+	s.routeNotifier.Notify()
 }
 
 func firstNonEmpty(values ...string) string {

@@ -324,20 +324,13 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{ApplicationID: item.ID, EventType: "application", Status: "updated", Actor: "operator", Message: "Application updated", Detail: item.Name})
 			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "application": item})
 		case http.MethodDelete:
-			result, err := platformservices.DeleteApplicationAndRuntime(r.Context(), s.log, s.cfg, s.store, s.dockerClient, app.ID)
+			_, err := platformservices.DeleteApplicationAndRuntime(r.Context(), s.log, s.cfg, s.store, s.dockerClient, app.ID, s.routeNotifier)
 			if err != nil {
 				writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": publicAPIError(err, "delete_application_failed")})
 				return
 			}
-			response := map[string]any{"status": "deleted"}
-			eventStatus, eventDetail := "deleted", app.Name
-			if result.CaddySyncError != "" {
-				response["routing_warning"] = result.CaddySyncError
-				eventStatus = "warning"
-				eventDetail += "; routing cleanup: " + result.CaddySyncError
-			}
-			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "application", Status: eventStatus, Actor: "operator", Message: "Application deleted", Detail: eventDetail})
-			writeJSON(w, http.StatusOK, response)
+			_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "application", Status: "deleted", Actor: "operator", Message: "Application deleted", Detail: app.Name})
+			writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"status": "error", "error": "method_not_allowed"})
 		}

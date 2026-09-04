@@ -35,6 +35,7 @@ import (
 	logsapi "github.com/furious-fury/HostForge/internal/logs"
 	"github.com/furious-fury/HostForge/internal/models"
 	"github.com/furious-fury/HostForge/internal/obs"
+	reconcilecaddy "github.com/furious-fury/HostForge/internal/reconcile/caddy"
 	"github.com/furious-fury/HostForge/internal/redact"
 	"github.com/furious-fury/HostForge/internal/repository"
 	"github.com/furious-fury/HostForge/internal/reqctx"
@@ -187,10 +188,14 @@ func runServer(log *slog.Logger, args []string) int {
 	defer dockerClient.Close()
 
 	store := repository.New(db)
+	// Constructed before shutdownCtx exists, because the backfill below needs
+	// a synchronous reconcile. Its periodic loop starts later, alongside the
+	// rest of the background loops, once shutdownCtx is available.
+	caddyReconciler := reconcilecaddy.New(log, cfg, store)
 	if created, err := store.EnsureActivePlatformServiceDomains(ctx); err != nil {
 		log.Warn("backfill platform share domains failed", "error", err)
 	} else if created > 0 {
-		if err := services.SyncCaddyRoutes(ctx, log, cfg, store); err != nil {
+		if _, err := caddyReconciler.Reconcile(ctx); err != nil {
 			log.Warn("sync backfilled platform share domains failed", "created", created, "error", err)
 		} else {
 			log.Info("backfilled platform share domains", "created", created)
@@ -237,14 +242,16 @@ func runServer(log *slog.Logger, args []string) int {
 	// Built here, ahead of its usual place below the operations runtimes,
 	// because the deploy runtime's handler needs handler.newGitAuthResolver.
 	handler := &server{
-		log:            log,
-		cfg:            cfg,
-		store:          store,
-		webhookLimiter: webhookLimiter,
-		loginLimiter:   loginLimiter,
-		hostSampler:    hostSampler,
-		envSealer:      envSealer,
-		dockerClient:   dockerClient,
+		log:             log,
+		cfg:             cfg,
+		store:           store,
+		webhookLimiter:  webhookLimiter,
+		loginLimiter:    loginLimiter,
+		hostSampler:     hostSampler,
+		envSealer:       envSealer,
+		dockerClient:    dockerClient,
+		routeNotifier:   caddyReconciler,
+		caddyReconciler: caddyReconciler,
 	}
 
 	// Database operations run on the generic operations queue. The runtime
@@ -262,7 +269,7 @@ func runServer(log *slog.Logger, args []string) int {
 		return 1
 	}
 	if err := operationsRuntime.Register(services.NewDatabaseOperationHandlers(
-		log, store, envSealer, dockerClient, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg,
+		log, store, envSealer, dockerClient, cfg.DataDir, cfg.DatabaseMinFreeDiskBytes, cfg, caddyReconciler,
 	)...); err != nil {
 		fmt.Fprintf(os.Stderr, "error: register database operation handlers: %v\n", err)
 		return 1
@@ -304,6 +311,7 @@ func runServer(log *slog.Logger, args []string) int {
 	if err := deployRuntime.Register(services.NewDeployOperationHandler(
 		log, cfg, store, envSealer, dockerClient,
 		func(ctx context.Context) services.GitAuthResolver { return handler.newGitAuthResolver(ctx) },
+		caddyReconciler,
 	)); err != nil {
 		fmt.Fprintf(os.Stderr, "error: register deploy operation handler: %v\n", err)
 		return 1
@@ -313,10 +321,11 @@ func runServer(log *slog.Logger, args []string) int {
 		return 1
 	}
 
+	caddyReconciler.Start(shutdownCtx)
 	services.StartDatabasePurgeLoop(shutdownCtx, log, store, dockerClient)
 	services.StartDatabaseBackupScheduleLoop(shutdownCtx, log, store, cfg.DatabaseTransferMaxPerHour)
 	services.StartDatabaseBackupRetentionLoop(shutdownCtx, log, store, envSealer)
-	gatewayWG := services.StartDatabaseGatewayOperationLoop(shutdownCtx, log, cfg, store, envSealer, dockerClient)
+	gatewayWG := services.StartDatabaseGatewayOperationLoop(shutdownCtx, log, cfg, store, envSealer, dockerClient, caddyReconciler)
 	services.StartControlPlaneSnapshotLoop(shutdownCtx, log, cfg, store, envSealer)
 	services.StartImageGarbageCollectionLoop(shutdownCtx, log, store, dockerClient, cfg.ImageRetentionPerBinding, time.Duration(cfg.ImageGCIntervalSeconds)*time.Second)
 
@@ -450,6 +459,12 @@ type server struct {
 	githubRepoLister        githubRepositoryLister
 	databaseGatewayDomainMu sync.RWMutex
 	dockerClient            *client.Client
+	routeNotifier           services.RouteNotifier
+	// caddyReconciler is the concrete reconciler, held separately from
+	// routeNotifier for the few callers that need a synchronous result --
+	// an operator-triggered settings sync, and the platform-domain-change
+	// rollback path. Both fields point at the same instance.
+	caddyReconciler *reconcilecaddy.Reconciler
 }
 
 type githubPushPayload struct {

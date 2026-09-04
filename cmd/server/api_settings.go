@@ -17,7 +17,6 @@ import (
 	"github.com/furious-fury/HostForge/internal/config"
 	"github.com/furious-fury/HostForge/internal/dnsops"
 	"github.com/furious-fury/HostForge/internal/repository"
-	"github.com/furious-fury/HostForge/internal/services"
 	"github.com/furious-fury/HostForge/internal/sysstatus"
 	"github.com/furious-fury/HostForge/internal/version"
 )
@@ -351,8 +350,10 @@ func (s *server) handleSettingsPlatformDomainUpdate(w http.ResponseWriter, r *ht
 		if err := caddy.ReplaceManagedConfig(context.Background(), s.cfg.CaddyBin, s.cfg.CaddyControlPlanePath, s.cfg.CaddyRootConfig, caddy.RenderPermanentControlPlaneConfig(current)); err != nil {
 			s.requestLog(r).Error("rollback platform domain caddy root failed", "error", err)
 		}
-		if err := services.SyncCaddyRoutes(context.Background(), s.requestLog(r), s.cfg, s.store); err != nil {
-			s.requestLog(r).Error("rollback platform domain routes failed", "error", err)
+		if s.caddyReconciler != nil {
+			if _, err := s.caddyReconciler.Reconcile(context.Background()); err != nil {
+				s.requestLog(r).Error("rollback platform domain routes failed", "error", err)
+			}
 		}
 	}
 	if err := caddy.ReplaceManagedConfig(r.Context(), s.cfg.CaddyBin, s.cfg.CaddyControlPlanePath, s.cfg.CaddyRootConfig, caddy.RenderPermanentControlPlaneConfig(next)); err != nil {
@@ -360,10 +361,16 @@ func (s *server) handleSettingsPlatformDomainUpdate(w http.ResponseWriter, r *ht
 		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "platform_caddy_update_failed"})
 		return
 	}
-	if err := services.SyncCaddyRoutes(r.Context(), s.requestLog(r), s.cfg, s.store); err != nil {
-		rollback()
-		writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "platform_routes_update_failed"})
-		return
+	// A platform domain change is rare, operator-initiated, and has real DNS
+	// and certificate consequences, so it keeps a synchronous check-then-
+	// rollback -- unlike ordinary domain CRUD (ADR-0002 §6.1), which no
+	// longer rolls back a database write over a Caddy hiccup.
+	if s.caddyReconciler != nil {
+		if _, err := s.caddyReconciler.Reconcile(r.Context()); err != nil {
+			rollback()
+			writeJSON(w, http.StatusBadGateway, map[string]string{"status": "error", "error": "platform_routes_update_failed"})
+			return
+		}
 	}
 	_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "configuration", Status: "updated", Actor: "operator", Message: "Platform domain changed", Detail: current + " -> " + next})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "platform_domain": next})
@@ -435,24 +442,25 @@ func (s *server) handleSettingsActionCaddySync(w http.ResponseWriter, r *http.Re
 		})
 		return
 	}
+	if s.caddyReconciler == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "error", "error": "caddy_reconciler_unavailable"})
+		return
+	}
 	t0 := time.Now()
-	err := services.SyncCaddyRoutes(r.Context(), s.requestLog(r), s.cfg, s.store)
-	out := caddySyncOutcome{Attempted: true}
+	result, err := s.caddyReconciler.Reconcile(r.Context())
 	if err != nil {
-		out.OK = false
-		out.Error = publicAPIError(err, "caddy_sync_failed")
+		publicCode := publicAPIError(err, "caddy_sync_failed")
 		s.requestLog(r).Warn("settings caddy sync failed", "error", err, "duration_ms", time.Since(t0).Milliseconds())
 		writeJSON(w, http.StatusBadGateway, map[string]any{
-			"status": "error", "error": out.Error, "message": "Caddy routes were not synchronized.",
-			"caddy_sync": out, "duration_ms": time.Since(t0).Milliseconds(),
+			"status": "error", "error": publicCode, "message": "Caddy routes were not synchronized.",
+			"duration_ms": time.Since(t0).Milliseconds(),
 		})
 		return
 	}
-	out.OK = true
 	_ = s.store.RecordPlatformEvent(r.Context(), repository.PlatformEventInput{EventType: "configuration", Status: "updated", Actor: "operator", Message: "Caddy routes synchronized"})
-	s.requestLog(r).Info("settings caddy sync complete", "duration_ms", time.Since(t0).Milliseconds())
+	s.requestLog(r).Info("settings caddy sync complete", "duration_ms", time.Since(t0).Milliseconds(), "routes", result.Routes, "skipped", result.Skipped)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"caddy_sync":  out,
+		"status": "ok", "routes": result.Routes, "skipped": result.Skipped,
 		"duration_ms": time.Since(t0).Milliseconds(),
 	})
 }
