@@ -9,6 +9,20 @@ changes, since the API has not yet reached 1.0 stability.
 
 ## [Unreleased]
 
+### Added
+
+- **One malformed domain can no longer block every other domain's
+  routing.** The generated Caddy config is validated as a single unit, so a
+  typo in any one custom domain used to fail validation for the whole
+  fleet, deterministically, on every reconcile until an operator fixed it
+  (ADR-0002 §19). The reconciler now quarantines the offending domain
+  (marking it `invalid` with the validator's own output) and retries the
+  rest of the fleet, up to 5 quarantines per pass. A domain create or
+  update also runs the same Caddy-level check synchronously before the
+  domain is ever persisted, so a typo is rejected by the request that made
+  it rather than surfacing later as a fleet-wide failure. Editing an
+  `invalid` domain's hostname re-admits it to the next reconcile pass.
+
 ### Changed
 
 - **Caddy is no longer synced inline during a deploy.** A deploy's cutover

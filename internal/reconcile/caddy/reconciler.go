@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -98,6 +99,23 @@ func (r *Reconciler) Start(ctx context.Context) {
 	}()
 }
 
+// maxQuarantinesPerPass bounds how many domains one Reconcile call will
+// quarantine before giving up and marking whatever remains unpublished
+// instead. Cheap insurance against a pathological render that keeps
+// failing for a reason unrelated to any single domain -- the loop
+// terminates instead of walking the whole fleet one quarantine at a time.
+const maxQuarantinesPerPass = 5
+
+// reconcileCandidate is one domain still in contention for this pass: its
+// row id (to write publish_state back), the route it would render as, and
+// updatedAt, which is how a validation failure is attributed to a domain
+// (ADR-0002 §19.3: the most-recently-changed candidate is presumed guilty).
+type reconcileCandidate struct {
+	id        string
+	route     caddyruntime.Route
+	updatedAt time.Time
+}
+
 // Reconcile renders the desired routes from the database, skips the
 // write/validate/reload cycle entirely if nothing changed since the last
 // successful apply, and otherwise writes, validates, and reloads Caddy --
@@ -106,11 +124,20 @@ func (r *Reconciler) Start(ctx context.Context) {
 // its container isn't RUNNING) is unpublished, not an error: it simply has
 // nothing to route to.
 //
-// PR2 (ADR-0002 §19) adds per-domain quarantine on top of this: today a
-// single malformed domain fails the whole render and every domain goes
-// unpublished together. That is worse than the eventual §19 behaviour but
-// strictly better than the deploy-path defect this package replaces --
-// nothing here can fail a deployment or roll back a binding.
+// A domain already marked invalid is excluded from the render entirely,
+// rather than being retried every pass only to fail the same way -- it
+// re-enters once its own row changes (an edit resets it to unpublished,
+// internal/repository/domains_v2.go).
+//
+// If the render still fails validation with other domains involved, that
+// is quarantine territory (ADR-0002 §19): the most-recently-changed
+// candidate is presumed guilty, marked invalid with the validator's
+// output, excluded, and the remainder retried -- up to
+// maxQuarantinesPerPass times -- so one malformed domain cannot block
+// every other domain from publishing. A reload failure (Caddy not
+// running, an unrelated process error) is not a domain problem and never
+// quarantines anything; every candidate just goes back to unpublished for
+// the next pass to retry as a whole.
 func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -120,16 +147,21 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 
-	var routes []caddyruntime.Route
-	var routableIDs []string
+	var candidates []reconcileCandidate
 	var notYetIDs []string
 	for _, dr := range domainRoutes {
+		if dr.PublishState == models.PublishStateInvalid {
+			continue
+		}
 		if dr.HostPort <= 0 {
 			notYetIDs = append(notYetIDs, dr.ID)
 			continue
 		}
-		routes = append(routes, caddyruntime.Route{Domain: dr.DomainName, HostPort: dr.HostPort})
-		routableIDs = append(routableIDs, dr.ID)
+		candidates = append(candidates, reconcileCandidate{
+			id:        dr.ID,
+			route:     caddyruntime.Route{Domain: dr.DomainName, HostPort: dr.HostPort},
+			updatedAt: dr.UpdatedAt,
+		})
 	}
 	// Marking "not yet routable" domains is cheap and idempotent, so it runs
 	// on every pass regardless of the hash skip below -- a newly created
@@ -143,34 +175,99 @@ func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
 		certificateDomains = append(certificateDomains, endpoint.Hostname)
 	}
 
-	content := caddyruntime.RenderConfigWithCertificateDomains(routes, certificateDomains)
-	hash := sha256Hex(content)
+	hash := sha256Hex(renderCandidates(candidates, certificateDomains))
 	if hash == r.lastHash {
-		return Result{Applied: true, Routes: len(routes), Skipped: true}, nil
+		return Result{Applied: true, Routes: len(candidates), Skipped: true}, nil
 	}
 
-	syncRes, err := caddyruntime.Sync(ctx, caddyruntime.SyncOptions{
-		CaddyBin:           r.cfg.CaddyBin,
-		GeneratedPath:      r.cfg.CaddyGeneratedPath,
-		RootConfig:         r.cfg.CaddyRootConfig,
-		Routes:             routes,
-		CertificateDomains: certificateDomains,
-	})
-	if err != nil {
-		if markErr := r.store.SetDomainsPublishState(ctx, routableIDs, models.PublishStateUnpublished); markErr != nil {
-			r.log.Warn("failed to mark domains unpublished after sync failure", "count", len(routableIDs), "error", markErr)
+	quarantined := 0
+	for {
+		routes := routesOf(candidates)
+		syncRes, syncErr := caddyruntime.Sync(ctx, caddyruntime.SyncOptions{
+			CaddyBin:           r.cfg.CaddyBin,
+			GeneratedPath:      r.cfg.CaddyGeneratedPath,
+			RootConfig:         r.cfg.CaddyRootConfig,
+			Routes:             routes,
+			CertificateDomains: certificateDomains,
+		})
+		if syncErr == nil {
+			if !syncRes.Applied {
+				r.log.Warn("caddy reload skipped (admin API unreachable); snippet written and validated -- start caddy, or it will apply on the next successful reconcile")
+			}
+			if err := r.store.SetDomainsPublishState(ctx, idsOf(candidates), models.PublishStatePublished); err != nil {
+				r.log.Warn("failed to mark domains published after sync success", "count", len(candidates), "error", err)
+			}
+			r.lastHash = sha256Hex(renderCandidates(candidates, certificateDomains))
+			r.log.Info("caddy reconcile complete", "routes", len(candidates), "applied", syncRes.Applied, "quarantined", quarantined)
+			return Result{Applied: syncRes.Applied, Routes: len(candidates)}, nil
 		}
-		return Result{Routes: len(routes)}, err
+
+		culprit, ok := worstOffender(candidates)
+		if !errors.Is(syncErr, caddyruntime.ErrValidationFailed) || !ok || quarantined >= maxQuarantinesPerPass {
+			if quarantined >= maxQuarantinesPerPass {
+				r.log.Warn("caddy reconcile gave up quarantining; too many domains still fail validation together", "quarantined", quarantined, "remaining", len(candidates), "error", syncErr)
+			}
+			if markErr := r.store.SetDomainsPublishState(ctx, idsOf(candidates), models.PublishStateUnpublished); markErr != nil {
+				r.log.Warn("failed to mark domains unpublished after sync failure", "count", len(candidates), "error", markErr)
+			}
+			return Result{Routes: len(candidates)}, syncErr
+		}
+
+		if err := r.store.SetDomainPublishState(ctx, culprit.id, models.PublishStateInvalid, syncErr.Error()); err != nil {
+			r.log.Warn("failed to quarantine invalid domain", "domain", culprit.route.Domain, "error", err)
+		} else {
+			r.log.Warn("quarantined invalid domain; retrying the rest of the fleet", "domain", culprit.route.Domain, "validator_error", syncErr)
+		}
+		candidates = without(candidates, culprit.id)
+		quarantined++
 	}
-	if !syncRes.Applied {
-		r.log.Warn("caddy reload skipped (admin API unreachable); snippet written and validated -- start caddy, or it will apply on the next successful reconcile")
+}
+
+func renderCandidates(candidates []reconcileCandidate, certificateDomains []string) string {
+	return caddyruntime.RenderConfigWithCertificateDomains(routesOf(candidates), certificateDomains)
+}
+
+func routesOf(candidates []reconcileCandidate) []caddyruntime.Route {
+	routes := make([]caddyruntime.Route, len(candidates))
+	for i, c := range candidates {
+		routes[i] = c.route
 	}
-	if err := r.store.SetDomainsPublishState(ctx, routableIDs, models.PublishStatePublished); err != nil {
-		r.log.Warn("failed to mark domains published after sync success", "count", len(routableIDs), "error", err)
+	return routes
+}
+
+func idsOf(candidates []reconcileCandidate) []string {
+	ids := make([]string, len(candidates))
+	for i, c := range candidates {
+		ids[i] = c.id
 	}
-	r.lastHash = hash
-	r.log.Info("caddy reconcile complete", "routes", len(routes), "applied", syncRes.Applied)
-	return Result{Applied: syncRes.Applied, Routes: len(routes)}, nil
+	return ids
+}
+
+// worstOffender returns the candidate with the greatest updatedAt -- the
+// one most likely to be responsible for a fleet-wide validation failure,
+// since a set that validated at the end of the last successful pass only
+// breaks when something in it just changed (ADR-0002 §19.3).
+func worstOffender(candidates []reconcileCandidate) (reconcileCandidate, bool) {
+	if len(candidates) == 0 {
+		return reconcileCandidate{}, false
+	}
+	worst := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.updatedAt.After(worst.updatedAt) {
+			worst = c
+		}
+	}
+	return worst, true
+}
+
+func without(candidates []reconcileCandidate, id string) []reconcileCandidate {
+	out := make([]reconcileCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		if c.id != id {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func sha256Hex(content string) string {
